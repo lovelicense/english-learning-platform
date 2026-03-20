@@ -1,0 +1,1 @@
+Terraform으로 ECS, ALB, RDS, S3, CloudFront, SQS를 관리하는 디렉터리입니다.

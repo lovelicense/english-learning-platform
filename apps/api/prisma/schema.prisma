@@ -1,0 +1,82 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RecordingStatus {
+  UPLOADED
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  passwordHash String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  recordings   Recording[]
+  expressions  Expression[]
+  practiceLogs PracticeLog[]
+}
+
+model Recording {
+  id          String          @id @default(cuid())
+  userId      String
+  audioKey    String
+  fileName    String
+  status      RecordingStatus @default(UPLOADED)
+  diarization Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  user        User            @relation(fields: [userId], references: [id])
+  utterances  Utterance[]
+}
+
+model Utterance {
+  id           String      @id @default(cuid())
+  recordingId  String
+  speakerLabel String
+  koreanText   String
+  startMs      Int
+  endMs        Int
+  isMine       Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+  recording    Recording   @relation(fields: [recordingId], references: [id])
+  expressions  Expression[]
+}
+
+model Expression {
+  id          String        @id @default(cuid())
+  userId      String
+  utteranceId String?
+  koreanText  String
+  englishBase String
+  englishEasy String
+  englishNatural String
+  note        String?
+  ttsKey      String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  user        User          @relation(fields: [userId], references: [id])
+  utterance    Utterance?    @relation(fields: [utteranceId], references: [id])
+  practiceLogs PracticeLog[]
+}
+
+model PracticeLog {
+  id           String      @id @default(cuid())
+  userId       String
+  expressionId String
+  target       String
+  answer       String
+  score        Int
+  feedback     String
+  createdAt    DateTime    @default(now())
+  user         User        @relation(fields: [userId], references: [id])
+  expression   Expression  @relation(fields: [expressionId], references: [id])
+}
