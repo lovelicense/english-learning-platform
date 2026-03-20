@@ -1,7 +1,6 @@
 {
   "name": "@elp/api",
   "private": true,
-  "type": "module",
   "scripts": {
     "start:dev": "nest start --watch",
     "build": "nest build",

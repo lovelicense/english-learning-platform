@@ -46,31 +46,54 @@ export class OpenAiService {
   }
 
   async transcribeAudio(buffer: Buffer, fileName: string, diarization = false) {
-    if (!this.client) {
-      return {
-        utterances: [
-          { speakerLabel: 'speaker_1', startMs: 0, endMs: 1800, koreanText: '나 지금 애 데리러 가는 중이야' },
-        ],
-      };
-    }
-
-    const file = await OpenAI.toFile(buffer, fileName);
-    const result = await this.client.audio.transcriptions.create({
-      file,
-      model: diarization
-        ? process.env.OPENAI_STT_DIARIZE_MODEL ?? 'gpt-4o-transcribe'
-        : process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
-      language: 'ko',
-      response_format: 'verbose_json' as any,
-    } as any);
-
-    const text = (result as any).text ?? '';
+  if (!this.client) {
     return {
       utterances: [
-        { speakerLabel: 'speaker_1', startMs: 0, endMs: 2000, koreanText: text },
+        { speakerLabel: 'speaker_1', startMs: 0, endMs: 1800, koreanText: '나 지금 애 데리러 가는 중이야' },
       ],
     };
   }
+
+  const file = await OpenAI.toFile(buffer, fileName);
+
+  const result = await this.client.audio.transcriptions.create({
+    file,
+    model: diarization
+      ? process.env.OPENAI_STT_DIARIZE_MODEL ?? 'gpt-4o-transcribe-diarize'
+      : process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
+    language: 'ko',
+    response_format: diarization ? 'diarized_json' : 'json',
+    ...(diarization ? { chunking_strategy: 'auto' } : {}),
+  } as any);
+
+  if (diarization) {
+    const segments = ((result as any).segments ?? []) as Array<{
+      speaker?: string;
+      text?: string;
+      start?: number;
+      end?: number;
+    }>;
+
+    return {
+      utterances: segments
+        .filter((s) => s.text && s.text.trim().length > 0)
+        .map((s, index) => ({
+          speakerLabel: s.speaker?.toLowerCase() ?? `speaker_${index + 1}`,
+          startMs: Math.round((s.start ?? 0) * 1000),
+          endMs: Math.round((s.end ?? 0) * 1000),
+          koreanText: s.text!.trim(),
+        })),
+    };
+  }
+
+  const text = (result as any).text ?? '';
+  return {
+    utterances: [
+      { speakerLabel: 'speaker_1', startMs: 0, endMs: 2000, koreanText: text },
+    ],
+  };
+}
+
 
   async generateTts(text: string) {
     if (!this.client) {

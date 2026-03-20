@@ -2,6 +2,7 @@ node_modules
 .next
 dist
 coverage
+.env.example
 .env
 .env.local
 pnpm-lock.yaml
