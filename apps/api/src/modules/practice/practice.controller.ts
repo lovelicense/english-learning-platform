@@ -1,7 +1,7 @@
 import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { ScorePracticeDto } from './dto/score-practice.dto';
+import { CreatePracticePresignDto, GeneratePracticePromptDto, ScorePracticeDto, ScoreVoicePracticeDto } from './dto/score-practice.dto';
 import { PracticeService } from './practice.service';
 
 @UseGuards(JwtAuthGuard)
@@ -9,8 +9,31 @@ import { PracticeService } from './practice.service';
 export class PracticeController {
   constructor(private readonly practiceService: PracticeService) {}
 
+  @Post('prompts')
+  generatePrompt(@CurrentUser('userId') userId: string, @Body() dto: GeneratePracticePromptDto) {
+    return this.practiceService.generatePrompt(userId, dto.expressionId, dto.testType);
+  }
+
   @Post('score')
   score(@CurrentUser('userId') userId: string, @Body() dto: ScorePracticeDto) {
-    return this.practiceService.score(userId, dto.expressionId, dto.answer);
+    return this.practiceService.score(userId, dto.expressionId, dto.answer, dto.testType, dto.promptKorean, dto.promptContext);
+  }
+
+  @Post('voice/presign')
+  presignVoiceUpload(@Body() dto: CreatePracticePresignDto) {
+    return this.practiceService.createVoicePresignedUpload(dto.fileName, dto.contentType);
+  }
+
+  @Post('score-voice')
+  scoreVoice(@CurrentUser('userId') userId: string, @Body() dto: ScoreVoicePracticeDto) {
+    return this.practiceService.scoreVoice(
+      userId,
+      dto.expressionId,
+      dto.audioKey,
+      dto.fileName,
+      dto.testType,
+      dto.promptKorean,
+      dto.promptContext,
+    );
   }
 }

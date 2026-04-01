@@ -8,4 +8,16 @@ export class GenerateExpressionDto {
   @IsOptional()
   @IsString()
   koreanText?: string;
+
+  @IsOptional()
+  @IsString()
+  relationship?: string;
+
+  @IsOptional()
+  @IsString()
+  situation?: string;
+
+  @IsOptional()
+  @IsString()
+  tone?: string;
 }

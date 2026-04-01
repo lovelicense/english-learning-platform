@@ -1,4 +1,4 @@
-import { SttService } from "../services/stt.service";
+import { SttService } from "../services/stt.service.js";
 
 export class TranscriptionHandler {
   private readonly sttService = new SttService();

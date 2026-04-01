@@ -20,8 +20,19 @@ export class StorageService {
     return `recordings/raw/${Date.now()}-${fileName}`;
   }
 
+  buildPracticeAudioKey(fileName: string) {
+    return `practice/raw/${Date.now()}-${fileName}`;
+  }
+
   async createPresignedUpload(fileName: string, contentType = 'audio/webm') {
     const key = this.buildAudioKey(fileName);
+    const command = new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType });
+    const uploadUrl = await getSignedUrl(this.client, command, { expiresIn: 300 });
+    return { key, uploadUrl };
+  }
+
+  async createPracticePresignedUpload(fileName: string, contentType = 'audio/webm') {
+    const key = this.buildPracticeAudioKey(fileName);
     const command = new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType });
     const uploadUrl = await getSignedUrl(this.client, command, { expiresIn: 300 });
     return { key, uploadUrl };
@@ -39,6 +50,15 @@ export class StorageService {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
     return Buffer.concat(chunks);
+  }
+
+  async createPresignedDownload(key: string, expiresIn = 3600, responseContentType?: string) {
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ResponseContentType: responseContentType,
+    });
+    return getSignedUrl(this.client, command, { expiresIn });
   }
 
   getPublicUrl(key: string) {

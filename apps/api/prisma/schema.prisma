@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x"]
 }
 
 datasource db {
@@ -74,8 +75,21 @@ model PracticeLog {
   expressionId String
   target       String
   answer       String
+  audioKey     String?
+  mode         String?     
+  testType     String?     
+  promptKorean String?
+  promptContext String?
+  recognizedAnswer String?
   score        Int
+  meaningScore Int?
+  naturalnessScore Int?
+  grammarScore Int?
   feedback     String
+  strengthComment String?
+  correctionComment String?
+  suggestedAnswer String?
+  suggestedAnswerAlt String?
   createdAt    DateTime    @default(now())
   user         User        @relation(fields: [userId], references: [id])
   expression   Expression  @relation(fields: [expressionId], references: [id])

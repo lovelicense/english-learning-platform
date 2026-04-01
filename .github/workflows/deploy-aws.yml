@@ -1,0 +1,139 @@
+name: deploy-aws
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-aws.yml"
+      - "apps/**"
+      - "packages/**"
+      - "infrastructure/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "turbo.json"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-2
+      PROJECT_NAME: english-learning
+      ENVIRONMENT: prod
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Build workspace
+        run: pnpm build
+
+      - name: Write terraform.tfvars
+        working-directory: infrastructure/terraform
+        run: |
+          cat > terraform.tfvars <<EOF
+          project_name = "${PROJECT_NAME}"
+          environment  = "${ENVIRONMENT}"
+          aws_region   = "${AWS_REGION}"
+          domain_name  = "${DOMAIN_NAME}"
+          api_subdomain = "api"
+
+          web_image    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-web:${IMAGE_TAG}"
+          api_image    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-api:${IMAGE_TAG}"
+          worker_image = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-worker:${IMAGE_TAG}"
+
+          db_password = "${DB_PASSWORD}"
+          jwt_secret  = "${JWT_SECRET}"
+
+          openai_api_key           = "${OPENAI_API_KEY}"
+          openai_llm_model         = "gpt-4.1-mini"
+          openai_stt_model         = "gpt-4o-mini-transcribe"
+          openai_stt_diarize_model = "gpt-4o-transcribe-diarize"
+          openai_tts_model         = "gpt-4o-mini-tts"
+          openai_tts_voice         = "alloy"
+
+          cors_allowed_origins = [
+            "${WEB_ORIGIN}",
+            "http://localhost:3000"
+          ]
+          EOF
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WEB_ORIGIN: ${{ secrets.WEB_ORIGIN }}
+
+      - name: Terraform init
+        working-directory: infrastructure/terraform
+        run: terraform init
+
+      - name: Terraform validate
+        working-directory: infrastructure/terraform
+        run: terraform validate
+
+      - name: Create ECR repositories
+        working-directory: infrastructure/terraform
+        run: |
+          terraform apply -auto-approve \
+            -target=aws_ecr_repository.web \
+            -target=aws_ecr_repository.api \
+            -target=aws_ecr_repository.worker
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push web image
+        run: |
+          docker build \
+            --build-arg "NEXT_PUBLIC_API_URL=https://api.${DOMAIN_NAME}" \
+            -f apps/web/Dockerfile \
+            -t "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-web:${IMAGE_TAG}" .
+          docker push "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-web:${IMAGE_TAG}"
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+
+      - name: Build and push api image
+        run: |
+          docker build -f apps/api/Dockerfile -t "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-api:${IMAGE_TAG}" .
+          docker push "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-api:${IMAGE_TAG}"
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: Build and push worker image
+        run: |
+          docker build -f apps/worker/Dockerfile -t "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-worker:${IMAGE_TAG}" .
+          docker push "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-worker:${IMAGE_TAG}"
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: Terraform apply
+        working-directory: infrastructure/terraform
+        run: terraform apply -auto-approve

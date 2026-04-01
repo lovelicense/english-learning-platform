@@ -1,0 +1,24 @@
+project_name = "english-learning"
+environment  = "prod"
+aws_region   = "ap-northeast-2"
+domain_name  = "chunsay.com"
+api_subdomain = "api"
+
+web_image    = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/english-learning-prod-web:latest"
+api_image    = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/english-learning-prod-api:latest"
+worker_image = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/english-learning-prod-worker:latest"
+
+db_password = "CHANGE_ME_DB_PASSWORD"
+jwt_secret  = "CHANGE_ME_jwt_secret"
+
+openai_api_key          = "sk-CHANGE_ME"
+openai_llm_model        = "gpt-4.1-mini"
+openai_stt_model        = "gpt-4o-mini-transcribe"
+openai_stt_diarize_model = "gpt-4o-transcribe-diarize"
+openai_tts_model        = "gpt-4o-mini-tts"
+openai_tts_voice        = "alloy"
+
+cors_allowed_origins = [
+  "http://localhost:3000",
+  "https://chunsay.com",
+]

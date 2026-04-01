@@ -1,24 +1,97 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../db/prisma.service';
+import { StorageService } from '../storage/storage.service';
 
 @Injectable()
 export class ReviewsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   async getToday(userId: string) {
     const expressions = await this.prisma.expression.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
       take: 10,
-      include: { practiceLogs: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
 
-    return expressions.map((e) => ({
-      id: e.id,
-      korean: e.koreanText,
-      english: e.englishBase,
-      mastery: e.practiceLogs[0]?.score ?? 0,
-      ttsKey: e.ttsKey,
-    }));
+    const expressionIds = expressions.map((expression) => expression.id);
+    const practiceLogs = expressionIds.length
+      ? await this.prisma.practiceLog.findMany({
+          where: {
+            userId,
+            expressionId: { in: expressionIds },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: {
+            expressionId: true,
+            score: true,
+            answer: true,
+            audioKey: true,
+            createdAt: true,
+          },
+        })
+      : [];
+
+    const latestLogByExpressionId = new Map<string, (typeof practiceLogs)[number]>();
+    const logsByExpressionId = new Map<string, typeof practiceLogs>();
+    for (const log of practiceLogs) {
+      if (!latestLogByExpressionId.has(log.expressionId)) {
+        latestLogByExpressionId.set(log.expressionId, log);
+      }
+      const current = logsByExpressionId.get(log.expressionId) ?? [];
+      current.push(log);
+      logsByExpressionId.set(log.expressionId, current);
+    }
+
+    return Promise.all(
+      expressions.map(async (e) => {
+        const latestLog = latestLogByExpressionId.get(e.id) ?? null;
+        const recentLogs = (logsByExpressionId.get(e.id) ?? []).slice(0, 3);
+        const mastery = latestLog?.score ?? 0;
+        const averageRecentScore =
+          recentLogs.length > 0
+            ? Math.round(recentLogs.reduce((sum, log) => sum + log.score, 0) / recentLogs.length)
+            : 0;
+        const hasVoiceHistory = recentLogs.some((log) => Boolean(log.audioKey));
+        const hasRepeatedLowScores = recentLogs.filter((log) => log.score < 70).length >= 2;
+
+        let recommendedTestType: 'translation' | 'situation' = 'translation';
+        let reviewReason = '핵심 표현을 먼저 정확히 익히는 번역형 연습이 좋습니다.';
+
+        if (recentLogs.length === 0) {
+          recommendedTestType = 'translation';
+          reviewReason = '아직 테스트 기록이 없어서 먼저 번역형으로 의미와 표현을 익히는 것이 좋습니다.';
+        } else if (hasRepeatedLowScores) {
+          recommendedTestType = 'translation';
+          reviewReason = '최근 여러 번 핵심 표현이 흔들려서, 먼저 번역형으로 정확도를 다지는 것이 좋습니다.';
+        } else if (averageRecentScore >= 85 && hasVoiceHistory) {
+          recommendedTestType = 'situation';
+          reviewReason = '최근 점수가 안정적이고 말하기 기록도 있어서, 상황형으로 응용 말하기를 해보는 것이 좋습니다.';
+        } else if (averageRecentScore >= 75) {
+          recommendedTestType = 'situation';
+          reviewReason = '기본 표현은 어느 정도 익숙해 보여서, 상황형으로 문맥 응용 연습을 해보는 것이 좋습니다.';
+        } else if (!hasVoiceHistory && averageRecentScore >= 65) {
+          recommendedTestType = 'translation';
+          reviewReason = '기본 의미는 잡히고 있지만 아직 말하기 기록이 적어서, 먼저 번역형으로 안정화한 뒤 음성 연습으로 넘어가면 좋습니다.';
+        }
+
+        return {
+          id: e.id,
+          korean: e.koreanText,
+          english: e.englishBase,
+          mastery,
+          ttsKey: e.ttsKey,
+          recommendedTestType,
+          reviewReason,
+          lastReviewedAt: latestLog?.createdAt?.toISOString?.() ?? null,
+          practiceAnswer: latestLog?.answer ?? null,
+          practiceAudioUrl: latestLog?.audioKey
+            ? await this.storage.createPresignedDownload(latestLog.audioKey)
+            : null,
+        };
+      }),
+    );
   }
 }

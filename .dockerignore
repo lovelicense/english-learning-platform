@@ -1,0 +1,12 @@
+node_modules
+.turbo
+.next
+dist
+.git
+.github
+*.log
+.env
+.env.local
+.env.production
+apps/web/tsconfig.tsbuildinfo
+english-learning-platform-web-ux-autoflow-v4.zip

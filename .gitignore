@@ -6,3 +6,8 @@ coverage
 .env
 .env.local
 pnpm-lock.yaml
+apps/web/tsconfig.tsbuildinfo
+infrastructure/terraform/.terraform/
+infrastructure/terraform/terraform.tfvars
+*.tfstate
+*.tfstate.*

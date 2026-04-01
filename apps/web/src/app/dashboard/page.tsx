@@ -1,9 +1,17 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { API_URL, apiFetch, createPresignedUploadTask } from "../../lib/api-client";
+import { apiFetch, createPresignedUploadTask } from "../../lib/api-client";
 import { clearSession, getStoredUser, getToken } from "../../lib/auth";
+import {
+  buildRecordingContextPayload,
+  EMPTY_RECORDING_CONTEXT,
+  loadRecordingContext,
+  saveRecordingContext,
+  type RecordingGenerationContext,
+} from "../../lib/recording-context";
 import { startRecordedAudioSession, type RecordingSession } from "../../lib/recorder";
 
 type MeResponse = { userId: string; email: string };
@@ -20,20 +28,96 @@ type RecordingResponse = {
   id: string;
   fileName: string;
   status: string;
+  audioUrl?: string;
+  diarization?: boolean;
   utterances: RecordingUtterance[];
+};
+type RecordingSummary = {
+  id: string;
+  fileName: string;
+  status: string;
+  diarization: boolean;
+  createdAt: string;
+  updatedAt: string;
+  _count: { utterances: number };
 };
 type Expression = {
   id: string;
+  utteranceId?: string | null;
   koreanText: string;
   englishBase: string;
   englishEasy: string;
   englishNatural: string;
   note?: string | null;
   ttsKey?: string | null;
+  ttsUrl?: string | null;
 };
 type TtsResponse = { expressionId: string; ttsKey: string; ttsUrl: string; expression: string };
-type PracticeScore = { id: string; score: number; feedback: string; target: string };
-type ReviewItem = { id: string; korean: string; english: string; mastery: number; ttsKey?: string | null };
+type BulkExpressionResponse = {
+  recordingId: string;
+  createdCount: number;
+  skippedCount: number;
+  totalRequested: number;
+  expressions: Expression[];
+};
+type BulkTtsResponse = {
+  recordingId: string;
+  updatedCount: number;
+  skippedCount: number;
+  totalRequested: number;
+  expressions: TtsResponse[];
+};
+type DeleteUtteranceResponse = {
+  success: boolean;
+  utteranceId: string;
+  deletedExpressionCount: number;
+};
+type PracticeScore = {
+  id: string;
+  score: number;
+  meaningScore?: number;
+  naturalnessScore?: number;
+  grammarScore?: number;
+  feedback: string;
+  strengthComment?: string;
+  correctionComment?: string;
+  suggestedAnswer?: string;
+  suggestedAnswerAlt?: string;
+  target: string;
+  answer: string;
+  audioUrl?: string;
+};
+type ReviewItem = {
+  id: string;
+  korean: string;
+  english: string;
+  mastery: number;
+  ttsKey?: string | null;
+  recommendedTestType?: "translation" | "situation";
+  reviewReason?: string | null;
+  lastReviewedAt?: string | null;
+  practiceAnswer?: string | null;
+  practiceAudioUrl?: string | null;
+};
+type PracticeVoicePresignResponse = { key: string; uploadUrl: string };
+type PracticePrompt = {
+  testType: "translation" | "situation" | "pattern";
+  promptKorean: string;
+  promptContext?: string;
+  target: string;
+  tips?: string;
+  patternLabel?: string;
+  patternDescription?: string;
+};
+type RecordingAnalysis = {
+  summary: string;
+  intents: Array<{
+    utteranceId?: string;
+    speakerLabel?: string;
+    koreanText: string;
+    intent: string;
+  }>;
+};
 
 type FlowStep = {
   id: string;
@@ -54,7 +138,7 @@ const AUTO_FLOW_STEPS: FlowStep[] = [
   { id: "recording", label: "녹음 중", description: "선택한 시간 동안 샘플 발화를 녹음합니다.", progress: 12 },
   { id: "presign", label: "업로드 준비", description: "S3 업로드용 presigned URL을 요청합니다.", progress: 20 },
   { id: "upload", label: "S3 업로드", description: "오디오 파일을 스토리지에 업로드합니다.", progress: 34 },
-  { id: "transcribe", label: "STT 전사", description: "한국어 음성을 문장 단위로 전사합니다.", progress: 50 },
+  { id: "transcribe", label: "텍스트 변환", description: "한국어 음성을 문장 단위 텍스트로 변환합니다.", progress: 50 },
   { id: "mine", label: "내 문장 추출", description: "내 화자 문장을 우선 추출합니다.", progress: 62 },
   { id: "expressions", label: "영어 표현 생성", description: "선택된 문장을 영어 표현으로 변환합니다.", progress: 78 },
   { id: "tts", label: "TTS 생성", description: "첫 번째 표현의 영어 음성을 생성합니다.", progress: 90 },
@@ -88,10 +172,19 @@ export default function DashboardPage() {
   const [recordingDuration, setRecordingDuration] = useState(5000);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [recording, setRecording] = useState<RecordingResponse | null>(null);
+  const [recordingContext, setRecordingContext] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
+  const [recordingAnalysis, setRecordingAnalysis] = useState<RecordingAnalysis | null>(null);
+  const [recordings, setRecordings] = useState<RecordingSummary[]>([]);
+  const [utteranceDrafts, setUtteranceDrafts] = useState<Record<string, string>>({});
   const [expressions, setExpressions] = useState<Expression[]>([]);
   const [selectedExpressionId, setSelectedExpressionId] = useState("");
   const [ttsUrl, setTtsUrl] = useState("");
+  const [testMode, setTestMode] = useState<"text" | "voice">("text");
+  const [practiceTestType, setPracticeTestType] = useState<"translation" | "situation" | "pattern">("translation");
+  const [practicePrompt, setPracticePrompt] = useState<PracticePrompt | null>(null);
+  const [activeReviewExpressionId, setActiveReviewExpressionId] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
+  const [voiceAnswerFile, setVoiceAnswerFile] = useState<File | null>(null);
   const [score, setScore] = useState<PracticeScore | null>(null);
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
   const [loading, setLoading] = useState<string>("");
@@ -105,12 +198,17 @@ export default function DashboardPage() {
   const [waveBars, setWaveBars] = useState<number[]>(() => Array.from({ length: WAVE_BAR_COUNT }, () => 8));
   const [recordingRemainingMs, setRecordingRemainingMs] = useState(0);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
+  const [rawAudioCurrentTime, setRawAudioCurrentTime] = useState(0);
+  const [rawAudioDuration, setRawAudioDuration] = useState(0);
   const [isMicRecording, setIsMicRecording] = useState(false);
+  const [isPracticeRecording, setIsPracticeRecording] = useState(false);
   const [activeTimeoutMessage, setActiveTimeoutMessage] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const rawAudioRef = useRef<HTMLAudioElement | null>(null);
   const testSectionRef = useRef<HTMLElement | null>(null);
   const answerRef = useRef<HTMLTextAreaElement | null>(null);
   const recordingSessionRef = useRef<RecordingSession | null>(null);
+  const practiceRecordingSessionRef = useRef<RecordingSession | null>(null);
   const uploadTaskRef = useRef<ReturnType<typeof createPresignedUploadTask> | null>(null);
   const abortControllersRef = useRef<AbortController[]>([]);
   const userCancelledRef = useRef(false);
@@ -119,6 +217,57 @@ export default function DashboardPage() {
     () => expressions.find((item) => item.id === selectedExpressionId) ?? expressions[0] ?? null,
     [expressions, selectedExpressionId],
   );
+  const utteranceExpressionIds = useMemo(
+    () => new Set(expressions.map((item) => item.utteranceId).filter((value): value is string => Boolean(value))),
+    [expressions],
+  );
+  const pendingMineExpressionCount = useMemo(
+    () =>
+      (recording?.utterances ?? []).filter(
+        (utterance) => utterance.isMine && utterance.koreanText.trim() && !utteranceExpressionIds.has(utterance.id),
+      ).length,
+    [recording, utteranceExpressionIds],
+  );
+  const pendingOthersExpressionCount = useMemo(
+    () =>
+      (recording?.utterances ?? []).filter(
+        (utterance) => !utterance.isMine && utterance.koreanText.trim() && !utteranceExpressionIds.has(utterance.id),
+      ).length,
+    [recording, utteranceExpressionIds],
+  );
+  const pendingRecordingTtsCount = useMemo(
+    () =>
+      recording
+        ? expressions.filter((expression) => expression.utteranceId && recording.utterances.some((utterance) => utterance.id === expression.utteranceId) && !expression.ttsKey).length
+        : 0,
+    [expressions, recording],
+  );
+  const completedTtsExpressions = useMemo(
+    () => expressions.filter((expression) => Boolean(expression.ttsKey && expression.ttsUrl)),
+    [expressions],
+  );
+  const speakerOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return (recording?.utterances ?? []).filter((utterance) => {
+      if (seen.has(utterance.speakerLabel)) return false;
+      seen.add(utterance.speakerLabel);
+      return true;
+    });
+  }, [recording]);
+  const intentByUtteranceId = useMemo(
+    () =>
+      new Map(
+        (recordingAnalysis?.intents ?? [])
+          .filter((item) => item.utteranceId)
+          .map((item) => [item.utteranceId as string, item.intent]),
+      ),
+    [recordingAnalysis],
+  );
+  const selectedExpressionIntent = selectedExpression?.utteranceId
+    ? intentByUtteranceId.get(selectedExpression.utteranceId) ?? ""
+    : "";
+  const isReviewAnswerHidden =
+    Boolean(activeReviewExpressionId) && selectedExpression?.id === activeReviewExpressionId && !score;
 
   const currentFlowStep = flowStepId ? stepMap[flowStepId] : null;
   const flowProgress = useMemo(() => {
@@ -131,6 +280,46 @@ export default function DashboardPage() {
     return base;
   }, [currentFlowStep, flowStepId, uploadPercent]);
 
+  const recordingDateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat("ko-KR", {
+        dateStyle: "short",
+        timeStyle: "short",
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    setTtsUrl(selectedExpression?.ttsUrl ?? "");
+  }, [selectedExpression]);
+
+  useEffect(() => {
+    if (!selectedExpression) {
+      setPracticePrompt(null);
+      return;
+    }
+    setPracticeTestType("translation");
+    setPracticePrompt({
+      testType: "translation",
+      promptKorean: selectedExpression.koreanText,
+      target: selectedExpression.englishBase,
+      tips: "핵심 의미를 살려 자연스럽게 영어로 말해보세요.",
+    });
+  }, [selectedExpression]);
+
+  useEffect(() => {
+    if (!recording?.id) {
+      setRecordingContext(EMPTY_RECORDING_CONTEXT);
+      return;
+    }
+    setRecordingContext(loadRecordingContext(recording.id));
+  }, [recording?.id]);
+
+  useEffect(() => {
+    if (!recording?.id) return;
+    saveRecordingContext(recording.id, recordingContext);
+  }, [recording?.id, recordingContext]);
+
   useEffect(() => {
     if (!getToken()) {
       router.replace("/");
@@ -141,12 +330,14 @@ export default function DashboardPage() {
       apiFetch<MeResponse>("/auth/me"),
       apiFetch<Expression[]>("/expressions").catch(() => []),
       apiFetch<ReviewItem[]>("/reviews/today").catch(() => []),
+      apiFetch<RecordingSummary[]>("/recordings").catch(() => []),
     ])
-      .then(([me, expressionList, reviewList]) => {
+      .then(([me, expressionList, reviewList, recordingList]) => {
         setUser(me);
         setExpressions(expressionList);
         if (expressionList[0]) setSelectedExpressionId(expressionList[0].id);
         setReviews(reviewList);
+        setRecordings(recordingList);
       })
       .catch((err) => {
         setAuthError(err instanceof Error ? err.message : "세션 확인에 실패했습니다.");
@@ -164,6 +355,24 @@ export default function DashboardPage() {
     setWaveBars(Array.from({ length: WAVE_BAR_COUNT }, () => 8));
     setRecordingElapsedMs(0);
     setRecordingRemainingMs(0);
+  }
+
+  function formatAudioTime(seconds: number) {
+    const totalSeconds = Math.max(0, Math.floor(seconds));
+    const minutes = Math.floor(totalSeconds / 60);
+    const remain = totalSeconds % 60;
+    return `${minutes}:${remain.toString().padStart(2, "0")}`;
+  }
+
+  function seekRawAudio(timeSeconds: number, autoPlay = false) {
+    const player = rawAudioRef.current;
+    if (!player) return;
+    const bounded = Math.max(0, Math.min(timeSeconds, player.duration || timeSeconds));
+    player.currentTime = bounded;
+    setRawAudioCurrentTime(bounded);
+    if (autoPlay) {
+      player.play().catch(() => undefined);
+    }
   }
 
   function pushWaveLevel(level: number) {
@@ -185,6 +394,8 @@ export default function DashboardPage() {
     userCancelledRef.current = true;
     recordingSessionRef.current?.cancel();
     recordingSessionRef.current = null;
+    practiceRecordingSessionRef.current?.cancel();
+    practiceRecordingSessionRef.current = null;
     uploadTaskRef.current?.cancel();
     uploadTaskRef.current = null;
     abortControllersRef.current.forEach((controller) => controller.abort());
@@ -263,6 +474,54 @@ export default function DashboardPage() {
     setSelectedExpressionId(nextId);
   }
 
+  async function refreshRecordings() {
+    const recordingList = await apiFetch<RecordingSummary[]>("/recordings").catch(() => []);
+    setRecordings(recordingList);
+  }
+
+  function syncUtteranceDrafts(nextRecording: RecordingResponse | null) {
+    if (!nextRecording) {
+      setUtteranceDrafts({});
+      return;
+    }
+    setUtteranceDrafts(
+      Object.fromEntries(nextRecording.utterances.map((utterance) => [utterance.id, utterance.koreanText])),
+    );
+  }
+
+  function setRecordingWithDrafts(nextRecording: RecordingResponse | null) {
+    setRecording(nextRecording);
+    syncUtteranceDrafts(nextRecording);
+    setRecordingAnalysis(null);
+  }
+
+  function updateLocalUtterance(utteranceId: string, koreanText: string) {
+    setRecording((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        utterances: current.utterances.map((utterance) =>
+          utterance.id === utteranceId ? { ...utterance, koreanText } : utterance,
+        ),
+      };
+    });
+    setUtteranceDrafts((current) => ({ ...current, [utteranceId]: koreanText }));
+  }
+
+  async function saveUtteranceText(utteranceId: string) {
+    const draft = utteranceDrafts[utteranceId]?.trim();
+    if (!draft) {
+      throw new Error("수정할 문장을 입력해 주세요.");
+    }
+
+    const updated = await apiFetch<RecordingUtterance>(`/recordings/utterances/${utteranceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ koreanText: draft }),
+    });
+    updateLocalUtterance(utteranceId, updated.koreanText);
+    return updated;
+  }
+
   async function startMicRecording(durationMs: number) {
     userCancelledRef.current = false;
     resetWaveform();
@@ -318,26 +577,27 @@ export default function DashboardPage() {
       uploadTaskRef.current = null;
     }
 
-    markFlow("transcribe", "전사 및 화자 분리 요청");
+    markFlow("transcribe", "텍스트 변환 및 화자 분리 요청");
     const processed = await runWithTimeout("transcribe", (signal) => apiFetch<RecordingResponse>(`/recordings/${presign.recordingId}/process`, {
       method: "POST",
       body: JSON.stringify({ diarization: true }),
       signal,
     }));
     setUploadPercent(100);
-    setRecording(processed);
+    setRecordingWithDrafts(processed);
+    await refreshRecordings();
     return processed;
   }
 
   async function completeAutoFlowFromProcessed(processed: RecordingResponse) {
-    markFlow("mine", `전사된 ${processed.utterances.length}개 문장에서 우선순위 선별`);
+    markFlow("mine", `변환된 ${processed.utterances.length}개 문장에서 우선순위 선별`);
     const mineUtterances = processed.utterances.filter((item) => item.isMine && item.koreanText?.trim());
     const targetUtterances = (mineUtterances.length > 0 ? mineUtterances : processed.utterances)
       .filter((item) => item.koreanText?.trim())
       .slice(0, 3);
 
     if (targetUtterances.length === 0) {
-      throw new Error("전사된 문장이 없어 영어 표현을 생성할 수 없습니다.");
+      throw new Error("변환된 문장이 없어 영어 표현을 생성할 수 없습니다.");
     }
 
     markFlow("expressions", `${targetUtterances.length}개 문장을 영어 표현으로 생성`);
@@ -345,7 +605,7 @@ export default function DashboardPage() {
     for (const utterance of targetUtterances) {
       const expression = await runWithTimeout("expressions", (signal) => apiFetch<Expression>("/expressions/generate", {
         method: "POST",
-        body: JSON.stringify({ utteranceId: utterance.id }),
+        body: JSON.stringify({ utteranceId: utterance.id, ...buildRecordingContextPayload(recordingContext) }),
         signal,
       }));
       createdExpressions.push(expression);
@@ -395,7 +655,7 @@ export default function DashboardPage() {
     setError("");
     setMessage("");
     setLoading("upload");
-    setRecording(null);
+    setRecordingWithDrafts(null);
     setTtsUrl("");
     setScore(null);
     setFailedStepId("");
@@ -403,10 +663,10 @@ export default function DashboardPage() {
 
     try {
       const processed = await uploadAndProcessFile(selectedFile);
-      setMessage(`녹음 업로드와 전사가 완료되었습니다. (${processed.utterances.length}개 문장)`);
+      setMessage(`녹음 업로드와 텍스트 변환이 완료되었습니다. (${processed.utterances.length}개 문장)`);
     } catch (err) {
       if (isAbortError(err) || userCancelledRef.current) {
-        setMessage("수동 업로드/전사를 취소했습니다.");
+        setMessage("수동 업로드/텍스트 변환을 취소했습니다.");
         setError("");
       } else {
         const text = err instanceof Error ? err.message : "업로드 처리에 실패했습니다.";
@@ -448,7 +708,7 @@ export default function DashboardPage() {
     setError("");
     setMessage("");
     setScore(null);
-    setRecording(null);
+    setRecordingWithDrafts(null);
     setTtsUrl("");
     setLoading("auto-flow");
     resetFlowUi();
@@ -488,7 +748,7 @@ export default function DashboardPage() {
         }
         if (!selectedFile) throw new Error("재시도할 오디오 파일이 없습니다.");
         const processed = await uploadAndProcessFile(selectedFile);
-        setMessage(`재시도 후 전사가 완료되었습니다. (${processed.utterances.length}개 문장)`);
+        setMessage(`재시도 후 텍스트 변환이 완료되었습니다. (${processed.utterances.length}개 문장)`);
         setFailedStepId("");
         setRetryMode("");
         return;
@@ -528,15 +788,114 @@ export default function DashboardPage() {
     setMessage("");
     setLoading(`expr-${utteranceId}`);
     try {
+      const currentUtterance = recording?.utterances.find((item) => item.id === utteranceId);
+      const draft = utteranceDrafts[utteranceId]?.trim() ?? "";
+      if (!draft) {
+        throw new Error("표현 생성 전에 문장을 입력해 주세요.");
+      }
+      if (currentUtterance && currentUtterance.koreanText !== draft) {
+        await saveUtteranceText(utteranceId);
+      }
       const expression = await runWithTimeout("expressions", (signal) => apiFetch<Expression>("/expressions/generate", {
         method: "POST",
-        body: JSON.stringify({ utteranceId }),
+        body: JSON.stringify({ utteranceId, ...buildRecordingContextPayload(recordingContext) }),
         signal,
       }));
       await refreshLists(expression.id);
       setMessage("영어 표현을 생성했습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "표현 생성에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleGenerateExpressionsBulk(speakerScope: "mine" | "others") {
+    if (!recording) {
+      setError("먼저 녹음을 불러와 주세요.");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    setLoading(`expr-bulk-${speakerScope}`);
+    try {
+      const response = await runWithTimeout("expressions", (signal) =>
+        apiFetch<BulkExpressionResponse>("/expressions/generate/bulk", {
+          method: "POST",
+          body: JSON.stringify({
+            recordingId: recording.id,
+            speakerScope,
+            includeExisting: false,
+            ...buildRecordingContextPayload(recordingContext),
+          }),
+          signal,
+        }),
+      );
+      await refreshRecordings();
+      const loaded = await apiFetch<RecordingResponse>(`/recordings/${recording.id}`);
+      setRecordingWithDrafts(loaded);
+      await refreshLists(response.expressions[0]?.id ?? selectedExpressionId ?? undefined);
+      setMessage(
+        response.createdCount > 0
+          ? speakerScope === "mine"
+            ? `내 문장 ${response.createdCount}개를 일괄 생성했습니다.`
+            : `기타 화자 문장 ${response.createdCount}개를 일괄 생성했습니다.`
+          : speakerScope === "mine"
+          ? "이번 녹음에서 새로 생성할 내 문장이 없습니다."
+          : "이번 녹음에서 새로 생성할 기타 화자 문장이 없습니다.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "일괄 표현 생성에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleSaveUtterance(utteranceId: string) {
+    setError("");
+    setMessage("");
+    setLoading(`save-${utteranceId}`);
+    try {
+      await saveUtteranceText(utteranceId);
+      setMessage("변환된 문장을 수정해 저장했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "문장 저장에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleDeleteUtterance(utteranceId: string) {
+    const utterance = recording?.utterances.find((item) => item.id === utteranceId);
+    if (!utterance) {
+      setError("삭제할 문장을 먼저 선택해 주세요.");
+      return;
+    }
+
+    const confirmed = window.confirm(`"${utterance.koreanText}" 문장을 삭제할까요? 연결된 영어 표현도 함께 삭제됩니다.`);
+    if (!confirmed) return;
+
+    setError("");
+    setMessage("");
+    setLoading(`delete-utterance-${utteranceId}`);
+    try {
+      const response = await apiFetch<DeleteUtteranceResponse>(`/recordings/utterances/${utteranceId}`, {
+        method: "DELETE",
+      });
+      if (recording) {
+        const loaded = await apiFetch<RecordingResponse>(`/recordings/${recording.id}`);
+        setRecordingWithDrafts(loaded);
+      }
+      await refreshLists();
+      await refreshRecordings();
+      setMessage(
+        response.deletedExpressionCount > 0
+          ? `문장과 연결된 영어 표현 ${response.deletedExpressionCount}개를 함께 삭제했습니다.`
+          : "문장을 삭제했습니다.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "문장 삭제에 실패했습니다.");
     } finally {
       setLoading("");
     }
@@ -551,7 +910,7 @@ export default function DashboardPage() {
     try {
       const expression = await runWithTimeout("expressions", (signal) => apiFetch<Expression>("/expressions/generate", {
         method: "POST",
-        body: JSON.stringify({ koreanText: text.trim() }),
+        body: JSON.stringify({ koreanText: text.trim(), ...buildRecordingContextPayload(recordingContext) }),
         signal,
       }));
       await refreshLists(expression.id);
@@ -587,6 +946,78 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleGenerateTtsBulk() {
+    if (!recording) {
+      setError("먼저 녹음을 불러와 주세요.");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    setLoading("tts-bulk");
+    try {
+      const response = await runWithTimeout("tts", (signal) =>
+        apiFetch<BulkTtsResponse>("/expressions/tts/bulk", {
+          method: "POST",
+          body: JSON.stringify({ recordingId: recording.id, onlyMissing: true }),
+          signal,
+        }),
+      );
+      await refreshLists(selectedExpressionId || undefined);
+      setMessage(
+        response.updatedCount > 0
+          ? `이 녹음의 표현 ${response.updatedCount}개에 대해 TTS를 일괄 생성했습니다.`
+          : "이 녹음에서 새로 생성할 TTS가 없습니다.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "일괄 TTS 생성에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleCopyExpression() {
+    if (!selectedExpression) {
+      setError("복사할 표현을 먼저 선택해 주세요.");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(selectedExpression.englishBase);
+      setError("");
+      setMessage("영어 표현을 복사했습니다.");
+    } catch {
+      setError("클립보드 복사에 실패했습니다.");
+    }
+  }
+
+  async function handleDeleteExpression() {
+    if (!selectedExpression) {
+      setError("삭제할 표현을 먼저 선택해 주세요.");
+      return;
+    }
+
+    const confirmed = window.confirm(`"${selectedExpression.englishBase}" 표현을 삭제할까요? 오늘의 복습 기록에서도 제외됩니다.`);
+    if (!confirmed) return;
+
+    setError("");
+    setMessage("");
+    setLoading("delete-expression");
+    try {
+      await apiFetch<{ success: boolean; expressionId: string }>(`/expressions/${selectedExpression.id}`, {
+        method: "DELETE",
+      });
+      setTtsUrl("");
+      setScore(null);
+      await refreshLists();
+      setMessage("선택한 표현을 삭제했습니다. 오늘의 복습 목록도 함께 갱신했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "표현 삭제에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
   async function handleScore() {
     if (!selectedExpression) {
       setError("채점할 표현을 먼저 선택해 주세요.");
@@ -602,14 +1033,336 @@ export default function DashboardPage() {
     try {
       const result = await runWithTimeout("score", (signal) => apiFetch<PracticeScore>("/practice/score", {
         method: "POST",
-        body: JSON.stringify({ expressionId: selectedExpression.id, answer }),
+        body: JSON.stringify({
+          expressionId: selectedExpression.id,
+          answer,
+          testType: practiceTestType,
+          promptKorean: practicePrompt?.promptKorean,
+          promptContext: practicePrompt?.promptContext,
+        }),
         signal,
       }));
       setScore(result);
+      if (selectedExpression?.id === activeReviewExpressionId) {
+        setActiveReviewExpressionId(selectedExpression.id);
+      }
       await refreshLists(selectedExpression.id);
       setMessage("말하기 테스트를 채점했습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "채점에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  function handleStartVoicePractice() {
+    if (isPracticeRecording || loading) return;
+    userCancelledRef.current = false;
+    setError("");
+    setMessage("영어 말하기 테스트 녹음을 시작했습니다. 말이 끝나면 종료 버튼을 눌러 채점하세요.");
+    setVoiceAnswerFile(null);
+    setScore(null);
+
+    const session = startRecordedAudioSession({ durationMs: 15000 });
+    practiceRecordingSessionRef.current = session;
+    setIsPracticeRecording(true);
+
+    session.promise
+      .then((file) => {
+        setVoiceAnswerFile(file);
+        setMessage(`음성 답변 녹음이 완료되었습니다: ${file.name}`);
+      })
+      .catch((err) => {
+        if (!userCancelledRef.current) {
+          setError(err instanceof Error ? err.message : "음성 답변 녹음에 실패했습니다.");
+        }
+      })
+      .finally(() => {
+        practiceRecordingSessionRef.current = null;
+        setIsPracticeRecording(false);
+      });
+  }
+
+  function handleStopVoicePractice() {
+    practiceRecordingSessionRef.current?.stop();
+  }
+
+  async function handleScoreVoice() {
+    if (!selectedExpression) {
+      setError("채점할 표현을 먼저 선택해 주세요.");
+      return;
+    }
+    if (!voiceAnswerFile) {
+      setError("먼저 영어 답변을 녹음해 주세요.");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    setLoading("score-voice");
+    try {
+      const presign = await runWithTimeout("score", (signal) =>
+        apiFetch<PracticeVoicePresignResponse>("/practice/voice/presign", {
+          method: "POST",
+          body: JSON.stringify({ fileName: voiceAnswerFile.name, contentType: voiceAnswerFile.type || "audio/webm" }),
+          signal,
+        }),
+      );
+
+      const uploadTask = createPresignedUploadTask(presign.uploadUrl, voiceAnswerFile);
+      uploadTaskRef.current = uploadTask;
+      try {
+        await Promise.race<void>([
+          uploadTask.promise,
+          new Promise<void>((_, reject) => {
+            window.setTimeout(() => {
+              uploadTask.cancel();
+              reject(new Error("음성 답변 업로드가 제한시간을 초과했습니다."));
+            }, 30000);
+          }),
+        ]);
+      } finally {
+        uploadTaskRef.current = null;
+      }
+
+      const result = await runWithTimeout("score", (signal) =>
+        apiFetch<PracticeScore>("/practice/score-voice", {
+          method: "POST",
+          body: JSON.stringify({
+            expressionId: selectedExpression.id,
+            audioKey: presign.key,
+            fileName: voiceAnswerFile.name,
+            testType: practiceTestType,
+            promptKorean: practicePrompt?.promptKorean,
+            promptContext: practicePrompt?.promptContext,
+          }),
+          signal,
+        }),
+      );
+
+      setScore(result);
+      if (selectedExpression?.id === activeReviewExpressionId) {
+        setActiveReviewExpressionId(selectedExpression.id);
+      }
+      setAnswer(result.answer);
+      await refreshLists(selectedExpression.id);
+      setMessage("음성 답변을 영어로 인식해 채점했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "음성 채점에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleGeneratePracticePrompt(nextType: "translation" | "situation" | "pattern") {
+    if (!selectedExpression) {
+      setError("먼저 표현을 선택해 주세요.");
+      return;
+    }
+
+    setPracticeTestType(nextType);
+    setAnswer("");
+    setVoiceAnswerFile(null);
+    setScore(null);
+    setActiveReviewExpressionId(null);
+    setError("");
+    setMessage("");
+
+    if (nextType === "translation") {
+      setPracticePrompt({
+        testType: "translation",
+        promptKorean: selectedExpression.koreanText,
+        target: selectedExpression.englishBase,
+        tips: "핵심 의미를 살려 자연스럽게 영어로 말해보세요.",
+      });
+      return;
+    }
+
+    setLoading("practice-prompt");
+    try {
+      const prompt = await apiFetch<PracticePrompt>("/practice/prompts", {
+        method: "POST",
+        body: JSON.stringify({ expressionId: selectedExpression.id, testType: nextType }),
+      });
+      setPracticePrompt(prompt);
+      setMessage(nextType === "pattern" ? "패턴형 문제를 불러왔습니다." : "상황형 문제를 불러왔습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "상황형 문제 생성에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleStartReviewPractice(review: ReviewItem, nextType?: "translation" | "situation") {
+    const expression = expressions.find((item) => item.id === review.id);
+    const targetType = nextType ?? review.recommendedTestType ?? "translation";
+
+    if (!expression) {
+      setError("복습을 시작할 표현을 찾지 못했습니다.");
+      return;
+    }
+
+    setSelectedExpressionId(expression.id);
+    setActiveReviewExpressionId(expression.id);
+    setTestMode("text");
+    setAnswer("");
+    setVoiceAnswerFile(null);
+    setScore(null);
+    setError("");
+    setMessage("");
+
+    if (targetType === "translation") {
+      setPracticeTestType("translation");
+      setPracticePrompt({
+        testType: "translation",
+        promptKorean: expression.koreanText,
+        target: expression.englishBase,
+        tips: "핵심 의미를 살려 자연스럽게 영어로 말해보세요.",
+      });
+    } else {
+      setLoading("practice-prompt");
+      try {
+        const prompt = await apiFetch<PracticePrompt>("/practice/prompts", {
+          method: "POST",
+          body: JSON.stringify({ expressionId: expression.id, testType: "situation" }),
+        });
+        setPracticeTestType("situation");
+        setPracticePrompt(prompt);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "상황형 문제 생성에 실패했습니다.");
+        setLoading("");
+        return;
+      } finally {
+        setLoading("");
+      }
+    }
+
+    window.setTimeout(() => {
+      testSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      answerRef.current?.focus();
+    }, 120);
+  }
+
+  async function handleLoadRecording(recordingId: string) {
+    setError("");
+    setMessage("");
+    setLoading(`load-recording-${recordingId}`);
+    try {
+      const loaded = await apiFetch<RecordingResponse>(`/recordings/${recordingId}`);
+      setRecordingWithDrafts(loaded);
+      setSelectedFile(null);
+      setScore(null);
+      setTtsUrl("");
+      setMessage(`이전 녹음 "${loaded.fileName}"을 불러왔습니다. 이어서 문장 수정, 표현 생성, TTS 생성을 진행할 수 있습니다.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "이전 녹음을 불러오지 못했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleSelectMineSpeaker(recordingId: string, speakerLabel: string) {
+    setError("");
+    setMessage("");
+    setLoading(`mine-speaker-${recordingId}-${speakerLabel}`);
+    try {
+      const updated = await apiFetch<RecordingResponse>(`/recordings/${recordingId}/mine-speaker`, {
+        method: "PATCH",
+        body: JSON.stringify({ speakerLabel }),
+      });
+      setRecordingWithDrafts(updated);
+      setMessage(`${speakerLabel}를 내 화자로 지정했습니다. 이후 문장 추출과 표현 생성이 이 선택을 기준으로 동작합니다.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "내 화자 설정에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleUpdateSpeakerLabel(recordingId: string, speakerLabel: string) {
+    const nextSpeakerLabel = window.prompt(`${speakerLabel}의 이름을 입력하세요. 예: 나, 엄마, 아이, 남편`, speakerLabel);
+    if (!nextSpeakerLabel?.trim()) return;
+
+    setError("");
+    setMessage("");
+    setLoading(`speaker-label-${recordingId}-${speakerLabel}`);
+    try {
+      const updated = await apiFetch<RecordingResponse>(`/recordings/${recordingId}/speaker-label`, {
+        method: "PATCH",
+        body: JSON.stringify({ speakerLabel, nextSpeakerLabel: nextSpeakerLabel.trim() }),
+      });
+      setRecordingWithDrafts(updated);
+      setMessage(`${speakerLabel} 이름을 "${nextSpeakerLabel.trim()}"로 저장했습니다.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "화자 이름 저장에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleDeleteRecording(recordingId: string) {
+    const target = recordings.find((item) => item.id === recordingId);
+    const confirmed = window.confirm(`"${target?.fileName ?? "이 녹음"}"을 삭제할까요? 이미 생성한 영어 표현은 남기고, 녹음과 텍스트 변환 결과만 삭제합니다.`);
+    if (!confirmed) return;
+
+    setError("");
+    setMessage("");
+    setLoading(`delete-recording-${recordingId}`);
+    try {
+      await apiFetch<{ success: boolean; recordingId: string }>(`/recordings/${recordingId}`, {
+        method: "DELETE",
+      });
+      setRecordings((current) => current.filter((item) => item.id !== recordingId));
+      if (recording?.id === recordingId) {
+        setRecordingWithDrafts(null);
+      }
+      await refreshRecordings();
+      await refreshLists(selectedExpressionId || undefined);
+      setMessage("녹음을 삭제했습니다. 이미 생성한 영어 표현과 복습 기록은 유지했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "녹음 삭제에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleReprocessRecording(recordingId: string) {
+    setError("");
+    setMessage("");
+    setLoading(`reprocess-recording-${recordingId}`);
+    try {
+      const processed = await apiFetch<RecordingResponse>(`/recordings/${recordingId}/process`, {
+        method: "POST",
+        body: JSON.stringify({ diarization: true }),
+      });
+      setRecordingWithDrafts(processed);
+      await refreshRecordings();
+      setMessage(`"${processed.fileName}" 텍스트 변환을 다시 실행했고, 결과를 불러왔습니다.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "텍스트 변환 다시 실행에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleAnalyzeConversation() {
+    if (!recording) {
+      setError("먼저 녹음을 불러와 주세요.");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    setLoading("analyze-recording");
+    try {
+      const result = await apiFetch<RecordingAnalysis>(`/recordings/${recording.id}/analyze`, {
+        method: "POST",
+        body: JSON.stringify(buildRecordingContextPayload(recordingContext)),
+      });
+      setRecordingAnalysis(result);
+      setMessage("대화 요약과 발화 의도 분석을 불러왔습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "대화 분석에 실패했습니다.");
     } finally {
       setLoading("");
     }
@@ -648,7 +1401,7 @@ export default function DashboardPage() {
           <div>
             <h2 className="h2">원클릭 학습 시작</h2>
             <p className="muted" style={{ marginTop: 6 }}>
-              녹음 버튼 한 번으로 <strong>녹음 → 업로드 → 전사 → 내 문장 추출 → 영어 표현 생성 → TTS 생성 → 테스트 이동</strong>까지 자동으로 진행합니다.
+              녹음 버튼 한 번으로 <strong>녹음 → 업로드 → 텍스트 변환 → 내 문장 추출 → 영어 표현 생성 → TTS 생성 → 테스트 이동</strong>까지 자동으로 진행합니다.
             </p>
           </div>
           <div className="row">
@@ -762,8 +1515,8 @@ export default function DashboardPage() {
 
       <div className="dashboard-grid">
         <section className="card panel-lg">
-          <h2 className="h2">1. 수동 녹음 업로드 / 전사</h2>
-          <p className="muted">파일 업로드 또는 선택한 시간만큼 브라우저 녹음 후 STT를 실행합니다.</p>
+          <h2 className="h2">1. 수동 녹음 업로드 / 텍스트 변환</h2>
+          <p className="muted">파일 업로드 또는 선택한 시간만큼 브라우저 녹음 후 음성을 글자로 변환합니다.</p>
           <div className="row" style={{ marginTop: 14 }}>
             <input
               className="input file-input"
@@ -775,7 +1528,7 @@ export default function DashboardPage() {
               {loading === "record" ? "녹음 중..." : `브라우저 녹음 (${Math.round(recordingDuration / 1000)}초)`}
             </button>
             <button className="button" onClick={handleUploadAndProcess} disabled={!selectedFile || !!loading}>
-              {loading === "upload" ? "처리 중..." : "업로드 & 전사"}
+              {loading === "upload" ? "처리 중..." : "업로드 & 텍스트 변환"}
             </button>
             {(loading === "record" || loading === "upload") && (
               <button className="button danger" onClick={() => cancelActiveOperations(true)}>취소</button>
@@ -783,6 +1536,67 @@ export default function DashboardPage() {
           </div>
           <div className="muted" style={{ marginTop: 10 }}>
             선택 파일: {selectedFile ? `${selectedFile.name} (${Math.round(selectedFile.size / 1024)} KB)` : "없음"}
+          </div>
+          <div className="muted" style={{ marginTop: 8 }}>
+            긴 녹음은 한 번에 변환되지 않을 수 있습니다. 현재는 약 20분 안쪽 파일로 나눠 올리는 것을 권장합니다.
+          </div>
+          <div className="mini-card" style={{ marginTop: 16 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <strong>이전 녹음 불러오기</strong>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  브라우저를 다시 열어도 저장된 텍스트 변환 결과를 이어서 작업할 수 있습니다.
+                </div>
+              </div>
+              <button className="button ghost" onClick={refreshRecordings} disabled={!!loading}>
+                새로고침
+              </button>
+            </div>
+            <div className="grid" style={{ marginTop: 12 }}>
+              {recordings.length === 0 && <div className="mini-card muted">아직 저장된 녹음이 없습니다.</div>}
+              {recordings.map((item) => (
+                <div key={item.id} className="mini-card">
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                    <strong>{item.fileName}</strong>
+                    <span className={`tag ${item.status === "PROCESSED" ? "tag-primary" : "tag-muted"}`}>{item.status}</span>
+                  </div>
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    {recordingDateFormatter.format(new Date(item.createdAt))} · 문장 수 {item._count.utterances}개
+                  </div>
+                  <div className="muted" style={{ marginTop: 6 }}>
+                    {item.diarization ? "화자 분리 사용" : "화자 분리 없음"}
+                  </div>
+                  <div className="row" style={{ marginTop: 12 }}>
+                    <button
+                      className="button secondary"
+                      onClick={() => handleLoadRecording(item.id)}
+                      disabled={!!loading}
+                    >
+                      {loading === `load-recording-${item.id}` ? "불러오는 중..." : "불러오기"}
+                    </button>
+                    <Link className="button ghost" href={`/recordings/${item.id}`}>
+                      상세 페이지
+                    </Link>
+                    {(item.status === "UPLOADED" || item.status === "PROCESSING") && (
+                      <button
+                        className="button ghost"
+                        onClick={() => handleReprocessRecording(item.id)}
+                        disabled={!!loading}
+                      >
+                        {loading === `reprocess-recording-${item.id}` ? "변환 실행 중..." : "텍스트 변환 다시 실행"}
+                      </button>
+                    )}
+                    <button
+                      className="button danger"
+                      onClick={() => handleDeleteRecording(item.id)}
+                      disabled={!!loading}
+                    >
+                      {loading === `delete-recording-${item.id}` ? "삭제 중..." : "삭제"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
           {(loading === "upload" || flowStepId === "upload") && uploadPercent > 0 && (
             <div className="upload-status-box">
@@ -810,7 +1624,165 @@ export default function DashboardPage() {
                 <div className="muted" style={{ marginTop: 8 }}>
                   상태: {recording.status} · 문장 수: {recording.utterances.length}
                 </div>
+                <div className="muted" style={{ marginTop: 8 }}>
+                  원본 파일: {recording.fileName}
+                </div>
+                <div className="muted" style={{ marginTop: 8 }}>
+                  현재 내 화자: {speakerOptions.find((item) => item.isMine)?.speakerLabel ?? "선택되지 않음"}
+                </div>
+                {(recording.status === "PROCESSING" || recording.status === "UPLOADED") && (
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    아직 활용 가능한 텍스트 변환 결과가 없습니다. 아래 버튼으로 다시 실행할 수 있습니다.
+                  </div>
+                )}
+                <div className="row" style={{ marginTop: 12 }}>
+                  {(recording.status === "PROCESSING" || recording.status === "UPLOADED") && (
+                    <button
+                      className="button ghost"
+                      onClick={() => handleReprocessRecording(recording.id)}
+                      disabled={!!loading}
+                    >
+                      {loading === `reprocess-recording-${recording.id}` ? "변환 실행 중..." : "텍스트 변환 다시 실행"}
+                    </button>
+                  )}
+                  <button
+                    className="button danger"
+                    onClick={() => handleDeleteRecording(recording.id)}
+                    disabled={!!loading}
+                  >
+                    {loading === `delete-recording-${recording.id}` ? "삭제 중..." : "현재 녹음 삭제"}
+                  </button>
+                </div>
               </div>
+              <div className="mini-card">
+                <strong>대화 맥락 힌트</strong>
+                <div className="muted" style={{ marginTop: 8 }}>
+                  관계, 상황, 원하는 톤을 적어두면 표현 생성이 대화 맥락을 더 잘 반영합니다.
+                </div>
+                <div className="grid" style={{ marginTop: 12 }}>
+                  <input
+                    className="input"
+                    value={recordingContext.relationship}
+                    onChange={(event) => setRecordingContext((current) => ({ ...current, relationship: event.target.value }))}
+                    placeholder="예: 엄마 - 아이"
+                  />
+                  <textarea
+                    className="input"
+                    style={{ minHeight: 96, resize: "vertical" }}
+                    value={recordingContext.situation}
+                    onChange={(event) => setRecordingContext((current) => ({ ...current, situation: event.target.value }))}
+                    placeholder="예: 아이가 혼자 집에 있겠다고 하고, 엄마가 위험해서 안 된다고 설명하는 상황"
+                  />
+                  <input
+                    className="input"
+                    value={recordingContext.tone}
+                    onChange={(event) => setRecordingContext((current) => ({ ...current, tone: event.target.value }))}
+                    placeholder="예: 자연스럽고 부드럽지만 단호한 미국식 일상 회화"
+                  />
+                </div>
+                <div className="row" style={{ marginTop: 12 }}>
+                  <button className="button secondary" onClick={handleAnalyzeConversation} disabled={!!loading || recording.utterances.length === 0}>
+                    {loading === "analyze-recording" ? "분석 중..." : "대화 요약/의도 분석"}
+                  </button>
+                  <button
+                    className="button"
+                    onClick={() => handleGenerateExpressionsBulk("mine")}
+                    disabled={!!loading || pendingMineExpressionCount === 0}
+                  >
+                    {loading === "expr-bulk-mine" ? "일괄 생성 중..." : `내 문장 일괄 표현 생성 (${pendingMineExpressionCount})`}
+                  </button>
+                  <button
+                    className="button ghost"
+                    onClick={() => handleGenerateExpressionsBulk("others")}
+                    disabled={!!loading || pendingOthersExpressionCount === 0}
+                  >
+                    {loading === "expr-bulk-others"
+                      ? "일괄 생성 중..."
+                      : `기타 화자 일괄 표현 생성 (${pendingOthersExpressionCount})`}
+                  </button>
+                </div>
+              </div>
+              {recordingAnalysis && (
+                <div className="mini-card">
+                  <strong>자동 분석 결과</strong>
+                  <div style={{ marginTop: 10, lineHeight: 1.6 }}>{recordingAnalysis.summary}</div>
+                  <div className="muted" style={{ marginTop: 10 }}>
+                    아래 각 발화 카드에서 문장별 intent도 함께 확인할 수 있습니다.
+                  </div>
+                </div>
+              )}
+              {recording.diarization && speakerOptions.length > 0 && (
+                <div className="mini-card">
+                  <strong>내 화자 선택</strong>
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    화자 분리가 완벽하지 않을 수 있으니, 아래에서 내 목소리 화자를 직접 선택해 주세요.
+                  </div>
+                  <div className="row" style={{ marginTop: 12 }}>
+                    {speakerOptions.map((speaker) => (
+                      <button
+                        key={speaker.speakerLabel}
+                        className={`chip ${speaker.isMine ? "selected" : ""}`}
+                        onClick={() => handleSelectMineSpeaker(recording.id, speaker.speakerLabel)}
+                        disabled={!!loading}
+                      >
+                        {loading === `mine-speaker-${recording.id}-${speaker.speakerLabel}`
+                          ? `${speaker.speakerLabel} 저장 중...`
+                          : speaker.isMine
+                          ? `${speaker.speakerLabel} (내 화자)`
+                          : speaker.speakerLabel}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="row" style={{ marginTop: 10 }}>
+                    {speakerOptions.map((speaker) => (
+                      <button
+                        key={`${speaker.speakerLabel}-label`}
+                        className="button ghost"
+                        onClick={() => handleUpdateSpeakerLabel(recording.id, speaker.speakerLabel)}
+                        disabled={!!loading}
+                      >
+                        {loading === `speaker-label-${recording.id}-${speaker.speakerLabel}`
+                          ? `${speaker.speakerLabel} 저장 중...`
+                          : `${speaker.speakerLabel} 이름 변경`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {recording.audioUrl && (
+                <div className="mini-card">
+                  <strong>업로드한 원본 음성 듣기</strong>
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    텍스트 변환에 사용한 원본 파일을 바로 재생해서 결과와 비교할 수 있습니다.
+                  </div>
+                  <audio
+                    ref={rawAudioRef}
+                    controls
+                    className="audio-player"
+                    style={{ marginTop: 12 }}
+                    src={recording.audioUrl}
+                    onLoadedMetadata={(event) => setRawAudioDuration(event.currentTarget.duration || 0)}
+                    onTimeUpdate={(event) => setRawAudioCurrentTime(event.currentTarget.currentTime)}
+                  />
+                  <div className="mini-card" style={{ marginTop: 12 }}>
+                    <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                      <strong>재생 위치 이동</strong>
+                      <span className="muted">
+                        {formatAudioTime(rawAudioCurrentTime)} / {formatAudioTime(rawAudioDuration)}
+                      </span>
+                    </div>
+                    <input
+                      className="timeline-slider"
+                      type="range"
+                      min={0}
+                      max={rawAudioDuration || 0}
+                      step={0.1}
+                      value={Math.min(rawAudioCurrentTime, rawAudioDuration || 0)}
+                      onChange={(event) => seekRawAudio(Number(event.target.value), false)}
+                    />
+                  </div>
+                </div>
+              )}
               {recording.utterances.map((utterance) => (
                 <div key={utterance.id} className="utterance-card">
                   <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
@@ -818,18 +1790,59 @@ export default function DashboardPage() {
                       <strong>{utterance.speakerLabel}</strong>
                       <span className="muted" style={{ marginLeft: 8 }}>{utterance.startMs}ms ~ {utterance.endMs}ms</span>
                     </div>
-                    <span className={`tag ${utterance.isMine ? "tag-primary" : "tag-muted"}`}>{utterance.isMine ? "내 화자" : "기타 화자"}</span>
+                    <div className="row" style={{ gap: 8 }}>
+                      <span className={`tag ${utteranceExpressionIds.has(utterance.id) ? "tag-done" : "tag-muted"}`}>
+                        {utteranceExpressionIds.has(utterance.id) ? "표현 생성 완료" : "표현 미생성"}
+                      </span>
+                      <span className={`tag ${utterance.isMine ? "tag-primary" : "tag-muted"}`}>{utterance.isMine ? "내 화자" : "기타 화자"}</span>
+                    </div>
                   </div>
-                  <div style={{ marginTop: 10, fontSize: 16 }}>{utterance.koreanText}</div>
+                  <textarea
+                    className="input"
+                    style={{ marginTop: 10, minHeight: 96, resize: "vertical" }}
+                    value={utteranceDrafts[utterance.id] ?? ""}
+                    onChange={(event) =>
+                      setUtteranceDrafts((current) => ({ ...current, [utterance.id]: event.target.value }))
+                    }
+                    placeholder="STT 결과를 확인하고 필요하면 수정해 주세요."
+                    disabled={!!loading}
+                  />
                   <div className="row" style={{ marginTop: 12 }}>
                     <button
+                      className="button"
+                      onClick={() => seekRawAudio(utterance.startMs / 1000, true)}
+                      disabled={!recording.audioUrl}
+                    >
+                      원본 듣기
+                    </button>
+                    <button
+                      className="button ghost"
+                      disabled={!!loading || !(utteranceDrafts[utterance.id]?.trim())}
+                      onClick={() => handleSaveUtterance(utterance.id)}
+                    >
+                      {loading === `save-${utterance.id}` ? "저장 중..." : "문장 저장"}
+                    </button>
+                    <button
                       className="button secondary"
-                      disabled={!!loading}
+                      disabled={!!loading || !(utteranceDrafts[utterance.id]?.trim())}
                       onClick={() => handleGenerateFromUtterance(utterance.id)}
                     >
-                      {loading === `expr-${utterance.id}` ? "생성 중..." : "이 문장으로 표현 생성"}
+                      {loading === `expr-${utterance.id}` ? "생성 중..." : "저장 후 표현 생성"}
+                    </button>
+                    <button
+                      className="button danger"
+                      disabled={!!loading}
+                      onClick={() => handleDeleteUtterance(utterance.id)}
+                    >
+                      {loading === `delete-utterance-${utterance.id}` ? "삭제 중..." : "문장 삭제"}
                     </button>
                   </div>
+                  {intentByUtteranceId.get(utterance.id) && (
+                    <div className="mini-card" style={{ marginTop: 12 }}>
+                      <strong>이 발화의 의도</strong>
+                      <div style={{ marginTop: 8 }}>{intentByUtteranceId.get(utterance.id)}</div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -839,25 +1852,41 @@ export default function DashboardPage() {
         <section className="card panel-lg">
           <h2 className="h2">2. 영어 표현 & TTS</h2>
           <p className="muted">생성된 표현을 선택하고 TTS를 만들어 재생합니다.</p>
-          <div className="grid" style={{ marginTop: 14 }}>
-            {expressions.length === 0 && <div className="mini-card muted">아직 생성된 표현이 없습니다.</div>}
-            {expressions.map((expression) => (
-              <button
-                key={expression.id}
-                className={`expression-item ${selectedExpressionId === expression.id ? "selected" : ""}`}
-                onClick={() => {
-                  setSelectedExpressionId(expression.id);
-                  setTtsUrl(expression.ttsKey ? `${API_URL.replace(/\/$/, "")}/${expression.ttsKey}` : "");
-                  setScore(null);
-                }}
-              >
-                <div className="muted" style={{ fontSize: 12 }}>{expression.koreanText}</div>
-                <div style={{ fontWeight: 700, marginTop: 6 }}>{expression.englishBase}</div>
-              </button>
-            ))}
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="button secondary" onClick={handleGenerateTtsBulk} disabled={!!loading || pendingRecordingTtsCount === 0}>
+              {loading === "tts-bulk" ? "일괄 생성 중..." : `남은 TTS 일괄 생성 (${pendingRecordingTtsCount})`}
+            </button>
           </div>
+          {!isReviewAnswerHidden && (
+            <div className="grid" style={{ marginTop: 14 }}>
+              {expressions.length === 0 && <div className="mini-card muted">아직 생성된 표현이 없습니다.</div>}
+              {expressions.map((expression) => (
+                <button
+                  key={expression.id}
+                  className={`expression-item ${selectedExpressionId === expression.id ? "selected" : ""}`}
+                  onClick={() => {
+                    setSelectedExpressionId(expression.id);
+                    setScore(null);
+                  }}
+                >
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <div className="muted" style={{ fontSize: 12 }}>{expression.koreanText}</div>
+                    <span className={`tag ${expression.ttsKey ? "tag-done" : "tag-muted"}`}>
+                      {expression.ttsKey ? "TTS 완료" : "TTS 미생성"}
+                    </span>
+                  </div>
+                  <div style={{ fontWeight: 700, marginTop: 6 }}>{expression.englishBase}</div>
+                </button>
+              ))}
+            </div>
+          )}
+          {isReviewAnswerHidden && (
+            <div className="mini-card muted" style={{ marginTop: 14 }}>
+              복습 테스트 중에는 표현 목록도 숨겨집니다. 채점 후에 다시 확인할 수 있습니다.
+            </div>
+          )}
 
-          {selectedExpression && (
+          {selectedExpression && !isReviewAnswerHidden && (
             <div className="grid" style={{ marginTop: 16 }}>
               <div className="mini-card">
                 <strong>기본형</strong>
@@ -875,9 +1904,28 @@ export default function DashboardPage() {
                 <strong>설명</strong>
                 <div style={{ marginTop: 8 }}>{selectedExpression.note || "설명 없음"}</div>
               </div>
+              {recordingAnalysis?.summary && (
+                <div className="mini-card">
+                  <strong>반영된 대화 요약</strong>
+                  <div style={{ marginTop: 8 }}>{recordingAnalysis.summary}</div>
+                </div>
+              )}
+              {selectedExpressionIntent && (
+                <div className="mini-card">
+                  <strong>반영된 발화 의도</strong>
+                  <div style={{ marginTop: 8 }}>{selectedExpressionIntent}</div>
+                </div>
+              )}
               <div className="row">
                 <button className="button" onClick={handleGenerateTts} disabled={!!loading}>
                   {loading === "tts" ? "TTS 생성 중..." : "TTS 생성"}
+                </button>
+                <button
+                  className="button ghost"
+                  onClick={handleCopyExpression}
+                  disabled={!!loading || !selectedExpression}
+                >
+                  영어 표현 복사
                 </button>
                 <button
                   className="button ghost"
@@ -886,11 +1934,26 @@ export default function DashboardPage() {
                 >
                   TTS 재생
                 </button>
+                <button
+                  className="button danger"
+                  onClick={handleDeleteExpression}
+                  disabled={!!loading || !selectedExpression}
+                >
+                  {loading === "delete-expression" ? "삭제 중..." : "표현 삭제"}
+                </button>
               </div>
               <audio ref={audioRef} controls className="audio-player" src={ttsUrl || undefined} />
               {ttsUrl && (
                 <div className="muted">TTS URL: <span className="code">{ttsUrl}</span></div>
               )}
+            </div>
+          )}
+          {selectedExpression && isReviewAnswerHidden && (
+            <div className="mini-card" style={{ marginTop: 16 }}>
+              <strong>정답 숨김 모드</strong>
+              <div className="muted" style={{ marginTop: 8 }}>
+                복습 테스트를 시작했기 때문에 채점 전까지 표현, 설명, TTS를 숨겼습니다.
+              </div>
             </div>
           )}
         </section>
@@ -901,32 +1964,155 @@ export default function DashboardPage() {
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <h2 className="h2">3. 말하기 테스트</h2>
-              <p className="muted">선택한 기본형을 기준으로 간단 채점합니다.</p>
+              <p className="muted">선택한 기본형을 기준으로 텍스트 또는 음성으로 답변을 채점합니다.</p>
             </div>
             {flowStepId === "complete" && <span className="badge" style={{ background: "#dbeafe" }}>자동 이동 완료</span>}
           </div>
           <div className="grid" style={{ marginTop: 14 }}>
             <div className="mini-card">
               <div className="muted">문제</div>
-              <div style={{ marginTop: 8, fontWeight: 700 }}>{selectedExpression?.koreanText ?? "표현을 먼저 선택하세요."}</div>
+              <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                <button
+                  className={`button ${practiceTestType === "translation" ? "" : "ghost"}`}
+                  onClick={() => handleGeneratePracticePrompt("translation")}
+                  disabled={!!loading || !selectedExpression}
+                >
+                  번역형
+                </button>
+                <button
+                  className={`button ${practiceTestType === "situation" ? "" : "ghost"}`}
+                  onClick={() => handleGeneratePracticePrompt("situation")}
+                  disabled={!!loading || !selectedExpression}
+                >
+                  {loading === "practice-prompt" ? "생성 중..." : "상황형"}
+                </button>
+                <button
+                  className={`button ${practiceTestType === "pattern" ? "" : "ghost"}`}
+                  onClick={() => handleGeneratePracticePrompt("pattern")}
+                  disabled={!!loading || !selectedExpression}
+                >
+                  {loading === "practice-prompt" ? "생성 중..." : "패턴형"}
+                </button>
+              </div>
+              <div style={{ marginTop: 12, fontWeight: 700 }}>{practicePrompt?.promptKorean ?? selectedExpression?.koreanText ?? "표현을 먼저 선택하세요."}</div>
+              {practicePrompt?.promptContext && (
+                <div className="muted" style={{ marginTop: 8 }}>{practicePrompt.promptContext}</div>
+              )}
+              {practicePrompt?.patternLabel && (
+                <div className="muted" style={{ marginTop: 8 }}>패턴: {practicePrompt.patternLabel}</div>
+              )}
+              {practicePrompt?.patternDescription && (
+                <div className="muted" style={{ marginTop: 8 }}>{practicePrompt.patternDescription}</div>
+              )}
+              {practicePrompt?.tips && (
+                <div className="muted" style={{ marginTop: 8 }}>힌트: {practicePrompt.tips}</div>
+              )}
             </div>
-            <textarea
-              ref={answerRef}
-              className="textarea"
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-              placeholder="영어로 답변을 입력하세요"
-            />
             <div className="row">
-              <button className="button secondary" onClick={handleScore} disabled={!!loading || !selectedExpression}>
-                {loading === "score" ? "채점 중..." : "채점하기"}
+              <button
+                className={`button ${testMode === "text" ? "" : "ghost"}`}
+                onClick={() => setTestMode("text")}
+                disabled={!!loading}
+              >
+                텍스트 답변
+              </button>
+              <button
+                className={`button ${testMode === "voice" ? "" : "ghost"}`}
+                onClick={() => setTestMode("voice")}
+                disabled={!!loading}
+              >
+                음성 답변
               </button>
             </div>
+            {testMode === "text" ? (
+              <>
+                <textarea
+                  ref={answerRef}
+                  className="textarea"
+                  value={answer}
+                  onChange={(e) => setAnswer(e.target.value)}
+                  placeholder="영어로 답변을 입력하세요"
+                />
+                <div className="row">
+                  <button className="button secondary" onClick={handleScore} disabled={!!loading || !selectedExpression}>
+                    {loading === "score" ? "채점 중..." : "채점하기"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="grid">
+                <div className="mini-card">
+                  <strong>음성 답변 녹음</strong>
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    영어로 말한 뒤 녹음을 종료하면 STT로 인식해서 자동 채점합니다.
+                  </div>
+                  <div className="row" style={{ marginTop: 12 }}>
+                    <button className="button" onClick={handleStartVoicePractice} disabled={!!loading || isPracticeRecording}>
+                      {isPracticeRecording ? "녹음 중..." : "녹음 시작"}
+                    </button>
+                    <button className="button ghost" onClick={handleStopVoicePractice} disabled={!isPracticeRecording}>
+                      녹음 종료
+                    </button>
+                    <button className="button secondary" onClick={handleScoreVoice} disabled={!!loading || isPracticeRecording || !voiceAnswerFile || !selectedExpression}>
+                      {loading === "score-voice" ? "음성 채점 중..." : "음성 채점"}
+                    </button>
+                  </div>
+                  <div className="muted" style={{ marginTop: 10 }}>
+                    {voiceAnswerFile ? `녹음 파일 준비됨: ${voiceAnswerFile.name}` : "아직 녹음된 음성 답변이 없습니다."}
+                  </div>
+                </div>
+                {score?.answer && (
+                  <div className="mini-card">
+                    <strong>인식된 영어 답변</strong>
+                    <div style={{ marginTop: 8 }}>{score.answer}</div>
+                  </div>
+                )}
+                {score?.audioUrl && (
+                  <div className="mini-card">
+                    <strong>저장된 음성 다시 듣기</strong>
+                    <audio controls className="audio-player" style={{ marginTop: 12 }} src={score.audioUrl} />
+                  </div>
+                )}
+              </div>
+            )}
             {score && (
               <div className="grid score-grid">
                 <div className="mini-card"><strong>점수</strong><div className="kpi" style={{ marginTop: 8 }}>{score.score}</div></div>
                 <div className="mini-card"><strong>피드백</strong><div style={{ marginTop: 8 }}>{score.feedback}</div></div>
                 <div className="mini-card"><strong>정답 기준</strong><div style={{ marginTop: 8 }}>{score.target}</div></div>
+                {typeof score.meaningScore === "number" && (
+                  <div className="mini-card"><strong>의미 전달</strong><div className="kpi" style={{ marginTop: 8 }}>{score.meaningScore}</div></div>
+                )}
+                {typeof score.naturalnessScore === "number" && (
+                  <div className="mini-card"><strong>자연스러움</strong><div className="kpi" style={{ marginTop: 8 }}>{score.naturalnessScore}</div></div>
+                )}
+                {typeof score.grammarScore === "number" && (
+                  <div className="mini-card"><strong>문법/정확도</strong><div className="kpi" style={{ marginTop: 8 }}>{score.grammarScore}</div></div>
+                )}
+                {score.strengthComment && (
+                  <div className="mini-card">
+                    <strong>잘한 점</strong>
+                    <div style={{ marginTop: 8 }}>{score.strengthComment}</div>
+                  </div>
+                )}
+                {score.correctionComment && (
+                  <div className="mini-card">
+                    <strong>개선 코멘트</strong>
+                    <div style={{ marginTop: 8 }}>{score.correctionComment}</div>
+                  </div>
+                )}
+                {score.suggestedAnswer && (
+                  <div className="mini-card">
+                    <strong>추천 답안</strong>
+                    <div style={{ marginTop: 8 }}>{score.suggestedAnswer}</div>
+                  </div>
+                )}
+                {score.suggestedAnswerAlt && score.suggestedAnswerAlt !== score.suggestedAnswer && (
+                  <div className="mini-card">
+                    <strong>다른 자연스러운 답안</strong>
+                    <div style={{ marginTop: 8 }}>{score.suggestedAnswerAlt}</div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -937,15 +2123,102 @@ export default function DashboardPage() {
           <p className="muted">사용자 표현과 최근 점수를 바탕으로 복습 목록을 표시합니다.</p>
           <div className="grid" style={{ marginTop: 14 }}>
             {reviews.length === 0 && <div className="mini-card muted">복습 항목이 없습니다.</div>}
-            {reviews.map((item) => (
+            {reviews.map((item, index) => (
               <div key={item.id} className="mini-card">
-                <strong>{item.korean}</strong>
-                <div className="muted" style={{ marginTop: 8 }}>{item.english}</div>
+                <strong>복습 카드 {index + 1}</strong>
                 <div className="progress" style={{ marginTop: 12 }}><span style={{ width: `${item.mastery}%` }} /></div>
                 <div className="muted" style={{ marginTop: 8 }}>최근 숙련도 {item.mastery}%</div>
+                <div className="muted" style={{ marginTop: 8 }}>
+                  마지막 복습: {item.lastReviewedAt ? recordingDateFormatter.format(new Date(item.lastReviewedAt)) : "아직 없음"}
+                </div>
+                {item.recommendedTestType && (
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    추천 문제 유형: {item.recommendedTestType === "situation" ? "상황형" : "번역형"}
+                  </div>
+                )}
+                {item.reviewReason && (
+                  <div className="muted" style={{ marginTop: 8 }}>{item.reviewReason}</div>
+                )}
+                <div className="row" style={{ marginTop: 12 }}>
+                  <button
+                    className="button secondary"
+                    onClick={() => handleStartReviewPractice(item, item.recommendedTestType ?? "translation")}
+                    disabled={!!loading}
+                  >
+                    {item.recommendedTestType === "situation" ? "추천 방식으로 풀기" : "번역형으로 풀기"}
+                  </button>
+                  <button
+                    className="button ghost"
+                    onClick={() => handleStartReviewPractice(item, "translation")}
+                    disabled={!!loading}
+                  >
+                    번역형
+                  </button>
+                  <button
+                    className="button ghost"
+                    onClick={() => handleStartReviewPractice(item, "situation")}
+                    disabled={!!loading}
+                  >
+                    상황형
+                  </button>
+                </div>
               </div>
             ))}
           </div>
+        </section>
+
+        <section className="card panel-lg">
+          <h2 className="h2">5. TTS 완료 표현 모아보기</h2>
+          <p className="muted">영어 음성까지 만들어진 표현만 따로 모아 빠르게 다시 듣고 확인할 수 있습니다.</p>
+          {isReviewAnswerHidden ? (
+            <div className="mini-card muted" style={{ marginTop: 14 }}>
+              복습 테스트 중에는 정답 노출을 막기 위해 이 목록도 숨겨집니다.
+            </div>
+          ) : (
+            <div className="grid" style={{ marginTop: 14 }}>
+              {completedTtsExpressions.length === 0 && (
+                <div className="mini-card muted">아직 TTS 생성이 완료된 표현이 없습니다.</div>
+              )}
+              {completedTtsExpressions.map((expression) => (
+                <div key={`tts-library-${expression.id}`} className="mini-card">
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <strong style={{ flex: 1 }}>{expression.englishBase}</strong>
+                    <span className="tag tag-done">TTS 완료</span>
+                  </div>
+                  <div className="muted" style={{ marginTop: 8 }}>{expression.koreanText}</div>
+                  <div className="row" style={{ marginTop: 12 }}>
+                    <button
+                      className="button secondary"
+                      onClick={() => {
+                        setSelectedExpressionId(expression.id);
+                        setScore(null);
+                        setTtsUrl(expression.ttsUrl ?? "");
+                        window.setTimeout(() => audioRef.current?.load(), 50);
+                      }}
+                      disabled={!!loading}
+                    >
+                      선택
+                    </button>
+                    <button
+                      className="button ghost"
+                      onClick={() => {
+                        setSelectedExpressionId(expression.id);
+                        setScore(null);
+                        setTtsUrl(expression.ttsUrl ?? "");
+                        window.setTimeout(() => {
+                          audioRef.current?.load();
+                          audioRef.current?.play().catch(() => undefined);
+                        }, 50);
+                      }}
+                      disabled={!!loading || !expression.ttsUrl}
+                    >
+                      바로 재생
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       </div>
     </main>

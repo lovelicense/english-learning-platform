@@ -1,4 +1,4 @@
-import { TranscriptionHandler } from "../handlers/transcription.handler";
+import { TranscriptionHandler } from "../handlers/transcription.handler.js";
 
 export class TranscriptionConsumer {
   private readonly handler = new TranscriptionHandler();

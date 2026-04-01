@@ -1,4 +1,4 @@
-import { TranscriptionConsumer } from "./consumers/transcription.consumer";
+import { TranscriptionConsumer } from "./consumers/transcription.consumer.js";
 
 export function startWorker() {
   const consumer = new TranscriptionConsumer();
