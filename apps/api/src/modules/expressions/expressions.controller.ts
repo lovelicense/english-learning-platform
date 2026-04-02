@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GenerateExpressionDto } from './dto/generate-expression.dto';
 import { GenerateRecordingExpressionsDto } from './dto/generate-recording-expressions.dto';
 import { GenerateRecordingTtsDto } from './dto/generate-recording-tts.dto';
+import { UpdateExpressionMemoDto } from './dto/update-expression-memo.dto';
 import { ExpressionsService } from './expressions.service';
 
 @UseGuards(JwtAuthGuard)
@@ -29,6 +30,11 @@ export class ExpressionsController {
   @Post(':id/tts')
   generateTts(@CurrentUser('userId') userId: string, @Param('id') id: string) {
     return this.expressionsService.generateTts(userId, id);
+  }
+
+  @Patch(':id/memo')
+  updateMemo(@CurrentUser('userId') userId: string, @Param('id') id: string, @Body() dto: UpdateExpressionMemoDto) {
+    return this.expressionsService.updateMemo(userId, id, dto.userMemo);
   }
 
   @Get()

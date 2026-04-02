@@ -104,6 +104,7 @@ pnpm dev:web
 pnpm dev:worker
 
 
+
 # 환경 변수 (.env)
 DATABASE_URL=postgresql://...
 JWT_SECRET=...
@@ -138,8 +139,17 @@ web_url = "https://chunsay.com"
 worker_ecr_repository_url = "574844118613.dkr.ecr.ap-northeast-2.amazonaws.com/english-learning-prod-worker"
 
 
+# AWS에 배포 방법
+./infrastructure/scripts/deploy-aws.sh
 
-# 현재 이슈
+# github 배포 방법
+git status
+git add ...
+git commit -m "Add analysis caching and expression memo support"
+git push origin main
+
+
+# 완료된 이슈
 - tts로 s3에 생성된 mp3파일이 화면에서 tts 재생 클릭했을때 오류남(해결완료)
 - stt로 텍스트 변환 한 결과에서 불명확한 변환을 수동으로 수정 후 저장하고, 수정한 텍스트를 기반으로 tts 수정하고 싶어(해결완료)
 - 녹음 파일 업로드하면 STT로 변환되는데, 업로드한 음성파일을 재생해서 듣고싶어.(해결완료)
@@ -149,13 +159,17 @@ worker_ecr_repository_url = "574844118613.dkr.ecr.ap-northeast-2.amazonaws.com/e
 - 영어포현 TTS에 한국어, 영어 복사기능(완료)
 - 대화 전체를 앞뒤문맥을 고려해서 영어 문장을 생성하도록 llm에 맥락 전달 및 앞뒤 대화내용 전달(완료)
 - 저장된 긴 녹음을 다시 불러온 뒤, 내 문장 기준으로 영어 표현 일괄 생성 / 남은 TTS 일괄 생성 기능 추가(완료)
+- 말하기 테스트를 의미 기반 평가 + 코멘트형으로 개선(완료)
+- 오늘의 복습을 최근 목록이 아니라 약점 우선 복습 구조로 개선(완료)
+
+
+# 현재 이슈
+- 테스트 시 음성 테스트 
 
 # 다음 목표
+- 문장 패턴 추출 및 패턴형 문제 출제 기능 설계 완료 : 복습에도 적용
+- 긴 녹음 처리 시 청크 단위 백엔드 비동기 파이프라인으로 확장 검토 : 이건 뭔지 모르겠음
 
-- 긴 녹음 처리 시 청크 단위 백엔드 비동기 파이프라인으로 확장 검토
-- 말하기 테스트를 의미 기반 평가 + 코멘트형으로 개선
-- 오늘의 복습을 최근 목록이 아니라 약점 우선 복습 구조로 개선
-- 문장 패턴 추출 및 패턴형 문제 출제 기능 설계 완료
 
 
 

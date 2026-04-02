@@ -23,6 +23,7 @@ type RecordingUtterance = {
   startMs: number;
   endMs: number;
   isMine: boolean;
+  analysisIntent?: string | null;
 };
 type RecordingResponse = {
   id: string;
@@ -30,6 +31,11 @@ type RecordingResponse = {
   status: string;
   audioUrl?: string;
   diarization?: boolean;
+  analysisSummary?: string | null;
+  analysisRelationship?: string | null;
+  analysisSituation?: string | null;
+  analysisTone?: string | null;
+  analysisUpdatedAt?: string | null;
   utterances: RecordingUtterance[];
 };
 type RecordingSummary = {
@@ -49,6 +55,7 @@ type Expression = {
   englishEasy: string;
   englishNatural: string;
   note?: string | null;
+  userMemo?: string | null;
   ttsKey?: string | null;
   ttsUrl?: string | null;
 };
@@ -158,6 +165,7 @@ const STEP_TIMEOUTS: Record<string, number> = {
   reviews: 15000,
   complete: 10000,
   score: 15000,
+  "score-voice": 45000,
 };
 
 const stepMap = Object.fromEntries(AUTO_FLOW_STEPS.map((step) => [step.id, step]));
@@ -178,6 +186,7 @@ export default function DashboardPage() {
   const [utteranceDrafts, setUtteranceDrafts] = useState<Record<string, string>>({});
   const [expressions, setExpressions] = useState<Expression[]>([]);
   const [selectedExpressionId, setSelectedExpressionId] = useState("");
+  const [expressionMemoDraft, setExpressionMemoDraft] = useState("");
   const [ttsUrl, setTtsUrl] = useState("");
   const [testMode, setTestMode] = useState<"text" | "voice">("text");
   const [practiceTestType, setPracticeTestType] = useState<"translation" | "situation" | "pattern">("translation");
@@ -257,15 +266,21 @@ export default function DashboardPage() {
   const intentByUtteranceId = useMemo(
     () =>
       new Map(
-        (recordingAnalysis?.intents ?? [])
+        ((recordingAnalysis?.intents?.length
+          ? recordingAnalysis.intents
+          : (recording?.utterances ?? []).map((utterance) => ({
+              utteranceId: utterance.id,
+              intent: utterance.analysisIntent ?? "",
+            }))) as Array<{ utteranceId?: string; intent: string }>)
           .filter((item) => item.utteranceId)
           .map((item) => [item.utteranceId as string, item.intent]),
       ),
-    [recordingAnalysis],
+    [recordingAnalysis, recording],
   );
   const selectedExpressionIntent = selectedExpression?.utteranceId
     ? intentByUtteranceId.get(selectedExpression.utteranceId) ?? ""
     : "";
+  const visibleRecordingSummary = recordingAnalysis?.summary ?? recording?.analysisSummary ?? "";
   const isReviewAnswerHidden =
     Boolean(activeReviewExpressionId) && selectedExpression?.id === activeReviewExpressionId && !score;
 
@@ -291,6 +306,10 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setTtsUrl(selectedExpression?.ttsUrl ?? "");
+  }, [selectedExpression]);
+
+  useEffect(() => {
+    setExpressionMemoDraft(selectedExpression?.userMemo ?? "");
   }, [selectedExpression]);
 
   useEffect(() => {
@@ -1018,6 +1037,29 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleSaveExpressionMemo() {
+    if (!selectedExpression) {
+      setError("먼저 표현을 선택해 주세요.");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    setLoading("save-expression-memo");
+    try {
+      await apiFetch<Expression>(`/expressions/${selectedExpression.id}/memo`, {
+        method: "PATCH",
+        body: JSON.stringify({ userMemo: expressionMemoDraft }),
+      });
+      await refreshLists(selectedExpression.id);
+      setMessage("표현 메모를 저장했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "표현 메모 저장에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
   async function handleScore() {
     if (!selectedExpression) {
       setError("채점할 표현을 먼저 선택해 주세요.");
@@ -1059,7 +1101,7 @@ export default function DashboardPage() {
     if (isPracticeRecording || loading) return;
     userCancelledRef.current = false;
     setError("");
-    setMessage("영어 말하기 테스트 녹음을 시작했습니다. 말이 끝나면 종료 버튼을 눌러 채점하세요.");
+    setMessage("영어 말하기 테스트 녹음을 시작했습니다. 말이 끝나면 종료 버튼을 누르면 자동으로 채점합니다.");
     setVoiceAnswerFile(null);
     setScore(null);
 
@@ -1068,9 +1110,10 @@ export default function DashboardPage() {
     setIsPracticeRecording(true);
 
     session.promise
-      .then((file) => {
+      .then(async (file) => {
         setVoiceAnswerFile(file);
-        setMessage(`음성 답변 녹음이 완료되었습니다: ${file.name}`);
+        setMessage(`음성 답변 녹음이 완료되었습니다: ${file.name}. 자동으로 채점을 시작합니다.`);
+        await handleScoreVoice(file);
       })
       .catch((err) => {
         if (!userCancelledRef.current) {
@@ -1087,12 +1130,13 @@ export default function DashboardPage() {
     practiceRecordingSessionRef.current?.stop();
   }
 
-  async function handleScoreVoice() {
+  async function handleScoreVoice(preparedFile?: File) {
     if (!selectedExpression) {
       setError("채점할 표현을 먼저 선택해 주세요.");
       return;
     }
-    if (!voiceAnswerFile) {
+    const file = preparedFile instanceof File ? preparedFile : voiceAnswerFile;
+    if (!file) {
       setError("먼저 영어 답변을 녹음해 주세요.");
       return;
     }
@@ -1101,15 +1145,15 @@ export default function DashboardPage() {
     setMessage("");
     setLoading("score-voice");
     try {
-      const presign = await runWithTimeout("score", (signal) =>
+      const presign = await runWithTimeout("score-voice", (signal) =>
         apiFetch<PracticeVoicePresignResponse>("/practice/voice/presign", {
           method: "POST",
-          body: JSON.stringify({ fileName: voiceAnswerFile.name, contentType: voiceAnswerFile.type || "audio/webm" }),
+          body: JSON.stringify({ fileName: file.name, contentType: file.type || "audio/webm" }),
           signal,
         }),
       );
 
-      const uploadTask = createPresignedUploadTask(presign.uploadUrl, voiceAnswerFile);
+      const uploadTask = createPresignedUploadTask(presign.uploadUrl, file);
       uploadTaskRef.current = uploadTask;
       try {
         await Promise.race<void>([
@@ -1125,13 +1169,13 @@ export default function DashboardPage() {
         uploadTaskRef.current = null;
       }
 
-      const result = await runWithTimeout("score", (signal) =>
+      const result = await runWithTimeout("score-voice", (signal) =>
         apiFetch<PracticeScore>("/practice/score-voice", {
           method: "POST",
           body: JSON.stringify({
             expressionId: selectedExpression.id,
             audioKey: presign.key,
-            fileName: voiceAnswerFile.name,
+            fileName: file.name,
             testType: practiceTestType,
             promptKorean: practicePrompt?.promptKorean,
             promptContext: practicePrompt?.promptContext,
@@ -1702,10 +1746,10 @@ export default function DashboardPage() {
                   </button>
                 </div>
               </div>
-              {recordingAnalysis && (
+              {visibleRecordingSummary && (
                 <div className="mini-card">
-                  <strong>자동 분석 결과</strong>
-                  <div style={{ marginTop: 10, lineHeight: 1.6 }}>{recordingAnalysis.summary}</div>
+                  <strong>대화 요약</strong>
+                  <div style={{ marginTop: 10, lineHeight: 1.6 }}>{visibleRecordingSummary}</div>
                   <div className="muted" style={{ marginTop: 10 }}>
                     아래 각 발화 카드에서 문장별 intent도 함께 확인할 수 있습니다.
                   </div>
@@ -1904,15 +1948,30 @@ export default function DashboardPage() {
                 <strong>설명</strong>
                 <div style={{ marginTop: 8 }}>{selectedExpression.note || "설명 없음"}</div>
               </div>
-              {recordingAnalysis?.summary && (
+              <div className="mini-card">
+                <strong>메모</strong>
+                <textarea
+                  className="textarea"
+                  style={{ marginTop: 8, minHeight: 96 }}
+                  value={expressionMemoDraft}
+                  onChange={(event) => setExpressionMemoDraft(event.target.value)}
+                  placeholder="예: 이 표현은 아이를 타이르듯 말할 때 자주 씀"
+                />
+                <div className="row" style={{ marginTop: 10 }}>
+                  <button className="button secondary" onClick={handleSaveExpressionMemo} disabled={!!loading || !selectedExpression}>
+                    {loading === "save-expression-memo" ? "메모 저장 중..." : "메모 저장"}
+                  </button>
+                </div>
+              </div>
+              {visibleRecordingSummary && (
                 <div className="mini-card">
-                  <strong>반영된 대화 요약</strong>
-                  <div style={{ marginTop: 8 }}>{recordingAnalysis.summary}</div>
+                  <strong>대화 요약</strong>
+                  <div style={{ marginTop: 8 }}>{visibleRecordingSummary}</div>
                 </div>
               )}
               {selectedExpressionIntent && (
                 <div className="mini-card">
-                  <strong>반영된 발화 의도</strong>
+                  <strong>발화 의도</strong>
                   <div style={{ marginTop: 8 }}>{selectedExpressionIntent}</div>
                 </div>
               )}
@@ -2053,8 +2112,8 @@ export default function DashboardPage() {
                     <button className="button ghost" onClick={handleStopVoicePractice} disabled={!isPracticeRecording}>
                       녹음 종료
                     </button>
-                    <button className="button secondary" onClick={handleScoreVoice} disabled={!!loading || isPracticeRecording || !voiceAnswerFile || !selectedExpression}>
-                      {loading === "score-voice" ? "음성 채점 중..." : "음성 채점"}
+                    <button className="button secondary" onClick={() => void handleScoreVoice()} disabled={!!loading || isPracticeRecording || !voiceAnswerFile || !selectedExpression}>
+                      {loading === "score-voice" ? "다시 채점 중..." : "다시 채점"}
                     </button>
                   </div>
                   <div className="muted" style={{ marginTop: 10 }}>

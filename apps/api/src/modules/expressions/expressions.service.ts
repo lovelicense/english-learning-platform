@@ -22,6 +22,17 @@ type RecordingUtteranceContext = {
   speakerLabel: string;
   koreanText: string;
   isMine: boolean;
+  analysisIntent?: string | null;
+};
+
+type CachedRecordingAnalysis = {
+  summary: string;
+  intents: Array<{
+    utteranceId?: string;
+    speakerLabel?: string;
+    koreanText: string;
+    intent: string;
+  }>;
 };
 
 @Injectable()
@@ -73,11 +84,9 @@ export class ExpressionsService {
         speakerLabel: item.speakerLabel,
         koreanText: item.koreanText,
         isMine: item.isMine,
+        analysisIntent: (item as any).analysisIntent,
       }));
-      const analysis = await this.openai.analyzeConversation({
-        ...generationContext,
-        turns: orderedUtterances.map((item) => this.toContextTurn(item)),
-      });
+      const analysis = await this.getOrCreateRecordingAnalysis(utterance.recording.id, orderedUtterances, generationContext);
       expressionInput = this.buildExpressionInputForUtterance(utterance, orderedUtterances, generationContext, analysis);
     }
 
@@ -129,6 +138,7 @@ export class ExpressionsService {
       speakerLabel: utterance.speakerLabel,
       koreanText: utterance.koreanText,
       isMine: utterance.isMine,
+      analysisIntent: (utterance as any).analysisIntent,
     }));
     const targetUtterances = recording.utterances.filter((utterance) => {
       if (!utterance.koreanText.trim()) return false;
@@ -148,10 +158,7 @@ export class ExpressionsService {
       };
     }
 
-    const analysis = await this.openai.analyzeConversation({
-      ...generationContext,
-      turns: orderedUtterances.map((utterance) => this.toContextTurn(utterance)),
-    });
+    const analysis = await this.getOrCreateRecordingAnalysis(recording.id, orderedUtterances, generationContext);
 
     const expressions: Array<{
       id: string;
@@ -209,15 +216,7 @@ export class ExpressionsService {
     utterance: RecordingUtteranceContext,
     orderedUtterances: RecordingUtteranceContext[],
     generationContext: ExpressionGenerationContext,
-    analysis: {
-      summary: string;
-      intents: Array<{
-        utteranceId?: string;
-        speakerLabel?: string;
-        koreanText: string;
-        intent: string;
-      }>;
-    },
+    analysis: CachedRecordingAnalysis,
   ) {
     const currentIndex = orderedUtterances.findIndex((item) => item.id === utterance.id);
     const currentIntent =
@@ -256,6 +255,81 @@ export class ExpressionsService {
       koreanText: turn.koreanText,
       isMine: turn.isMine,
     };
+  }
+
+  private async getOrCreateRecordingAnalysis(
+    recordingId: string,
+    orderedUtterances: RecordingUtteranceContext[],
+    generationContext: ExpressionGenerationContext,
+  ): Promise<CachedRecordingAnalysis> {
+    const recording = await this.prisma.recording.findUnique({
+      where: { id: recordingId },
+    }) as any;
+
+    const relationship = generationContext.relationship ?? null;
+    const situation = generationContext.situation ?? null;
+    const tone = generationContext.tone ?? null;
+
+    const canReuse =
+      Boolean(recording?.analysisSummary) &&
+      recording?.analysisRelationship === relationship &&
+      recording?.analysisSituation === situation &&
+      recording?.analysisTone === tone &&
+      orderedUtterances.every((utterance) => Boolean(utterance.analysisIntent));
+
+    if (canReuse) {
+      return {
+        summary: recording?.analysisSummary ?? '',
+        intents: orderedUtterances.map((utterance) => ({
+          utteranceId: utterance.id,
+          speakerLabel: utterance.speakerLabel,
+          koreanText: utterance.koreanText,
+          intent: utterance.analysisIntent ?? '',
+        })),
+      };
+    }
+
+    const analysis = await this.openai.analyzeConversation({
+      ...generationContext,
+      turns: orderedUtterances.map((utterance) => this.toContextTurn(utterance)),
+    });
+
+    const validUtteranceIds = new Set(orderedUtterances.map((utterance) => utterance.id));
+    const intentUpdates = analysis.intents
+      .map((item) => {
+        const matchedUtteranceId = item.utteranceId && validUtteranceIds.has(item.utteranceId)
+          ? item.utteranceId
+          : orderedUtterances.find(
+              (utterance) => utterance.speakerLabel === item.speakerLabel && utterance.koreanText === item.koreanText,
+            )?.id;
+        const utteranceId = matchedUtteranceId && validUtteranceIds.has(matchedUtteranceId) ? matchedUtteranceId : null;
+        if (!utteranceId) return null;
+        return this.prisma.utterance.updateMany({
+          where: { id: utteranceId, recordingId },
+          data: { analysisIntent: item.intent } as any,
+        } as any);
+      })
+      .filter(Boolean) as Array<ReturnType<typeof this.prisma.utterance.updateMany>>;
+
+    await this.prisma.$transaction([
+      this.prisma.recording.update({
+        where: { id: recordingId },
+        data: {
+          analysisSummary: analysis.summary,
+          analysisRelationship: relationship,
+          analysisSituation: situation,
+          analysisTone: tone,
+          analysisUpdatedAt: new Date(),
+        } as any,
+      } as any),
+      this.prisma.utterance.updateMany({
+        where: { recordingId },
+        data: { analysisIntent: null } as any,
+      } as any),
+      ...intentUpdates,
+    ]);
+
+    return analysis;
   }
 
   async generateTts(userId: string, expressionId: string) {
@@ -326,6 +400,21 @@ export class ExpressionsService {
         ttsUrl: expression.ttsKey ? await this.storage.createPresignedDownload(expression.ttsKey, 3600, 'audio/mpeg') : null,
       })),
     );
+  }
+
+  async updateMemo(userId: string, expressionId: string, userMemo?: string) {
+    const expression = await this.prisma.expression.findFirst({
+      where: { id: expressionId, userId },
+    });
+    if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
+
+    const normalizedMemo = userMemo?.trim() ?? '';
+    return this.prisma.expression.update({
+      where: { id: expressionId },
+      data: {
+        userMemo: normalizedMemo ? normalizedMemo : null,
+      } as any,
+    } as any);
   }
 
   async remove(userId: string, expressionId: string) {

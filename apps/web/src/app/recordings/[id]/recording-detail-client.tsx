@@ -20,6 +20,7 @@ type RecordingUtterance = {
   startMs: number;
   endMs: number;
   isMine: boolean;
+  analysisIntent?: string | null;
 };
 
 type RecordingResponse = {
@@ -30,6 +31,11 @@ type RecordingResponse = {
   createdAt: string;
   updatedAt: string;
   audioUrl?: string;
+  analysisSummary?: string | null;
+  analysisRelationship?: string | null;
+  analysisSituation?: string | null;
+  analysisTone?: string | null;
+  analysisUpdatedAt?: string | null;
   utterances: RecordingUtterance[];
 };
 
@@ -41,6 +47,7 @@ type Expression = {
   englishEasy: string;
   englishNatural: string;
   note?: string | null;
+  userMemo?: string | null;
   ttsKey?: string | null;
   ttsUrl?: string | null;
 };
@@ -99,6 +106,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
   const [recording, setRecording] = useState<RecordingResponse | null>(null);
   const [allExpressions, setAllExpressions] = useState<Expression[]>([]);
   const [selectedExpressionId, setSelectedExpressionId] = useState("");
+  const [expressionMemoDraft, setExpressionMemoDraft] = useState("");
   const [utteranceDrafts, setUtteranceDrafts] = useState<Record<string, string>>({});
   const [recordingContext, setRecordingContext] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
   const [analysis, setAnalysis] = useState<RecordingAnalysis | null>(null);
@@ -153,12 +161,23 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
     });
   }, [recording]);
   const intentByUtteranceId = useMemo(
-    () => new Map((analysis?.intents ?? []).filter((item) => item.utteranceId).map((item) => [item.utteranceId as string, item.intent])),
-    [analysis],
+    () =>
+      new Map(
+        ((analysis?.intents?.length
+          ? analysis.intents
+          : (recording?.utterances ?? []).map((utterance) => ({
+              utteranceId: utterance.id,
+              intent: utterance.analysisIntent ?? "",
+            }))) as Array<{ utteranceId?: string; intent: string }>)
+          .filter((item) => item.utteranceId)
+          .map((item) => [item.utteranceId as string, item.intent]),
+      ),
+    [analysis, recording],
   );
   const selectedExpressionIntent = selectedExpression?.utteranceId
     ? intentByUtteranceId.get(selectedExpression.utteranceId) ?? ""
     : "";
+  const visibleAnalysisSummary = analysis?.summary ?? recording?.analysisSummary ?? "";
 
   useEffect(() => {
     if (!getToken()) {
@@ -205,6 +224,10 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
       setSelectedExpressionId(expressions[0]?.id ?? "");
     }
   }, [expressions, selectedExpressionId]);
+
+  useEffect(() => {
+    setExpressionMemoDraft(selectedExpression?.userMemo ?? "");
+  }, [selectedExpression]);
 
   async function refreshExpressions(preferredId?: string) {
     const nextExpressions = await apiFetch<Expression[]>("/expressions").catch(() => []);
@@ -418,6 +441,29 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
       setMessage("선택한 표현을 삭제했습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "표현 삭제에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleSaveExpressionMemo() {
+    if (!selectedExpression) {
+      setError("먼저 표현을 선택해 주세요.");
+      return;
+    }
+
+    setLoading("save-expression-memo");
+    setError("");
+    setMessage("");
+    try {
+      await apiFetch<Expression>(`/expressions/${selectedExpression.id}/memo`, {
+        method: "PATCH",
+        body: JSON.stringify({ userMemo: expressionMemoDraft }),
+      });
+      await refreshExpressions(selectedExpression.id);
+      setMessage("표현 메모를 저장했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "표현 메모 저장에 실패했습니다.");
     } finally {
       setLoading("");
     }
@@ -697,10 +743,10 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
             </div>
           </div>
 
-          {analysis && (
+          {visibleAnalysisSummary && (
             <div className="mini-card" style={{ marginTop: 16 }}>
-              <strong>자동 분석 결과</strong>
-              <div style={{ marginTop: 10, lineHeight: 1.6 }}>{analysis.summary}</div>
+              <strong>대화 요약</strong>
+              <div style={{ marginTop: 10, lineHeight: 1.6 }}>{visibleAnalysisSummary}</div>
               <div className="muted" style={{ marginTop: 10 }}>
                 아래 각 발화 카드에서도 intent를 함께 볼 수 있습니다.
               </div>
@@ -867,15 +913,30 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
                 <strong>설명</strong>
                 <div style={{ marginTop: 8 }}>{selectedExpression.note || "설명 없음"}</div>
               </div>
-              {analysis?.summary && (
+              <div className="mini-card">
+                <strong>메모</strong>
+                <textarea
+                  className="textarea"
+                  style={{ marginTop: 8, minHeight: 96 }}
+                  value={expressionMemoDraft}
+                  onChange={(event) => setExpressionMemoDraft(event.target.value)}
+                  placeholder="예: 비슷한 상황에서도 그대로 써도 되는 표현"
+                />
+                <div className="row" style={{ marginTop: 10 }}>
+                  <button className="button secondary" onClick={handleSaveExpressionMemo} disabled={!!loading || !selectedExpression}>
+                    {loading === "save-expression-memo" ? "메모 저장 중..." : "메모 저장"}
+                  </button>
+                </div>
+              </div>
+              {visibleAnalysisSummary && (
                 <div className="mini-card">
-                  <strong>반영된 대화 요약</strong>
-                  <div style={{ marginTop: 8 }}>{analysis.summary}</div>
+                  <strong>대화 요약</strong>
+                  <div style={{ marginTop: 8 }}>{visibleAnalysisSummary}</div>
                 </div>
               )}
               {selectedExpressionIntent && (
                 <div className="mini-card">
-                  <strong>반영된 발화 의도</strong>
+                  <strong>발화 의도</strong>
                   <div style={{ marginTop: 8 }}>{selectedExpressionIntent}</div>
                 </div>
               )}

@@ -10,6 +10,16 @@ type RecordingAnalysisInput = {
   tone?: string;
 };
 
+type RecordingAnalysisResult = {
+  summary: string;
+  intents: Array<{
+    utteranceId?: string;
+    speakerLabel?: string;
+    koreanText: string;
+    intent: string;
+  }>;
+};
+
 @Injectable()
 export class RecordingsService {
   constructor(
@@ -75,7 +85,17 @@ export class RecordingsService {
           },
         }),
       ),
-      this.prisma.recording.update({ where: { id: recordingId }, data: { status: RecordingStatus.PROCESSED } }),
+      this.prisma.recording.update({
+        where: { id: recordingId },
+        data: {
+          status: RecordingStatus.PROCESSED,
+          analysisSummary: null,
+          analysisRelationship: null,
+          analysisSituation: null,
+          analysisTone: null,
+          analysisUpdatedAt: null,
+        } as any,
+      } as any),
     ]);
 
     return this.getOne(userId, recordingId);
@@ -101,7 +121,7 @@ export class RecordingsService {
     if (!recording) throw new NotFoundException('녹음 파일을 찾을 수 없습니다.');
     if (recording.utterances.length === 0) throw new NotFoundException('분석할 대화 문장이 없습니다.');
 
-    return this.openai.analyzeConversation({
+    return this.analyzeAndPersistRecording(recording.id, {
       relationship: input.relationship?.trim() || undefined,
       situation: input.situation?.trim() || undefined,
       tone: input.tone?.trim() || undefined,
@@ -120,10 +140,12 @@ export class RecordingsService {
     });
     if (!utterance) throw new NotFoundException('발화 문장을 찾을 수 없습니다.');
 
-    return this.prisma.utterance.update({
+    const updated = await this.prisma.utterance.update({
       where: { id: utteranceId },
       data: { koreanText: koreanText.trim() },
     });
+    await this.invalidateRecordingAnalysis(utterance.recordingId);
+    return updated;
   }
 
   async removeUtterance(userId: string, utteranceId: string) {
@@ -150,6 +172,7 @@ export class RecordingsService {
         where: { id: utteranceId },
       }),
     ]);
+    await this.invalidateRecordingAnalysis(utterance.recordingId);
 
     return {
       success: true,
@@ -183,6 +206,7 @@ export class RecordingsService {
         data: { isMine: true },
       }),
     ]);
+    await this.invalidateRecordingAnalysis(recordingId);
 
     return this.getOne(userId, recordingId);
   }
@@ -214,6 +238,7 @@ export class RecordingsService {
       where: { recordingId, speakerLabel: normalizedSpeakerLabel },
       data: { speakerLabel: normalizedNextSpeakerLabel },
     });
+    await this.invalidateRecordingAnalysis(recordingId);
 
     return this.getOne(userId, recordingId);
   }
@@ -237,5 +262,81 @@ export class RecordingsService {
     ]);
 
     return { success: true, recordingId };
+  }
+
+  async analyzeAndPersistRecording(
+    recordingId: string,
+    input: {
+      relationship?: string;
+      situation?: string;
+      tone?: string;
+      turns: Array<{
+        utteranceId?: string;
+        speakerLabel: string;
+        koreanText: string;
+        isMine?: boolean;
+      }>;
+    },
+  ): Promise<RecordingAnalysisResult> {
+    const analysis = await this.openai.analyzeConversation(input);
+    const validUtteranceIds = new Set(
+      input.turns
+        .map((turn) => turn.utteranceId)
+        .filter((utteranceId): utteranceId is string => Boolean(utteranceId)),
+    );
+    const intentUpdates = analysis.intents
+      .map((item) => {
+        const matchedUtteranceId = item.utteranceId && validUtteranceIds.has(item.utteranceId)
+          ? item.utteranceId
+          : input.turns.find(
+              (turn) => turn.speakerLabel === item.speakerLabel && turn.koreanText === item.koreanText,
+            )?.utteranceId;
+        const utteranceId = matchedUtteranceId && validUtteranceIds.has(matchedUtteranceId) ? matchedUtteranceId : null;
+        if (!utteranceId) return null;
+        return this.prisma.utterance.updateMany({
+          where: { id: utteranceId, recordingId },
+          data: { analysisIntent: item.intent } as any,
+        } as any);
+      })
+      .filter(Boolean) as Array<ReturnType<typeof this.prisma.utterance.updateMany>>;
+
+    await this.prisma.$transaction([
+      this.prisma.recording.update({
+        where: { id: recordingId },
+        data: {
+          analysisSummary: analysis.summary,
+          analysisRelationship: input.relationship ?? null,
+          analysisSituation: input.situation ?? null,
+          analysisTone: input.tone ?? null,
+          analysisUpdatedAt: new Date(),
+        } as any,
+      } as any),
+      this.prisma.utterance.updateMany({
+        where: { recordingId },
+        data: { analysisIntent: null } as any,
+      } as any),
+      ...intentUpdates,
+    ]);
+
+    return analysis;
+  }
+
+  private async invalidateRecordingAnalysis(recordingId: string) {
+    await this.prisma.$transaction([
+      this.prisma.recording.update({
+        where: { id: recordingId },
+        data: {
+          analysisSummary: null,
+          analysisRelationship: null,
+          analysisSituation: null,
+          analysisTone: null,
+          analysisUpdatedAt: null,
+        } as any,
+      } as any),
+      this.prisma.utterance.updateMany({
+        where: { recordingId },
+        data: { analysisIntent: null } as any,
+      } as any),
+    ]);
   }
 }
