@@ -6,6 +6,7 @@ import { ExpressionsModule } from './modules/expressions/expressions.module';
 import { HealthModule } from './modules/health/health.module';
 import { OpenAiModule } from './modules/openai/openai.module';
 import { PracticeModule } from './modules/practice/practice.module';
+import { RecordingSessionsModule } from './modules/recording-sessions/recording-sessions.module';
 import { RecordingsModule } from './modules/recordings/recordings.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
 import { StorageModule } from './modules/storage/storage.module';
@@ -20,6 +21,7 @@ import { UsersModule } from './modules/users/users.module';
     UsersModule,
     AuthModule,
     HealthModule,
+    RecordingSessionsModule,
     RecordingsModule,
     ExpressionsModule,
     PracticeModule,

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, createPresignedUploadTask } from "../../lib/api-client";
+import { prepareAudioChunksForUpload } from "../../lib/audio-split";
 import { clearSession, getStoredUser, getToken } from "../../lib/auth";
 import {
   buildRecordingContextPayload,
@@ -107,6 +108,46 @@ type ReviewItem = {
   practiceAudioUrl?: string | null;
 };
 type PracticeVoicePresignResponse = { key: string; uploadUrl: string };
+type RecordingSessionCreateResponse = {
+  sessionId: string;
+  status: string;
+  recommendedPartDurationMs: number;
+  maxDurationMs: number;
+};
+type RecordingSessionPartPresignResponse = {
+  sessionId: string;
+  partId: string;
+  partNumber: number;
+  audioKey: string;
+  uploadUrl: string;
+  expiresInSeconds: number;
+};
+type RecordingSessionStatusResponse = {
+  id: string;
+  status: string;
+  uploadedPartCount: number;
+  expectedPartCount?: number | null;
+  totalDurationMs?: number | null;
+  errorMessage?: string | null;
+  parts: Array<{
+    id: string;
+    partNumber: number;
+    status: string;
+    errorMessage?: string | null;
+    recording?: {
+      id: string;
+      fileName: string;
+      status: string;
+      createdAt: string;
+    } | null;
+  }>;
+  jobs: Array<{
+    id: string;
+    status: string;
+    errorMessage?: string | null;
+    targetId: string;
+  }>;
+};
 type PracticePrompt = {
   testType: "translation" | "situation" | "pattern";
   promptKorean: string;
@@ -184,6 +225,7 @@ const MANUAL_RECORDING_CHUNK_MS = 5 * 60 * 1000;
 const MANUAL_RECORDING_MAX_MS = 30 * 60 * 1000;
 const MANUAL_RECORDING_IOS_SAFARI_MAX_MS = 10 * 60 * 1000;
 const MANUAL_RECORDING_RETRY_DELAYS = [2000, 5000, 10000];
+const MANUAL_UPLOAD_STT_CHUNK_MS = 10 * 60 * 1000;
 
 type ManualRecordingStats = {
   effectiveMaxMs: number;
@@ -244,6 +286,8 @@ export default function DashboardPage() {
   const [activeTimeoutMessage, setActiveTimeoutMessage] = useState("");
   const [showAutoFlowHelp, setShowAutoFlowHelp] = useState(false);
   const [manualRecordingLimitMs, setManualRecordingLimitMs] = useState(MANUAL_RECORDING_MAX_MS);
+  const [activeRecordingSessionId, setActiveRecordingSessionId] = useState("");
+  const [activeRecordingSessionStatus, setActiveRecordingSessionStatus] = useState("");
   const [manualRecordingStats, setManualRecordingStats] = useState<ManualRecordingStats>({
     effectiveMaxMs: MANUAL_RECORDING_MAX_MS,
     chunkCount: 0,
@@ -272,6 +316,7 @@ export default function DashboardPage() {
   const uploadTaskRef = useRef<ReturnType<typeof createPresignedUploadTask> | null>(null);
   const abortControllersRef = useRef<AbortController[]>([]);
   const userCancelledRef = useRef(false);
+  const sessionPollTimeoutRef = useRef<number | null>(null);
 
   const selectedExpression = useMemo(
     () => expressions.find((item) => item.id === selectedExpressionId) ?? expressions[0] ?? null,
@@ -490,6 +535,10 @@ export default function DashboardPage() {
 
   function cancelActiveOperations(showMessage = true) {
     userCancelledRef.current = true;
+    if (sessionPollTimeoutRef.current) {
+      window.clearTimeout(sessionPollTimeoutRef.current);
+      sessionPollTimeoutRef.current = null;
+    }
     recordingSessionRef.current?.cancel();
     recordingSessionRef.current = null;
     practiceRecordingSessionRef.current?.cancel();
@@ -500,6 +549,7 @@ export default function DashboardPage() {
     abortControllersRef.current = [];
     setIsMicRecording(false);
     setManualRecordingStats((current) => ({ ...current, isActive: false }));
+    setActiveRecordingSessionStatus("");
     setActiveTimeoutMessage("");
     if (showMessage) {
       setMessage("현재 진행 중인 녹음/업로드/처리를 취소했습니다.");
@@ -806,14 +856,142 @@ export default function DashboardPage() {
     setManualRecordingStats((current) => ({ ...current, ...patch }));
   }
 
-  async function uploadManualChunkWithRetry(file: File, chunkIndex: number) {
+  async function createRecordingSession(source: "WEB" | "MOBILE" | "MANUAL_UPLOAD", title?: string) {
+    const created = await apiFetch<RecordingSessionCreateResponse>("/recording-sessions", {
+      method: "POST",
+      body: JSON.stringify({ source, title }),
+    });
+    setActiveRecordingSessionId(created.sessionId);
+    setActiveRecordingSessionStatus(created.status);
+    return created;
+  }
+
+  async function uploadSessionPart(sessionId: string, partNumber: number, file: File) {
+    const presign = await apiFetch<RecordingSessionPartPresignResponse>(`/recording-sessions/${sessionId}/parts/presign`, {
+      method: "POST",
+      body: JSON.stringify({
+        partNumber,
+        fileName: file.name,
+        contentType: file.type || "audio/webm",
+        sizeBytes: file.size,
+      }),
+    });
+
+    const uploadTask = createPresignedUploadTask(presign.uploadUrl, file, (percent) => setUploadPercent(percent));
+    uploadTaskRef.current = uploadTask;
+    try {
+      await uploadTask.promise;
+    } finally {
+      uploadTaskRef.current = null;
+    }
+
+    await apiFetch(`/recording-sessions/${sessionId}/parts/${presign.partId}/complete`, {
+      method: "POST",
+      body: JSON.stringify({
+        durationMs: undefined,
+        sizeBytes: file.size,
+      }),
+    });
+
+    setSelectedFile(file);
+    return presign;
+  }
+
+  async function uploadPreparedSessionParts(
+    sessionId: string,
+    preparedChunks: Array<{ file: File; durationMs: number; partNumber: number }>,
+  ) {
+    let uploadedCount = 0;
+    for (const chunk of preparedChunks) {
+      setMessage(
+        `분할 파일 ${chunk.partNumber}/${preparedChunks.length} 업로드 중입니다. ${Math.round(chunk.durationMs / 1000)}초 길이의 파일을 처리합니다.`,
+      );
+      await uploadSessionPart(sessionId, chunk.partNumber, chunk.file);
+      uploadedCount += 1;
+      updateManualRecordingStats({
+        chunkCount: preparedChunks.length,
+        currentChunkIndex: chunk.partNumber,
+        successCount: uploadedCount,
+      });
+    }
+  }
+
+  async function finalizeRecordingSession(sessionId: string, expectedPartCount?: number, totalDurationMs?: number) {
+    const result = await apiFetch<{ sessionId: string; status: string }>(`/recording-sessions/${sessionId}/finalize`, {
+      method: "POST",
+      body: JSON.stringify({ expectedPartCount, totalDurationMs }),
+    });
+    setActiveRecordingSessionStatus(result.status);
+    return result;
+  }
+
+  async function enqueueRecordingSessionProcessing(sessionId: string) {
+    const result = await apiFetch<{ sessionId: string; status: string; queuedJobCount: number }>(
+      `/recording-sessions/${sessionId}/process`,
+      {
+        method: "POST",
+        body: JSON.stringify({ diarization: true }),
+      },
+    );
+    setActiveRecordingSessionStatus(result.status);
+    return result;
+  }
+
+  async function fetchRecordingSession(sessionId: string) {
+    return apiFetch<RecordingSessionStatusResponse>(`/recording-sessions/${sessionId}`);
+  }
+
+  function beginRecordingSessionPolling(sessionId: string) {
+    if (sessionPollTimeoutRef.current) {
+      window.clearTimeout(sessionPollTimeoutRef.current);
+      sessionPollTimeoutRef.current = null;
+    }
+
+    const poll = async () => {
+      try {
+        const session = await fetchRecordingSession(sessionId);
+        setActiveRecordingSessionStatus(session.status);
+        const processedParts = session.parts.filter((part) => part.status === "PROCESSED");
+        updateManualRecordingStats({
+          chunkCount: session.parts.length,
+          successCount: processedParts.length,
+          failedCount: session.parts.filter((part) => part.status === "FAILED").length,
+          currentChunkIndex: session.parts[session.parts.length - 1]?.partNumber ?? 0,
+        });
+
+        if (session.status === "PROCESSED") {
+          await refreshRecordings();
+          setMessage(`녹음 세션 처리가 완료되었습니다. ${processedParts.length}개 분할 파일이 텍스트 변환되었습니다.`);
+          sessionPollTimeoutRef.current = null;
+          return;
+        }
+
+        if (session.status === "FAILED") {
+          await refreshRecordings();
+          setError(session.errorMessage || "녹음 세션 처리 중 실패한 파트가 있습니다.");
+          sessionPollTimeoutRef.current = null;
+          return;
+        }
+
+        sessionPollTimeoutRef.current = window.setTimeout(() => void poll(), 4000);
+      } catch (err) {
+        if (!userCancelledRef.current) {
+          setError(err instanceof Error ? err.message : "녹음 세션 상태를 불러오지 못했습니다.");
+        }
+      }
+    };
+
+    void poll();
+  }
+
+  async function uploadManualChunkWithRetry(sessionId: string, file: File, chunkIndex: number) {
     for (let attempt = 0; attempt < MANUAL_RECORDING_RETRY_DELAYS.length; attempt += 1) {
       try {
-        setSelectedFile(file);
         setMessage(
           `분할 파일 ${chunkIndex} 업로드와 텍스트 변환을 진행 중입니다. 녹음은 계속 이어집니다.`,
         );
-        await uploadAndProcessFileInternal(file, { trackFlow: false, selectProcessedRecording: true });
+        await uploadSessionPart(sessionId, chunkIndex, file);
+        await enqueueRecordingSessionProcessing(sessionId);
         setFailedManualChunks((current) => current.filter((item) => item.chunkIndex !== chunkIndex));
         return true;
       } catch (err) {
@@ -912,10 +1090,30 @@ export default function DashboardPage() {
     setScore(null);
     setFailedStepId("");
     setRetryMode("");
+    setActiveRecordingSessionId("");
+    setActiveRecordingSessionStatus("");
 
     try {
-      const processed = await uploadAndProcessFile(selectedFile);
-      setMessage(`녹음 업로드와 텍스트 변환이 완료되었습니다. (${processed.utterances.length}개 문장)`);
+      const session = await createRecordingSession("MANUAL_UPLOAD", selectedFile.name);
+      const prepared = await prepareAudioChunksForUpload(selectedFile, MANUAL_UPLOAD_STT_CHUNK_MS);
+      setManualRecordingStats({
+        effectiveMaxMs: prepared.durationMs,
+        chunkCount: prepared.chunks.length,
+        successCount: 0,
+        failedCount: 0,
+        currentChunkIndex: 0,
+        isActive: false,
+      });
+      if (prepared.chunks.length > 1) {
+        setMessage(
+          `긴 음성 파일을 ${prepared.chunks.length}개로 자동 분할했습니다. 각 파일을 순차 업로드한 뒤 worker가 비동기 처리합니다.`,
+        );
+      }
+      await uploadPreparedSessionParts(session.sessionId, prepared.chunks);
+      await finalizeRecordingSession(session.sessionId, prepared.chunks.length, prepared.durationMs);
+      await enqueueRecordingSessionProcessing(session.sessionId);
+      beginRecordingSessionPolling(session.sessionId);
+      setMessage("녹음 업로드가 완료되었습니다. worker가 텍스트 변환을 처리하는 동안 상태를 계속 확인합니다.");
     } catch (err) {
       if (isAbortError(err) || userCancelledRef.current) {
         setMessage("수동 업로드/텍스트 변환을 취소했습니다.");
@@ -949,6 +1147,8 @@ export default function DashboardPage() {
       isActive: true,
     });
     try {
+      const sessionRecord = await createRecordingSession("WEB", "브라우저 장시간 녹음");
+      beginRecordingSessionPolling(sessionRecord.sessionId);
       let successCount = 0;
       let failedCount = 0;
       const session = startChunkedRecordedAudioSession({
@@ -961,7 +1161,7 @@ export default function DashboardPage() {
         },
         onChunk: async (file, chunkIndex) => {
           updateManualRecordingStats({ chunkCount: chunkIndex, currentChunkIndex: chunkIndex });
-          const uploaded = await uploadManualChunkWithRetry(file, chunkIndex);
+          const uploaded = await uploadManualChunkWithRetry(sessionRecord.sessionId, file, chunkIndex);
           if (uploaded) {
             successCount += 1;
             updateManualRecordingStats({ successCount });
@@ -974,6 +1174,7 @@ export default function DashboardPage() {
       recordingSessionRef.current = session;
       setIsMicRecording(true);
       const result = await session.completion;
+      await finalizeRecordingSession(sessionRecord.sessionId, result.chunkCount, result.elapsedMs);
       if (failedCount > 0) {
         setMessage(
           `브라우저 녹음이 종료되었습니다. ${result.chunkCount}개 분할 파일 중 ${successCount}개 처리 완료, ${failedCount}개는 다시 업로드가 필요합니다.`,
@@ -1086,10 +1287,14 @@ export default function DashboardPage() {
   }
 
   async function handleRetryManualChunk(chunk: FailedManualChunk) {
+    if (!activeRecordingSessionId) {
+      setError("재업로드할 녹음 세션을 찾을 수 없습니다.");
+      return;
+    }
     setError("");
     setLoading(`retry-manual-chunk-${chunk.id}`);
     try {
-      const uploaded = await uploadManualChunkWithRetry(chunk.file, chunk.chunkIndex);
+      const uploaded = await uploadManualChunkWithRetry(activeRecordingSessionId, chunk.file, chunk.chunkIndex);
       if (uploaded) {
         setManualRecordingStats((current) => ({
           ...current,
@@ -1941,6 +2146,11 @@ export default function DashboardPage() {
           <div className="muted" style={{ marginTop: 8 }}>
             현재 기기에서는 최대 약 {Math.round(manualRecordingLimitMs / 60000)}분까지 자동 종료됩니다. 사용자가 먼저 종료하면 마지막 5분 미만 구간도 별도 파일로 저장됩니다.
           </div>
+          {activeRecordingSessionId && (
+            <div className="muted" style={{ marginTop: 8 }}>
+              현재 세션: {activeRecordingSessionId} · 상태: {activeRecordingSessionStatus || "준비 중"}
+            </div>
+          )}
           {(manualRecordingStats.isActive || manualRecordingStats.chunkCount > 0 || failedManualChunks.length > 0) && (
             <div className="mini-card" style={{ marginTop: 14 }}>
               <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>

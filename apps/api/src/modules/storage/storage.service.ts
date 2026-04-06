@@ -26,6 +26,10 @@ export class StorageService {
 
   async createPresignedUpload(fileName: string, contentType = 'audio/webm') {
     const key = this.buildAudioKey(fileName);
+    return this.createPresignedUploadForKey(key, contentType);
+  }
+
+  async createPresignedUploadForKey(key: string, contentType = 'audio/webm') {
     const command = new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType });
     const uploadUrl = await getSignedUrl(this.client, command, { expiresIn: 300 });
     return { key, uploadUrl };

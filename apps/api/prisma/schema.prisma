@@ -15,6 +15,59 @@ enum RecordingStatus {
   FAILED
 }
 
+enum RecordingSource {
+  WEB
+  MOBILE
+  MANUAL_UPLOAD
+}
+
+enum RecordingSessionStatus {
+  CREATED
+  UPLOADING
+  UPLOADED
+  QUEUED
+  PROCESSING
+  PROCESSED
+  FAILED
+  CANCELLED
+}
+
+enum RecordingPartStatus {
+  PRESIGNED
+  UPLOADED
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum RecordingJobType {
+  TRANSCRIBE_PART
+  ANALYZE_SESSION
+  GENERATE_EXPRESSION
+  GENERATE_TTS
+}
+
+enum RecordingJobTargetType {
+  RECORDING_SESSION
+  RECORDING_PART
+  RECORDING
+  EXPRESSION
+}
+
+enum RecordingJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum RecordingJobPriority {
+  HIGH
+  NORMAL
+  LOW
+}
+
 model User {
   id           String        @id @default(cuid())
   email        String        @unique
@@ -22,6 +75,8 @@ model User {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   recordings   Recording[]
+  recordingSessions RecordingSession[]
+  recordingJobs RecordingJob[]
   expressions  Expression[]
   practiceLogs PracticeLog[]
 }
@@ -42,6 +97,7 @@ model Recording {
   updatedAt            DateTime        @updatedAt
   user                 User            @relation(fields: [userId], references: [id])
   utterances           Utterance[]
+  sourcePart           RecordingPart?  @relation("PartRecording")
 }
 
 model Utterance {
@@ -100,4 +156,70 @@ model PracticeLog {
   createdAt    DateTime    @default(now())
   user         User        @relation(fields: [userId], references: [id])
   expression   Expression  @relation(fields: [expressionId], references: [id])
+}
+
+model RecordingSession {
+  id                String               @id @default(cuid())
+  userId            String
+  source            RecordingSource
+  status            RecordingSessionStatus @default(CREATED)
+  title             String?
+  expectedPartCount Int?
+  uploadedPartCount Int                  @default(0)
+  totalDurationMs   Int?
+  errorMessage      String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  completedAt       DateTime?
+  user              User                 @relation(fields: [userId], references: [id])
+  parts             RecordingPart[]
+  jobs              RecordingJob[]
+}
+
+model RecordingPart {
+  id           String              @id @default(cuid())
+  sessionId    String
+  recordingId  String?             @unique
+  partNumber   Int
+  audioKey     String
+  fileName     String
+  contentType  String
+  durationMs   Int?
+  sizeBytes    Int?
+  status       RecordingPartStatus @default(PRESIGNED)
+  errorMessage String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  session      RecordingSession    @relation(fields: [sessionId], references: [id])
+  recording    Recording?          @relation("PartRecording", fields: [recordingId], references: [id])
+  jobs         RecordingJob[]
+
+  @@unique([sessionId, partNumber])
+}
+
+model RecordingJob {
+  id           String               @id @default(cuid())
+  userId       String?
+  sessionId    String?
+  partId       String?
+  type         RecordingJobType
+  targetType   RecordingJobTargetType
+  targetId     String
+  status       RecordingJobStatus   @default(QUEUED)
+  priority     RecordingJobPriority @default(NORMAL)
+  attempts     Int                  @default(0)
+  maxAttempts  Int                  @default(3)
+  errorMessage String?
+  payload      Json?
+  runAfter     DateTime?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  completedAt  DateTime?
+  user         User?                @relation(fields: [userId], references: [id])
+  session      RecordingSession?    @relation(fields: [sessionId], references: [id])
+  part         RecordingPart?       @relation(fields: [partId], references: [id])
+
+  @@index([status, priority, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([partId, createdAt])
 }
