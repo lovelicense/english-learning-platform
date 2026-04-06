@@ -179,6 +179,16 @@ variable "openai_stt_diarize_model" {
   default = "gpt-4o-transcribe-diarize"
 }
 
+variable "openai_practice_stt_model" {
+  type    = string
+  default = "gpt-4o-mini-transcribe"
+}
+
+variable "openai_practice_stt_fallback_model" {
+  type    = string
+  default = "gpt-4o-transcribe"
+}
+
 variable "openai_tts_model" {
   type    = string
   default = "gpt-4o-mini-tts"

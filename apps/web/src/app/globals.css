@@ -35,10 +35,28 @@ body { min-height: 100vh; }
 .recording-detail-grid { align-items: start; }
 .recording-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .panel-lg { min-height: 360px; }
+.section-intro { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.section-summary { margin-top: 8px; color: #475569; font-size: 13px; }
+.section-toggle { border: 1px solid #cbd5e1; background: #f8fafc; color: #0f172a; border-radius: 999px; padding: 9px 14px; cursor: pointer; white-space: nowrap; }
+.help-icon-button { width: 30px; height: 30px; border-radius: 999px; border: 1px solid #bfdbfe; background: #eff6ff; color: #1d4ed8; font-weight: 700; cursor: pointer; flex: 0 0 auto; }
+.help-panel { border: 1px solid #bfdbfe; background: linear-gradient(180deg, #f8fbff 0%, #edf5ff 100%); border-radius: 16px; padding: 14px; }
+.help-list { display: grid; gap: 8px; margin-top: 10px; color: #334155; font-size: 14px; line-height: 1.55; }
+.recording-layout { display: grid; grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr); gap: 16px; align-items: start; }
+.recording-browser { border: 1px solid #dbe4f0; background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 18px; padding: 14px; }
+.recording-detail-panel { border: 1px solid #bfdbfe; background: linear-gradient(180deg, #f8fbff 0%, #eaf3ff 100%); border-radius: 18px; padding: 14px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.55); }
+.recording-detail-panel:focus { outline: 2px solid #60a5fa; outline-offset: 2px; }
+.recording-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.25); }
+.recording-section-eyebrow { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #64748b; margin-bottom: 4px; font-weight: 700; }
 .mini-card { border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px; background: #fff; }
 .utterance-card { border: 1px solid #dbeafe; background: #f8fbff; border-radius: 16px; padding: 14px; }
 .expression-item { text-align: left; border: 1px solid #e2e8f0; background: white; border-radius: 14px; padding: 14px; cursor: pointer; }
 .expression-item.selected { border-color: #2563eb; background: #eff6ff; }
+.expression-layout { display: grid; grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr); gap: 16px; align-items: start; }
+.expression-browser { border: 1px solid #dbe4f0; background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 18px; padding: 14px; }
+.expression-detail-panel { border: 1px solid #bfdbfe; background: linear-gradient(180deg, #f8fbff 0%, #eaf3ff 100%); border-radius: 18px; padding: 14px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.55); }
+.expression-detail-panel:focus { outline: 2px solid #60a5fa; outline-offset: 2px; }
+.expression-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.25); }
+.expression-section-eyebrow { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #64748b; margin-bottom: 4px; font-weight: 700; }
 .tag { display: inline-flex; align-items: center; border-radius: 999px; font-size: 12px; padding: 4px 8px; }
 .tag-primary { background: #dbeafe; color: #1d4ed8; }
 .tag-muted { background: #e2e8f0; color: #334155; }
@@ -49,8 +67,10 @@ body { min-height: 100vh; }
 .timeline-slider { width: 100%; margin-top: 10px; accent-color: #2563eb; }
 .score-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 @media (max-width: 980px) {
-  .landing, .dashboard-grid, .feature-list, .score-grid, .recording-summary-grid { grid-template-columns: 1fr; }
+  .landing, .dashboard-grid, .feature-list, .score-grid, .recording-summary-grid, .expression-layout, .recording-layout { grid-template-columns: 1fr; }
   .auth-card { justify-self: stretch; max-width: none; }
+  .section-intro { flex-direction: column; }
+  .section-toggle { width: 100%; }
 }
 
 .auto-flow-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }

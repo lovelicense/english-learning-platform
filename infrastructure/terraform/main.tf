@@ -692,6 +692,14 @@ resource "aws_ecs_task_definition" "api" {
           value = var.openai_stt_diarize_model
         },
         {
+          name  = "OPENAI_PRACTICE_STT_MODEL"
+          value = var.openai_practice_stt_model
+        },
+        {
+          name  = "OPENAI_PRACTICE_STT_FALLBACK_MODEL"
+          value = var.openai_practice_stt_fallback_model
+        },
+        {
           name  = "OPENAI_TTS_MODEL"
           value = var.openai_tts_model
         },
@@ -756,6 +764,14 @@ resource "aws_ecs_task_definition" "worker" {
         {
           name  = "OPENAI_STT_DIARIZE_MODEL"
           value = var.openai_stt_diarize_model
+        },
+        {
+          name  = "OPENAI_PRACTICE_STT_MODEL"
+          value = var.openai_practice_stt_model
+        },
+        {
+          name  = "OPENAI_PRACTICE_STT_FALLBACK_MODEL"
+          value = var.openai_practice_stt_fallback_model
         },
         {
           name  = "OPENAI_TTS_MODEL"

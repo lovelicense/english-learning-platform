@@ -105,6 +105,9 @@ export class PracticeService {
     const buffer = await this.storage.getObjectBuffer(audioKey);
     const transcription = await this.openai.transcribeEnglishAudio(buffer, fileName);
     const answer = transcription.text.trim();
+    console.info(
+      `[Practice STT] expression_id=${expressionId} user_id=${userId} file=${fileName} recognized_answer=${JSON.stringify(answer.slice(0, 200))}`,
+    );
     if (!answer) {
       throw new NotFoundException('음성에서 영어 답변을 인식하지 못했습니다.');
     }

@@ -487,14 +487,38 @@ export class OpenAiService {
 
     const file = await OpenAI.toFile(buffer, fileName);
     try {
+      const primaryModel = process.env.OPENAI_PRACTICE_STT_MODEL ?? process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe';
+      const fallbackModel = process.env.OPENAI_PRACTICE_STT_FALLBACK_MODEL ?? 'gpt-4o-transcribe';
+      const prompt = 'Transcribe spoken English only. Output the recognized English text exactly as spoken.';
+
       const result = await this.client.audio.transcriptions.create({
         file,
-        model: process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
+        model: primaryModel,
         language: 'en',
+        prompt,
         response_format: 'json',
       } as any);
 
-      return { text: ((result as any).text ?? '').trim() };
+      const primaryText = ((result as any).text ?? '').trim();
+      if (!this.containsHangul(primaryText) || primaryModel === fallbackModel) {
+        return { text: primaryText };
+      }
+
+      console.warn(
+        `[Practice STT] Hangul detected from primary model. Retrying with fallback model. file=${fileName} primary_model=${primaryModel} fallback_model=${fallbackModel} primary_text=${JSON.stringify(primaryText.slice(0, 120))}`,
+      );
+
+      const retryFile = await OpenAI.toFile(buffer, fileName);
+      const fallbackResult = await this.client.audio.transcriptions.create({
+        file: retryFile,
+        model: fallbackModel,
+        language: 'en',
+        prompt,
+        response_format: 'json',
+      } as any);
+
+      const fallbackText = ((fallbackResult as any).text ?? '').trim();
+      return { text: fallbackText || primaryText };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/audio duration .* longer than .* maximum/i.test(message)) {
@@ -610,6 +634,10 @@ export class OpenAiService {
       patternLabel: '상황형 응용',
       patternDescription: '문맥을 보고 가장 자연스러운 영어 표현을 떠올리는 연습입니다.',
     };
+  }
+
+  private containsHangul(text: string) {
+    return /[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(text);
   }
 
 }

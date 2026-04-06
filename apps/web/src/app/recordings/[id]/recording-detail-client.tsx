@@ -97,10 +97,18 @@ function formatAudioTime(seconds: number) {
   return `${minutes}:${remain.toString().padStart(2, "0")}`;
 }
 
+const DETAIL_PREVIEW_COUNTS = {
+  utterances: 6,
+  expressions: 6,
+} as const;
+const LIST_INCREMENT_SMALL = 5;
+const LIST_INCREMENT_LARGE = 20;
+
 export function RecordingDetailClient({ recordingId }: { recordingId: string }) {
   const router = useRouter();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const rawAudioRef = useRef<HTMLAudioElement | null>(null);
+  const expressionDetailRef = useRef<HTMLDivElement | null>(null);
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<MeResponse | null>(null);
   const [recording, setRecording] = useState<RecordingResponse | null>(null);
@@ -115,6 +123,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState("");
+  const [visibleCounts, setVisibleCounts] = useState<Record<keyof typeof DETAIL_PREVIEW_COUNTS, number>>(DETAIL_PREVIEW_COUNTS);
 
   const utteranceIds = useMemo(() => new Set(recording?.utterances.map((item) => item.id) ?? []), [recording]);
   const expressions = useMemo(
@@ -124,6 +133,14 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
   const selectedExpression = useMemo(
     () => expressions.find((item) => item.id === selectedExpressionId) ?? expressions[0] ?? null,
     [expressions, selectedExpressionId],
+  );
+  const visibleUtterances = useMemo(
+    () => (recording?.utterances ?? []).slice(0, visibleCounts.utterances),
+    [recording, visibleCounts.utterances],
+  );
+  const visibleExpressions = useMemo(
+    () => expressions.slice(0, visibleCounts.expressions),
+    [expressions, visibleCounts.expressions],
   );
   const expressionIdsByUtterance = useMemo(
     () =>
@@ -228,6 +245,60 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
   useEffect(() => {
     setExpressionMemoDraft(selectedExpression?.userMemo ?? "");
   }, [selectedExpression]);
+
+  function expandList(list: keyof typeof DETAIL_PREVIEW_COUNTS, amount: number | "all", total: number) {
+    setVisibleCounts((current) => ({
+      ...current,
+      [list]: amount === "all" ? total : Math.min(total, current[list] + amount),
+    }));
+  }
+
+  function collapseList(list: keyof typeof DETAIL_PREVIEW_COUNTS) {
+    setVisibleCounts((current) => ({ ...current, [list]: DETAIL_PREVIEW_COUNTS[list] }));
+  }
+
+  function renderListControls(list: keyof typeof DETAIL_PREVIEW_COUNTS, total: number) {
+    const visible = visibleCounts[list];
+    if (total <= DETAIL_PREVIEW_COUNTS[list]) return null;
+    const remaining = Math.max(0, total - visible);
+    const isExpanded = visible >= total;
+
+    return (
+      <div className="row" style={{ marginTop: 12 }}>
+        {!isExpanded && remaining > 0 && (
+          <>
+            <button className="button ghost" onClick={() => expandList(list, LIST_INCREMENT_SMALL, total)}>
+              {`${Math.min(LIST_INCREMENT_SMALL, remaining)}개 더 보기`}
+            </button>
+            {remaining > LIST_INCREMENT_SMALL && (
+              <button className="button ghost" onClick={() => expandList(list, LIST_INCREMENT_LARGE, total)}>
+                {`${Math.min(LIST_INCREMENT_LARGE, remaining)}개 더 보기`}
+              </button>
+            )}
+            {remaining > 0 && (
+              <button className="button ghost" onClick={() => expandList(list, "all", total)}>
+                {`전체 보기 (${remaining}개 남음)`}
+              </button>
+            )}
+          </>
+        )}
+        {visible > DETAIL_PREVIEW_COUNTS[list] && (
+          <button className="button ghost" onClick={() => collapseList(list)}>
+            접기
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  function focusSelectedExpressionDetail() {
+    if (typeof window === "undefined") return;
+    if (!window.matchMedia("(max-width: 980px)").matches) return;
+    window.requestAnimationFrame(() => {
+      expressionDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      expressionDetailRef.current?.focus({ preventScroll: true });
+    });
+  }
 
   async function refreshExpressions(preferredId?: string) {
     const nextExpressions = await apiFetch<Expression[]>("/expressions").catch(() => []);
@@ -796,7 +867,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
             {recording.utterances.length === 0 && (
               <div className="mini-card muted">아직 변환된 문장이 없습니다. 텍스트 변환을 다시 실행해 보세요.</div>
             )}
-            {recording.utterances.map((utterance) => (
+            {visibleUtterances.map((utterance) => (
               <div key={utterance.id} className="utterance-card">
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
                   <div>
@@ -860,6 +931,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
                 )}
               </div>
             ))}
+            {renderListControls("utterances", recording.utterances.length)}
           </div>
         </section>
 
@@ -872,101 +944,125 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
             </button>
           </div>
 
-          <div className="grid" style={{ marginTop: 16 }}>
-            {expressions.length === 0 && <div className="mini-card muted">이 녹음에서 아직 생성된 표현이 없습니다.</div>}
-            {expressions.map((expression) => (
-              <button
-                key={expression.id}
-                className={`expression-item ${selectedExpressionId === expression.id ? "selected" : ""}`}
-                onClick={() => setSelectedExpressionId(expression.id)}
-              >
-                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                  <div className="muted" style={{ fontSize: 12 }}>{expression.koreanText}</div>
-                  <span className={`tag ${expression.ttsKey ? "tag-done" : "tag-muted"}`}>
-                    {expression.ttsKey ? "TTS 완료" : "TTS 미생성"}
-                  </span>
+          <div className="expression-layout" style={{ marginTop: 16 }}>
+            <div className="expression-browser">
+              <div className="expression-section-head">
+                <div>
+                  <div className="expression-section-eyebrow">Expression List</div>
+                  <strong>표현 목록</strong>
                 </div>
-                <div style={{ marginTop: 8, fontWeight: 700 }}>{expression.englishBase}</div>
-              </button>
-            ))}
-          </div>
+                <span className="tag tag-muted">{expressions.length}개</span>
+              </div>
+              <div className="grid" style={{ marginTop: 12 }}>
+                {expressions.length === 0 && <div className="mini-card muted">이 녹음에서 아직 생성된 표현이 없습니다.</div>}
+                {visibleExpressions.map((expression) => (
+                  <button
+                    key={expression.id}
+                    className={`expression-item ${selectedExpressionId === expression.id ? "selected" : ""}`}
+                    onClick={() => {
+                      setSelectedExpressionId(expression.id);
+                      focusSelectedExpressionDetail();
+                    }}
+                  >
+                    <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <div className="muted" style={{ fontSize: 12 }}>{expression.koreanText}</div>
+                      <span className={`tag ${expression.ttsKey ? "tag-done" : "tag-muted"}`}>
+                        {expression.ttsKey ? "TTS 완료" : "TTS 미생성"}
+                      </span>
+                    </div>
+                    <div style={{ marginTop: 8, fontWeight: 700 }}>{expression.englishBase}</div>
+                  </button>
+                ))}
+              </div>
+              {renderListControls("expressions", expressions.length)}
+            </div>
 
           {selectedExpression && (
-            <div className="grid" style={{ marginTop: 16 }}>
-              <div className="mini-card">
-                <strong>한국어 원문</strong>
-                <div style={{ marginTop: 8 }}>{selectedExpression.koreanText}</div>
+            <div ref={expressionDetailRef} className="expression-detail-panel" tabIndex={-1}>
+              <div className="expression-section-head">
+                <div>
+                  <div className="expression-section-eyebrow">Selected Detail</div>
+                  <strong>선택한 표현 상세</strong>
+                </div>
+                <span className="tag tag-primary">선택됨</span>
               </div>
-              <div className="mini-card">
-                <strong>기본형</strong>
-                <div style={{ marginTop: 8 }}>{selectedExpression.englishBase}</div>
-              </div>
-              <div className="mini-card">
-                <strong>쉬운형</strong>
-                <div style={{ marginTop: 8 }}>{selectedExpression.englishEasy}</div>
-              </div>
-              <div className="mini-card">
-                <strong>자연형</strong>
-                <div style={{ marginTop: 8 }}>{selectedExpression.englishNatural}</div>
-              </div>
-              <div className="mini-card">
-                <strong>설명</strong>
-                <div style={{ marginTop: 8 }}>{selectedExpression.note || "설명 없음"}</div>
-              </div>
-              <div className="mini-card">
-                <strong>메모</strong>
-                <textarea
-                  className="textarea"
-                  style={{ marginTop: 8, minHeight: 96 }}
-                  value={expressionMemoDraft}
-                  onChange={(event) => setExpressionMemoDraft(event.target.value)}
-                  placeholder="예: 비슷한 상황에서도 그대로 써도 되는 표현"
-                />
-                <div className="row" style={{ marginTop: 10 }}>
-                  <button className="button secondary" onClick={handleSaveExpressionMemo} disabled={!!loading || !selectedExpression}>
-                    {loading === "save-expression-memo" ? "메모 저장 중..." : "메모 저장"}
+              <div className="grid" style={{ marginTop: 16 }}>
+                <div className="mini-card">
+                  <strong>한국어 원문</strong>
+                  <div style={{ marginTop: 8 }}>{selectedExpression.koreanText}</div>
+                </div>
+                <div className="mini-card">
+                  <strong>기본형</strong>
+                  <div style={{ marginTop: 8 }}>{selectedExpression.englishBase}</div>
+                </div>
+                <div className="mini-card">
+                  <strong>쉬운형</strong>
+                  <div style={{ marginTop: 8 }}>{selectedExpression.englishEasy}</div>
+                </div>
+                <div className="mini-card">
+                  <strong>자연형</strong>
+                  <div style={{ marginTop: 8 }}>{selectedExpression.englishNatural}</div>
+                </div>
+                <div className="mini-card">
+                  <strong>설명</strong>
+                  <div style={{ marginTop: 8 }}>{selectedExpression.note || "설명 없음"}</div>
+                </div>
+                <div className="mini-card">
+                  <strong>메모</strong>
+                  <textarea
+                    className="textarea"
+                    style={{ marginTop: 8, minHeight: 96 }}
+                    value={expressionMemoDraft}
+                    onChange={(event) => setExpressionMemoDraft(event.target.value)}
+                    placeholder="예: 비슷한 상황에서도 그대로 써도 되는 표현"
+                  />
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <button className="button secondary" onClick={handleSaveExpressionMemo} disabled={!!loading || !selectedExpression}>
+                      {loading === "save-expression-memo" ? "메모 저장 중..." : "메모 저장"}
+                    </button>
+                  </div>
+                </div>
+                {visibleAnalysisSummary && (
+                  <div className="mini-card">
+                    <strong>대화 요약</strong>
+                    <div style={{ marginTop: 8 }}>{visibleAnalysisSummary}</div>
+                  </div>
+                )}
+                {selectedExpressionIntent && (
+                  <div className="mini-card">
+                    <strong>발화 의도</strong>
+                    <div style={{ marginTop: 8 }}>{selectedExpressionIntent}</div>
+                  </div>
+                )}
+
+                <div className="row">
+                  <button className="button ghost" onClick={() => handleCopyText(selectedExpression.koreanText, "한국어 문장")} disabled={!!loading}>
+                    한국어 복사
+                  </button>
+                  <button className="button ghost" onClick={() => handleCopyText(selectedExpression.englishBase, "영어 표현")} disabled={!!loading}>
+                    영어 복사
+                  </button>
+                  <button className="button" onClick={handleGenerateTts} disabled={!!loading}>
+                    {loading === "tts" ? "TTS 생성 중..." : "TTS 생성"}
+                  </button>
+                  <button className="button secondary" onClick={() => audioRef.current?.play()} disabled={!selectedExpression.ttsUrl}>
+                    TTS 재생
+                  </button>
+                  <button className="button danger" onClick={handleDeleteExpression} disabled={!!loading}>
+                    {loading === "delete-expression" ? "삭제 중..." : "표현 삭제"}
                   </button>
                 </div>
-              </div>
-              {visibleAnalysisSummary && (
-                <div className="mini-card">
-                  <strong>대화 요약</strong>
-                  <div style={{ marginTop: 8 }}>{visibleAnalysisSummary}</div>
-                </div>
-              )}
-              {selectedExpressionIntent && (
-                <div className="mini-card">
-                  <strong>발화 의도</strong>
-                  <div style={{ marginTop: 8 }}>{selectedExpressionIntent}</div>
-                </div>
-              )}
 
-              <div className="row">
-                <button className="button ghost" onClick={() => handleCopyText(selectedExpression.koreanText, "한국어 문장")} disabled={!!loading}>
-                  한국어 복사
-                </button>
-                <button className="button ghost" onClick={() => handleCopyText(selectedExpression.englishBase, "영어 표현")} disabled={!!loading}>
-                  영어 복사
-                </button>
-                <button className="button" onClick={handleGenerateTts} disabled={!!loading}>
-                  {loading === "tts" ? "TTS 생성 중..." : "TTS 생성"}
-                </button>
-                <button className="button secondary" onClick={() => audioRef.current?.play()} disabled={!selectedExpression.ttsUrl}>
-                  TTS 재생
-                </button>
-                <button className="button danger" onClick={handleDeleteExpression} disabled={!!loading}>
-                  {loading === "delete-expression" ? "삭제 중..." : "표현 삭제"}
-                </button>
+                <audio
+                  ref={audioRef}
+                  controls
+                  className="audio-player"
+                  src={selectedExpression.ttsUrl || undefined}
+                />
               </div>
-
-              <audio
-                ref={audioRef}
-                controls
-                className="audio-player"
-                src={selectedExpression.ttsUrl || undefined}
-              />
             </div>
           )}
+          </div>
         </section>
       </div>
     </main>
