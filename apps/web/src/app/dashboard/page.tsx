@@ -296,6 +296,8 @@ export default function DashboardPage() {
   const [isPracticeRecording, setIsPracticeRecording] = useState(false);
   const [activeTimeoutMessage, setActiveTimeoutMessage] = useState("");
   const [showAutoFlowHelp, setShowAutoFlowHelp] = useState(false);
+  const [showManualGenerateComposer, setShowManualGenerateComposer] = useState(false);
+  const [manualGenerateText, setManualGenerateText] = useState("");
   const [manualRecordingLimitMs, setManualRecordingLimitMs] = useState(MANUAL_RECORDING_MAX_MS);
   const [activeRecordingSessionId, setActiveRecordingSessionId] = useState("");
   const [activeRecordingSessionStatus, setActiveRecordingSessionStatus] = useState("");
@@ -697,6 +699,13 @@ export default function DashboardPage() {
     window.setTimeout(() => {
       refs[section].current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
+  }
+
+  function selectExpressionForPractice(expression: Expression) {
+    setSelectedExpressionId(expression.id);
+    setScore(null);
+    setTtsUrl(expression.ttsUrl ?? "");
+    scrollToDashboardSection("practice");
   }
 
   function expandList(list: keyof typeof DEFAULT_PREVIEW_COUNTS, amount: number | "all", total: number) {
@@ -1508,8 +1517,11 @@ export default function DashboardPage() {
   }
 
   async function handleGenerateFromText() {
-    const text = window.prompt("직접 한국어 문장을 입력하세요.");
-    if (!text?.trim()) return;
+    const text = manualGenerateText.trim();
+    if (!text) {
+      setError("직접 생성할 한국어 문장을 입력해 주세요.");
+      return;
+    }
     setError("");
     setMessage("");
     setLoading("manual-generate");
@@ -1520,6 +1532,9 @@ export default function DashboardPage() {
         signal,
       }));
       await refreshLists(expression.id);
+      scrollToDashboardSection("expressions");
+      setManualGenerateText("");
+      setShowManualGenerateComposer(false);
       setMessage("직접 입력한 문장으로 표현을 생성했습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "표현 생성에 실패했습니다.");
@@ -2013,7 +2028,13 @@ export default function DashboardPage() {
             <p className="muted">로그인 사용자: <strong>{user?.email ?? getStoredUser()?.email ?? "-"}</strong></p>
           </div>
           <div className="row">
-            <button className="button ghost" onClick={handleGenerateFromText} disabled={!!loading}>직접 문장 생성</button>
+            <button
+              className="button ghost"
+              onClick={() => setShowManualGenerateComposer((current) => !current)}
+              disabled={!!loading}
+            >
+              {showManualGenerateComposer ? "직접 문장 생성 닫기" : "직접 문장 생성"}
+            </button>
             <button className="button secondary" onClick={() => { clearSession(); router.replace("/"); }}>로그아웃</button>
           </div>
         </div>
@@ -2021,6 +2042,57 @@ export default function DashboardPage() {
         {message && <div className="success-box" style={{ marginTop: 12 }}>{message}</div>}
         {error && <div className="error-box" style={{ marginTop: 12 }}>{error}</div>}
         {activeTimeoutMessage && <div className="timeout-box" style={{ marginTop: 12 }}>{activeTimeoutMessage}</div>}
+        {showManualGenerateComposer && (
+          <div className="mini-card" style={{ marginTop: 14 }}>
+            <strong>직접 문장 생성</strong>
+            <div className="muted" style={{ marginTop: 8 }}>
+              한국어 문장과 대화 맥락 힌트를 함께 입력하면, 그 맥락을 참고해서 영어 표현을 생성합니다.
+            </div>
+            <div className="grid" style={{ marginTop: 12 }}>
+              <textarea
+                className="textarea"
+                style={{ minHeight: 104 }}
+                value={manualGenerateText}
+                onChange={(event) => setManualGenerateText(event.target.value)}
+                placeholder="예: 버스 10분 뒤에 와."
+              />
+              <input
+                className="input"
+                value={recordingContext.relationship}
+                onChange={(event) => setRecordingContext((current) => ({ ...current, relationship: event.target.value }))}
+                placeholder="대화 관계 예: 엄마 - 아이, 손님 - 직원"
+              />
+              <textarea
+                className="input"
+                style={{ minHeight: 88, resize: "vertical" }}
+                value={recordingContext.situation}
+                onChange={(event) => setRecordingContext((current) => ({ ...current, situation: event.target.value }))}
+                placeholder="대화 상황 예: 아이가 혼자 집에 있겠다고 해서 엄마가 위험하다고 설명하는 상황"
+              />
+              <input
+                className="input"
+                value={recordingContext.tone}
+                onChange={(event) => setRecordingContext((current) => ({ ...current, tone: event.target.value }))}
+                placeholder="원하는 영어 톤 예: 자연스럽고 부드럽지만 단호한 일상 회화"
+              />
+            </div>
+            <div className="row" style={{ marginTop: 12 }}>
+              <button className="button" onClick={handleGenerateFromText} disabled={!!loading || !manualGenerateText.trim()}>
+                {loading === "manual-generate" ? "생성 중..." : "영어 표현 생성"}
+              </button>
+              <button
+                className="button ghost"
+                onClick={() => {
+                  setShowManualGenerateComposer(false);
+                  setManualGenerateText("");
+                }}
+                disabled={!!loading}
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section ref={autoFlowSectionRef} className="card panel-lg">
@@ -3026,10 +3098,7 @@ export default function DashboardPage() {
                         <button
                           className="button secondary"
                           onClick={() => {
-                            setSelectedExpressionId(expression.id);
-                            setScore(null);
-                            setTtsUrl(expression.ttsUrl ?? "");
-                            focusSelectedExpressionDetail();
+                            selectExpressionForPractice(expression);
                             window.setTimeout(() => audioRef.current?.load(), 50);
                           }}
                           disabled={!!loading}
@@ -3039,10 +3108,7 @@ export default function DashboardPage() {
                         <button
                           className="button ghost"
                           onClick={() => {
-                            setSelectedExpressionId(expression.id);
-                            setScore(null);
-                            setTtsUrl(expression.ttsUrl ?? "");
-                            focusSelectedExpressionDetail();
+                            selectExpressionForPractice(expression);
                             window.setTimeout(() => {
                               audioRef.current?.load();
                               audioRef.current?.play().catch(() => undefined);
