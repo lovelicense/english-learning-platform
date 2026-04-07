@@ -212,6 +212,9 @@ const STEP_TIMEOUTS: Record<string, number> = {
 
 const stepMap = Object.fromEntries(AUTO_FLOW_STEPS.map((step) => [step.id, step]));
 const WAVE_BAR_COUNT = 28;
+const BROWSER_RECORDING_MAX_MS = 5 * 60 * 1000;
+const MANUAL_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+const MANUAL_UPLOAD_ALLOWED_EXTENSIONS = [".wav", ".m4a", ".mp3", ".mp4", ".aac"];
 const DEFAULT_PREVIEW_COUNTS = {
   recordings: 4,
   utterances: 6,
@@ -221,11 +224,19 @@ const DEFAULT_PREVIEW_COUNTS = {
 } as const;
 const LIST_INCREMENT_SMALL = 5;
 const LIST_INCREMENT_LARGE = 20;
-const MANUAL_RECORDING_CHUNK_MS = 5 * 60 * 1000;
-const MANUAL_RECORDING_MAX_MS = 30 * 60 * 1000;
-const MANUAL_RECORDING_IOS_SAFARI_MAX_MS = 10 * 60 * 1000;
+const MANUAL_RECORDING_CHUNK_MS = BROWSER_RECORDING_MAX_MS;
+const MANUAL_RECORDING_MAX_MS = BROWSER_RECORDING_MAX_MS;
+const MANUAL_RECORDING_IOS_SAFARI_MAX_MS = BROWSER_RECORDING_MAX_MS;
 const MANUAL_RECORDING_RETRY_DELAYS = [2000, 5000, 10000];
 const MANUAL_UPLOAD_STT_CHUNK_MS = 10 * 60 * 1000;
+const DASHBOARD_SECTION_TABS = [
+  { id: "autoFlow", label: "원클릭" },
+  { id: "recordings", label: "녹음" },
+  { id: "expressions", label: "표현" },
+  { id: "practice", label: "테스트" },
+  { id: "reviews", label: "복습" },
+  { id: "ttsLibrary", label: "TTS" },
+] as const;
 
 type ManualRecordingStats = {
   effectiveMaxMs: number;
@@ -310,6 +321,11 @@ export default function DashboardPage() {
   const recordingDetailRef = useRef<HTMLDivElement | null>(null);
   const rawAudioRef = useRef<HTMLAudioElement | null>(null);
   const testSectionRef = useRef<HTMLElement | null>(null);
+  const autoFlowSectionRef = useRef<HTMLElement | null>(null);
+  const recordingsSectionRef = useRef<HTMLElement | null>(null);
+  const expressionsSectionRef = useRef<HTMLElement | null>(null);
+  const reviewsSectionRef = useRef<HTMLElement | null>(null);
+  const ttsLibrarySectionRef = useRef<HTMLElement | null>(null);
   const answerRef = useRef<HTMLTextAreaElement | null>(null);
   const recordingSessionRef = useRef<{ stop: () => void; cancel: () => void } | null>(null);
   const practiceRecordingSessionRef = useRef<RecordingSession | null>(null);
@@ -419,6 +435,28 @@ export default function DashboardPage() {
       }),
     [],
   );
+  const manualSessionStatusLabel = useMemo(() => {
+    switch (activeRecordingSessionStatus) {
+      case "CREATED":
+        return "세션 생성";
+      case "UPLOADING":
+        return "업로드 중";
+      case "UPLOADED":
+        return "업로드 완료";
+      case "QUEUED":
+        return "worker 대기";
+      case "PROCESSING":
+        return "텍스트 변환 중";
+      case "PROCESSED":
+        return "처리 완료";
+      case "FAILED":
+        return "실패";
+      case "CANCELLED":
+        return "취소됨";
+      default:
+        return "대기";
+    }
+  }, [activeRecordingSessionStatus]);
 
   useEffect(() => {
     setTtsUrl(selectedExpression?.ttsUrl ?? "");
@@ -642,6 +680,25 @@ export default function DashboardPage() {
     setExpandedSections((current) => ({ ...current, [section]: !current[section] }));
   }
 
+  function scrollToDashboardSection(section: (typeof DASHBOARD_SECTION_TABS)[number]["id"]) {
+    const refs = {
+      autoFlow: autoFlowSectionRef,
+      recordings: recordingsSectionRef,
+      expressions: expressionsSectionRef,
+      practice: testSectionRef,
+      reviews: reviewsSectionRef,
+      ttsLibrary: ttsLibrarySectionRef,
+    } as const;
+
+    if (section in expandedSections && !expandedSections[section as keyof typeof expandedSections]) {
+      setExpandedSections((current) => ({ ...current, [section]: true }));
+    }
+
+    window.setTimeout(() => {
+      refs[section].current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }
+
   function expandList(list: keyof typeof DEFAULT_PREVIEW_COUNTS, amount: number | "all", total: number) {
     setVisibleCounts((current) => ({
       ...current,
@@ -856,6 +913,22 @@ export default function DashboardPage() {
     setManualRecordingStats((current) => ({ ...current, ...patch }));
   }
 
+  function validateManualUploadFile(file: File) {
+    const normalizedName = file.name.toLowerCase();
+    const matchedExtension = MANUAL_UPLOAD_ALLOWED_EXTENSIONS.find((ext) => normalizedName.endsWith(ext));
+    if (!matchedExtension) {
+      throw new Error(
+        `수동 업로드는 ${MANUAL_UPLOAD_ALLOWED_EXTENSIONS.join(", ")} 형식만 지원합니다. webm 파일은 업로드 전에 변환해 주세요.`,
+      );
+    }
+
+    if (file.size > MANUAL_UPLOAD_MAX_BYTES) {
+      throw new Error(
+        `수동 업로드 파일은 최대 ${Math.round(MANUAL_UPLOAD_MAX_BYTES / 1024 / 1024)}MB까지 지원합니다. 더 큰 파일은 나눠서 업로드해 주세요.`,
+      );
+    }
+  }
+
   async function createRecordingSession(source: "WEB" | "MOBILE" | "MANUAL_UPLOAD", title?: string) {
     const created = await apiFetch<RecordingSessionCreateResponse>("/recording-sessions", {
       method: "POST",
@@ -894,6 +967,7 @@ export default function DashboardPage() {
     });
 
     setSelectedFile(file);
+    await refreshRecordings();
     return presign;
   }
 
@@ -973,6 +1047,7 @@ export default function DashboardPage() {
           return;
         }
 
+        await refreshRecordings();
         sessionPollTimeoutRef.current = window.setTimeout(() => void poll(), 4000);
       } catch (err) {
         if (!userCancelledRef.current) {
@@ -1094,6 +1169,7 @@ export default function DashboardPage() {
     setActiveRecordingSessionStatus("");
 
     try {
+      validateManualUploadFile(selectedFile);
       const session = await createRecordingSession("MANUAL_UPLOAD", selectedFile.name);
       const prepared = await prepareAudioChunksForUpload(selectedFile, MANUAL_UPLOAD_STT_CHUNK_MS);
       setManualRecordingStats({
@@ -1132,7 +1208,7 @@ export default function DashboardPage() {
     userCancelledRef.current = false;
     setError("");
     resetWaveform();
-    setMessage(`최대 ${Math.round(manualRecordingLimitMs / 60000)}분 동안 브라우저 녹음을 진행합니다. 5분마다 분할 업로드되며, 언제든 직접 종료할 수 있습니다.`);
+    setMessage(`최대 ${Math.round(manualRecordingLimitMs / 60000)}분 동안 브라우저 녹음을 진행합니다. 녹음이 끝나면 1개 파일로 업로드되며, 언제든 직접 종료할 수 있습니다.`);
     setLoading("record");
     setFailedStepId("");
     setRetryMode("");
@@ -1177,10 +1253,10 @@ export default function DashboardPage() {
       await finalizeRecordingSession(sessionRecord.sessionId, result.chunkCount, result.elapsedMs);
       if (failedCount > 0) {
         setMessage(
-          `브라우저 녹음이 종료되었습니다. ${result.chunkCount}개 분할 파일 중 ${successCount}개 처리 완료, ${failedCount}개는 다시 업로드가 필요합니다.`,
+          `브라우저 녹음이 종료되었습니다. ${result.chunkCount}개 파일 중 ${successCount}개 처리 완료, ${failedCount}개는 다시 업로드가 필요합니다.`,
         );
       } else {
-        setMessage(`브라우저 녹음이 종료되었습니다. ${result.chunkCount}개 분할 파일이 모두 업로드되고 텍스트 변환까지 완료되었습니다.`);
+        setMessage(`브라우저 녹음이 종료되었습니다. ${result.chunkCount}개 파일이 업로드되고 텍스트 변환까지 완료되었습니다.`);
       }
     } catch (err) {
       if (isAbortError(err) || userCancelledRef.current) {
@@ -1327,6 +1403,10 @@ export default function DashboardPage() {
         body: JSON.stringify({ utteranceId, ...buildRecordingContextPayload(recordingContext) }),
         signal,
       }));
+      if (recording?.id) {
+        const loaded = await apiFetch<RecordingResponse>(`/recordings/${recording.id}`);
+        setRecordingWithDrafts(loaded);
+      }
       await refreshLists(expression.id);
       setMessage("영어 표현을 생성했습니다.");
     } catch (err) {
@@ -1929,11 +2009,6 @@ export default function DashboardPage() {
       <section className="card hero compact">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ marginBottom: 12 }}>
-              <span className="badge">JWT 인증</span>
-              <span className="badge">S3 업로드</span>
-              <span className="badge">OpenAI 연동</span>
-            </div>
             <h1 className="h1" style={{ marginBottom: 8 }}>서비스 대시보드</h1>
             <p className="muted">로그인 사용자: <strong>{user?.email ?? getStoredUser()?.email ?? "-"}</strong></p>
           </div>
@@ -1948,7 +2023,7 @@ export default function DashboardPage() {
         {activeTimeoutMessage && <div className="timeout-box" style={{ marginTop: 12 }}>{activeTimeoutMessage}</div>}
       </section>
 
-      <section className="card panel-lg">
+      <section ref={autoFlowSectionRef} className="card panel-lg">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
           <div>
             <div className="row" style={{ alignItems: "center", gap: 10 }}>
@@ -2053,8 +2128,11 @@ export default function DashboardPage() {
 
         <div className="mini-card" style={{ marginTop: 16 }}>
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <strong>실시간 진행률</strong>
+            <strong>원클릭 학습 진행률</strong>
             <span className="muted">{flowProgress}%</span>
+          </div>
+          <div className="muted" style={{ marginTop: 8 }}>
+            이 카드는 원클릭 학습 시작을 눌렀을 때만 바뀌는 학습 자동화 단계입니다.
           </div>
           <div className="progress" style={{ marginTop: 10 }}><span style={{ width: `${flowProgress}%` }} /></div>
           <div className="muted" style={{ marginTop: 10 }}>
@@ -2065,7 +2143,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <div className="grid auto-flow-grid" style={{ marginTop: 16 }}>
+        <div className="grid auto-flow-grid compact" style={{ marginTop: 12 }}>
           {AUTO_FLOW_STEPS.map((step) => {
             const done = flowLog.includes(step.id);
             const active = flowStepId === step.id && loading === "auto-flow";
@@ -2079,12 +2157,11 @@ export default function DashboardPage() {
                   <strong>{step.label}</strong>
                   <span className={`tag ${failed ? "tag-failed" : done ? "tag-done" : "tag-muted"}`}>{step.progress}%</span>
                 </div>
-                <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>{step.description}</div>
-                <div className="muted" style={{ marginTop: 8 }}>
+                <div className="muted" style={{ marginTop: 6 }}>
                   {failed ? "실패" : active ? "진행 중" : done ? "완료" : "대기"}
                 </div>
                 {failed && (
-                  <button className="link-button" style={{ marginTop: 8 }} onClick={handleRetryFailedStep} disabled={!!loading}>
+                  <button className="link-button" style={{ marginTop: 6 }} onClick={handleRetryFailedStep} disabled={!!loading}>
                     이 단계 다시 시도
                   </button>
                 )}
@@ -2106,7 +2183,7 @@ export default function DashboardPage() {
       </section>
 
       <div className="dashboard-grid">
-        <section className="card panel-lg">
+        <section ref={recordingsSectionRef} className="card panel-lg">
           {renderSectionIntro(
             "recordings",
             "1. 수동 녹음 업로드 / 텍스트 변환",
@@ -2119,11 +2196,27 @@ export default function DashboardPage() {
             <input
               className="input file-input"
               type="file"
-              accept="audio/*"
-              onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
+              accept=".wav,.m4a,.mp3,.mp4,.aac,audio/wav,audio/mp4,audio/mpeg,audio/aac"
+              onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                if (!file) {
+                  setSelectedFile(null);
+                  return;
+                }
+
+                try {
+                  validateManualUploadFile(file);
+                  setError("");
+                  setSelectedFile(file);
+                } catch (err) {
+                  setSelectedFile(null);
+                  setError(err instanceof Error ? err.message : "지원하지 않는 파일입니다.");
+                  e.currentTarget.value = "";
+                }
+              }}
             />
             <button className="button ghost" onClick={handleRecordDemo} disabled={!!loading}>
-              {loading === "record" ? "녹음 중..." : "브라우저 녹음 (최대 30분)"}
+              {loading === "record" ? "녹음 중..." : "브라우저 녹음 (최대 5분)"}
             </button>
             {loading === "record" && isMicRecording && (
               <button className="button secondary" onClick={handleStopRecording}>
@@ -2141,10 +2234,13 @@ export default function DashboardPage() {
             선택 파일: {selectedFile ? `${selectedFile.name} (${Math.round(selectedFile.size / 1024)} KB)` : "없음"}
           </div>
           <div className="muted" style={{ marginTop: 8 }}>
-            브라우저 녹음은 최대 30분까지 가능하며, 5분마다 분할 파일로 저장한 뒤 즉시 업로드와 텍스트 변환을 진행합니다.
+            브라우저 녹음은 최대 5분까지 지원합니다. 녹음 종료 시 1개 파일로 저장한 뒤 업로드와 텍스트 변환을 진행합니다.
           </div>
           <div className="muted" style={{ marginTop: 8 }}>
-            현재 기기에서는 최대 약 {Math.round(manualRecordingLimitMs / 60000)}분까지 자동 종료됩니다. 사용자가 먼저 종료하면 마지막 5분 미만 구간도 별도 파일로 저장됩니다.
+            수동 업로드는 WAV, M4A, MP3, MP4, AAC 형식을 지원하며 최대 {Math.round(MANUAL_UPLOAD_MAX_BYTES / 1024 / 1024)}MB까지 업로드할 수 있습니다.
+          </div>
+          <div className="muted" style={{ marginTop: 8 }}>
+            현재 기기에서는 최대 약 {Math.round(manualRecordingLimitMs / 60000)}분까지 자동 종료됩니다. 사용자가 먼저 종료하면 지금까지 녹음한 내용을 1개 파일로 저장합니다.
           </div>
           {activeRecordingSessionId && (
             <div className="muted" style={{ marginTop: 8 }}>
@@ -2154,14 +2250,17 @@ export default function DashboardPage() {
           {(manualRecordingStats.isActive || manualRecordingStats.chunkCount > 0 || failedManualChunks.length > 0) && (
             <div className="mini-card" style={{ marginTop: 14 }}>
               <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                <strong>장시간 녹음 상태</strong>
-                <span className={`tag ${manualRecordingStats.isActive ? "tag-primary" : "tag-muted"}`}>
-                  {manualRecordingStats.isActive ? "진행 중" : "대기"}
+                <strong>파일 처리 상태</strong>
+                <span className={`tag ${activeRecordingSessionStatus === "FAILED" ? "tag-failed" : activeRecordingSessionStatus === "PROCESSED" ? "tag-done" : activeRecordingSessionStatus ? "tag-primary" : "tag-muted"}`}>
+                  {manualSessionStatusLabel}
                 </span>
+              </div>
+              <div className="muted" style={{ marginTop: 8 }}>
+                이 카드는 수동 파일 업로드와 브라우저 녹음의 업로드/worker 처리 상태를 보여줍니다. 원클릭 학습 단계와는 별도입니다.
               </div>
               <div className="grid" style={{ marginTop: 12, gap: 10 }}>
                 <div className="mini-card">
-                  <strong>생성된 분할 파일</strong>
+                  <strong>업로드된 파일</strong>
                   <div className="muted" style={{ marginTop: 6 }}>{manualRecordingStats.chunkCount}개</div>
                 </div>
                 <div className="mini-card">
@@ -2174,7 +2273,7 @@ export default function DashboardPage() {
                 </div>
               </div>
               <div className="muted" style={{ marginTop: 10 }}>
-                5분 단위 분할 업로드가 진행되며, 최근 처리 분할 번호는 #{manualRecordingStats.currentChunkIndex || "-"} 입니다.
+                세션 상태: {manualSessionStatusLabel} · 최근 처리 파일 번호는 #{manualRecordingStats.currentChunkIndex || "-"} 입니다.
               </div>
               {failedManualChunks.length > 0 && (
                 <div className="grid" style={{ marginTop: 12 }}>
@@ -2212,10 +2311,10 @@ export default function DashboardPage() {
               </div>
               <div className="grid" style={{ marginTop: 12 }}>
                 {recordings.length === 0 && <div className="mini-card muted">아직 저장된 녹음이 없습니다.</div>}
-                {visibleRecordings.map((item) => (
+                {visibleRecordings.map((item, index) => (
                   <div key={item.id} className="mini-card">
                     <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                      <strong>{item.fileName}</strong>
+                      <strong>{index + 1}. {item.fileName}</strong>
                       <span className={`tag ${item.status === "PROCESSED" ? "tag-primary" : "tag-muted"}`}>{item.status}</span>
                     </div>
                     <div className="muted" style={{ marginTop: 8 }}>
@@ -2450,11 +2549,11 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-              {visibleUtterances.map((utterance) => (
+              {visibleUtterances.map((utterance, index) => (
                 <div key={utterance.id} className="utterance-card">
                   <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
                     <div>
-                      <strong>{utterance.speakerLabel}</strong>
+                      <strong>{index + 1}. {utterance.speakerLabel}</strong>
                       <span className="muted" style={{ marginLeft: 8 }}>{utterance.startMs}ms ~ {utterance.endMs}ms</span>
                     </div>
                     <div className="row" style={{ gap: 8 }}>
@@ -2521,7 +2620,7 @@ export default function DashboardPage() {
           )}
         </section>
 
-        <section className="card panel-lg">
+        <section ref={expressionsSectionRef} className="card panel-lg">
           {renderSectionIntro(
             "expressions",
             "2. 영어 표현 & TTS",
@@ -2547,7 +2646,7 @@ export default function DashboardPage() {
                 </div>
                 <div className="grid" style={{ marginTop: 12 }}>
                   {expressions.length === 0 && <div className="mini-card muted">아직 생성된 표현이 없습니다.</div>}
-                  {visibleExpressions.map((expression) => (
+                  {visibleExpressions.map((expression, index) => (
                     <button
                       key={expression.id}
                       className={`expression-item ${selectedExpressionId === expression.id ? "selected" : ""}`}
@@ -2563,7 +2662,7 @@ export default function DashboardPage() {
                           {expression.ttsKey ? "TTS 완료" : "TTS 미생성"}
                         </span>
                       </div>
-                      <div style={{ fontWeight: 700, marginTop: 6 }}>{expression.englishBase}</div>
+                      <div style={{ fontWeight: 700, marginTop: 6 }}>{index + 1}. {expression.englishBase}</div>
                     </button>
                   ))}
                 </div>
@@ -2842,7 +2941,7 @@ export default function DashboardPage() {
           )}
         </section>
 
-        <section className="card panel-lg">
+        <section ref={reviewsSectionRef} className="card panel-lg">
           {renderSectionIntro(
             "reviews",
             "4. 오늘의 복습",
@@ -2898,7 +2997,7 @@ export default function DashboardPage() {
           )}
         </section>
 
-        <section className="card panel-lg">
+        <section ref={ttsLibrarySectionRef} className="card panel-lg">
           {renderSectionIntro(
             "ttsLibrary",
             "5. TTS 완료 표현 모아보기",
@@ -2963,6 +3062,18 @@ export default function DashboardPage() {
           )}
         </section>
       </div>
+      <nav className="mobile-section-nav" aria-label="대시보드 섹션 이동">
+        {DASHBOARD_SECTION_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className="mobile-section-nav-button"
+            onClick={() => scrollToDashboardSection(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
     </main>
   );
 }

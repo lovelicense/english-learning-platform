@@ -9,6 +9,7 @@ import {
   RecordingJobTargetType,
   RecordingJobType,
   RecordingPartStatus,
+  RecordingStatus,
   RecordingSessionStatus,
   RecordingSource,
 } from '@prisma/client';
@@ -113,9 +114,29 @@ export class RecordingSessionsService {
     });
     if (!part) throw new NotFoundException('녹음 파트를 찾을 수 없습니다.');
 
+    const recording =
+      part.recordingId != null
+        ? await this.prisma.recording.update({
+            where: { id: part.recordingId },
+            data: {
+              audioKey: part.audioKey,
+              fileName: part.fileName,
+              status: RecordingStatus.UPLOADED,
+            },
+          })
+        : await this.prisma.recording.create({
+            data: {
+              userId,
+              audioKey: part.audioKey,
+              fileName: part.fileName,
+              status: RecordingStatus.UPLOADED,
+            },
+          });
+
     const updated = await this.prisma.recordingPart.update({
       where: { id: partId },
       data: {
+        recordingId: recording.id,
         durationMs: input.durationMs,
         sizeBytes: input.sizeBytes ?? part.sizeBytes,
         status: RecordingPartStatus.UPLOADED,
@@ -138,6 +159,7 @@ export class RecordingSessionsService {
     return {
       sessionId,
       partId: updated.id,
+      recordingId: recording.id,
       status: updated.status,
       uploadedPartCount,
     };

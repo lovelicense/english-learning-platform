@@ -103,12 +103,20 @@ const DETAIL_PREVIEW_COUNTS = {
 } as const;
 const LIST_INCREMENT_SMALL = 5;
 const LIST_INCREMENT_LARGE = 20;
+const DETAIL_SECTION_TABS = [
+  { id: "overview", label: "개요" },
+  { id: "recording", label: "녹음" },
+  { id: "expressions", label: "표현" },
+] as const;
 
 export function RecordingDetailClient({ recordingId }: { recordingId: string }) {
   const router = useRouter();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const rawAudioRef = useRef<HTMLAudioElement | null>(null);
   const expressionDetailRef = useRef<HTMLDivElement | null>(null);
+  const overviewSectionRef = useRef<HTMLElement | null>(null);
+  const recordingSectionRef = useRef<HTMLElement | null>(null);
+  const expressionsSectionRef = useRef<HTMLElement | null>(null);
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<MeResponse | null>(null);
   const [recording, setRecording] = useState<RecordingResponse | null>(null);
@@ -124,6 +132,11 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState("");
   const [visibleCounts, setVisibleCounts] = useState<Record<keyof typeof DETAIL_PREVIEW_COUNTS, number>>(DETAIL_PREVIEW_COUNTS);
+  const [expandedSections, setExpandedSections] = useState<Record<"overview" | "recording" | "expressions", boolean>>({
+    overview: true,
+    recording: true,
+    expressions: true,
+  });
 
   const utteranceIds = useMemo(() => new Set(recording?.utterances.map((item) => item.id) ?? []), [recording]);
   const expressions = useMemo(
@@ -255,6 +268,52 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
 
   function collapseList(list: keyof typeof DETAIL_PREVIEW_COUNTS) {
     setVisibleCounts((current) => ({ ...current, [list]: DETAIL_PREVIEW_COUNTS[list] }));
+  }
+
+  function toggleSection(section: keyof typeof expandedSections) {
+    setExpandedSections((current) => ({ ...current, [section]: !current[section] }));
+  }
+
+  function renderSectionIntro(
+    section: keyof typeof expandedSections,
+    title: string,
+    description: string,
+    summary: string,
+  ) {
+    const isOpen = expandedSections[section];
+    return (
+      <div className="section-intro">
+        <div>
+          <h2 className="h2">{title}</h2>
+          <p className="muted">{description}</p>
+          {!isOpen && <div className="section-summary">{summary}</div>}
+        </div>
+        <button
+          type="button"
+          className="section-toggle"
+          onClick={() => toggleSection(section)}
+          aria-expanded={isOpen}
+        >
+          {isOpen ? "접기" : "펼치기"}
+        </button>
+      </div>
+    );
+  }
+
+  function scrollToDetailSection(section: (typeof DETAIL_SECTION_TABS)[number]["id"]) {
+    const refs = {
+      overview: overviewSectionRef,
+      recording: recordingSectionRef,
+      expressions: expressionsSectionRef,
+    } as const;
+
+    if (!expandedSections[section]) {
+      setExpandedSections((current) => ({ ...current, [section]: true }));
+    }
+
+    window.setTimeout(() => {
+      refs[section].current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   }
 
   function renderListControls(list: keyof typeof DETAIL_PREVIEW_COUNTS, total: number) {
@@ -681,7 +740,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
 
   return (
     <main className="container grid dashboard-page">
-      <section className="card hero compact">
+      <section ref={overviewSectionRef} className="card hero compact">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
             <div style={{ marginBottom: 12 }}>
@@ -703,20 +762,22 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
       </section>
 
       <div className="dashboard-grid recording-detail-grid">
-        <section className="card panel-lg">
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div>
-              <h2 className="h2">1. 녹음과 텍스트 확인</h2>
-              <p className="muted">원본 음성을 다시 들으면서 STT 결과를 다듬고 필요한 문장만 표현으로 변환합니다.</p>
-            </div>
-            <div className="row">
-              <button className="button ghost" onClick={handleReprocess} disabled={!!loading}>
-                {loading === "reprocess" ? "재실행 중..." : "텍스트 변환 다시 실행"}
-              </button>
-              <button className="button danger" onClick={handleDeleteRecording} disabled={!!loading}>
-                {loading === "delete-recording" ? "삭제 중..." : "이 녹음 삭제"}
-              </button>
-            </div>
+        <section ref={recordingSectionRef} className="card panel-lg">
+          {renderSectionIntro(
+            "recording",
+            "1. 녹음과 텍스트 확인",
+            "원본 음성을 다시 들으면서 STT 결과를 다듬고 필요한 문장만 표현으로 변환합니다.",
+            `상태 ${recording.status} · 문장 ${recording.utterances.length}개`,
+          )}
+          {expandedSections.recording && (
+            <>
+          <div className="row" style={{ justifyContent: "flex-end", alignItems: "flex-start", marginTop: 12 }}>
+            <button className="button ghost" onClick={handleReprocess} disabled={!!loading}>
+              {loading === "reprocess" ? "재실행 중..." : "텍스트 변환 다시 실행"}
+            </button>
+            <button className="button danger" onClick={handleDeleteRecording} disabled={!!loading}>
+              {loading === "delete-recording" ? "삭제 중..." : "이 녹음 삭제"}
+            </button>
           </div>
 
           <div className="grid recording-summary-grid" style={{ marginTop: 16 }}>
@@ -867,11 +928,11 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
             {recording.utterances.length === 0 && (
               <div className="mini-card muted">아직 변환된 문장이 없습니다. 텍스트 변환을 다시 실행해 보세요.</div>
             )}
-            {visibleUtterances.map((utterance) => (
+            {visibleUtterances.map((utterance, index) => (
               <div key={utterance.id} className="utterance-card">
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
                   <div>
-                    <strong>{utterance.speakerLabel}</strong>
+                    <strong>{index + 1}. {utterance.speakerLabel}</strong>
                     <span className="muted" style={{ marginLeft: 8 }}>
                       {formatTime(utterance.startMs)} - {formatTime(utterance.endMs)}
                     </span>
@@ -933,11 +994,19 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
             ))}
             {renderListControls("utterances", recording.utterances.length)}
           </div>
+            </>
+          )}
         </section>
 
-        <section className="card panel-lg">
-          <h2 className="h2">2. 영어 표현과 복사</h2>
-          <p className="muted">이 녹음에서 만든 표현만 모아 보고, 한국어/영어를 바로 복사하거나 TTS를 생성합니다.</p>
+        <section ref={expressionsSectionRef} className="card panel-lg">
+          {renderSectionIntro(
+            "expressions",
+            "2. 영어 표현과 복사",
+            "이 녹음에서 만든 표현만 모아 보고, 한국어/영어를 바로 복사하거나 TTS를 생성합니다.",
+            `표현 ${expressions.length}개 · TTS 대기 ${pendingRecordingTtsCount}개`,
+          )}
+          {expandedSections.expressions && (
+            <>
           <div className="row" style={{ marginTop: 12 }}>
             <button className="button secondary" onClick={handleGenerateTtsBulk} disabled={!!loading || pendingRecordingTtsCount === 0}>
               {loading === "tts-bulk" ? "일괄 생성 중..." : `남은 TTS 일괄 생성 (${pendingRecordingTtsCount})`}
@@ -955,7 +1024,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
               </div>
               <div className="grid" style={{ marginTop: 12 }}>
                 {expressions.length === 0 && <div className="mini-card muted">이 녹음에서 아직 생성된 표현이 없습니다.</div>}
-                {visibleExpressions.map((expression) => (
+                {visibleExpressions.map((expression, index) => (
                   <button
                     key={expression.id}
                     className={`expression-item ${selectedExpressionId === expression.id ? "selected" : ""}`}
@@ -970,7 +1039,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
                         {expression.ttsKey ? "TTS 완료" : "TTS 미생성"}
                       </span>
                     </div>
-                    <div style={{ marginTop: 8, fontWeight: 700 }}>{expression.englishBase}</div>
+                    <div style={{ marginTop: 8, fontWeight: 700 }}>{index + 1}. {expression.englishBase}</div>
                   </button>
                 ))}
               </div>
@@ -1063,8 +1132,22 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
             </div>
           )}
           </div>
+            </>
+          )}
         </section>
       </div>
+      <nav className="mobile-section-nav" aria-label="상세 페이지 섹션 이동">
+        {DETAIL_SECTION_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className="mobile-section-nav-button"
+            onClick={() => scrollToDetailSection(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
     </main>
   );
 }

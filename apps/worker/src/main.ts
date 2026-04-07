@@ -286,6 +286,14 @@ async function processTranscribePartJob(job: Awaited<ReturnType<typeof claimNext
       const delayMs = retryDelaysMs[Math.min(job.attempts - 1, retryDelaysMs.length - 1)] ?? retryDelaysMs[retryDelaysMs.length - 1];
       const runAfter = new Date(Date.now() + delayMs);
       await prisma.$transaction([
+        ...(part.recordingId
+          ? [
+              prisma.recording.update({
+                where: { id: part.recordingId },
+                data: { status: RecordingStatus.UPLOADED },
+              }),
+            ]
+          : []),
         prisma.recordingPart.update({
           where: { id: part.id },
           data: { status: RecordingPartStatus.UPLOADED, errorMessage: `재시도 예정: ${message}` },
@@ -307,6 +315,14 @@ async function processTranscribePartJob(job: Awaited<ReturnType<typeof claimNext
     }
 
     await prisma.$transaction([
+      ...(part.recordingId
+        ? [
+            prisma.recording.update({
+              where: { id: part.recordingId },
+              data: { status: RecordingStatus.FAILED },
+            }),
+          ]
+        : []),
       prisma.recordingPart.update({
         where: { id: part.id },
         data: { status: RecordingPartStatus.FAILED, errorMessage: message },

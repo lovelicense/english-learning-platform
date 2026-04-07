@@ -55,16 +55,14 @@ export default function HomePage() {
     <main className="container grid landing" style={{ gap: 24 }}>
       <section className="hero card">
         <div>
-          <span className="badge">스타트업 서비스 수준 MVP</span>
-          <span className="badge">실행 가능한 인증/업로드/AI UX</span>
           <h1 className="h1" style={{ marginTop: 14 }}>내 말 기반 영어훈련 앱</h1>
           <p className="muted" style={{ marginTop: 12 }}>
-            로그인 후 녹음 파일 업로드, STT 전사, 영어 표현 생성, TTS 재생, 말하기 테스트까지 한 화면에서 흐름을 확인할 수 있습니다.
+            로그인 후 녹음과 파일 업로드, 영어 표현 생성, 발음 연습, 복습까지 한 흐름으로 이어서 학습할 수 있습니다.
           </p>
           <div className="grid feature-list" style={{ marginTop: 18 }}>
-            <div className="mini-card"><strong>1. JWT 로그인</strong><div className="muted">토큰 저장 후 보호 API 호출</div></div>
-            <div className="mini-card"><strong>2. 녹음 업로드</strong><div className="muted">S3 presigned upload 흐름</div></div>
-            <div className="mini-card"><strong>3. AI 학습</strong><div className="muted">STT / LLM / TTS 연결</div></div>
+            <div className="mini-card"><strong>1. 바로 시작</strong><div className="muted">로그인 후 학습 화면으로 바로 이동합니다.</div></div>
+            <div className="mini-card"><strong>2. 녹음과 업로드</strong><div className="muted">내 음성을 불러오거나 바로 녹음해서 학습 자료로 만듭니다.</div></div>
+            <div className="mini-card"><strong>3. 영어 학습</strong><div className="muted">표현 생성, 듣기, 말하기 테스트와 복습까지 이어집니다.</div></div>
           </div>
         </div>
       </section>

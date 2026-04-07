@@ -144,7 +144,7 @@ worker_ecr_repository_url = "574844118613.dkr.ecr.ap-northeast-2.amazonaws.com/e
 
 # github 배포 방법
 git status
-git add ...
+git add .
 git commit -m "Add analysis caching and expression memo support"
 git push origin main
 
