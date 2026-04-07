@@ -187,11 +187,16 @@ export function startChunkedRecordedAudioSession(options: ChunkedRecordingSessio
   let rejectFn: ((reason?: unknown) => void) | null = null;
   let chunkCount = 0;
   let chunkQueue = Promise.resolve();
+  let chunkTimeoutId = 0;
+  let shouldStopAfterCurrentChunk = false;
+  let preferredMimeType = '';
+  let currentChunkParts: BlobPart[] = [];
 
   const cleanup = () => {
     if (rafId) cancelAnimationFrame(rafId);
     if (timeoutId) window.clearTimeout(timeoutId);
     if (tickId) window.clearInterval(tickId);
+    if (chunkTimeoutId) window.clearTimeout(chunkTimeoutId);
     try { source?.disconnect(); } catch {}
     try { analyser?.disconnect(); } catch {}
     if (audioContext && audioContext.state !== 'closed') {
@@ -206,10 +211,7 @@ export function startChunkedRecordedAudioSession(options: ChunkedRecordingSessio
     rejectFn = reject;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const preferredMimeType = getPreferredAudioMimeType();
-      mediaRecorder = preferredMimeType
-        ? new MediaRecorder(stream, { mimeType: preferredMimeType })
-        : new MediaRecorder(stream);
+      preferredMimeType = getPreferredAudioMimeType();
       startedAt = Date.now();
 
       audioContext = new AudioContext();
@@ -239,43 +241,91 @@ export function startChunkedRecordedAudioSession(options: ChunkedRecordingSessio
         options.onTick?.(remaining, elapsed);
       }, 100);
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (done || event.data.size === 0) return;
-        const actualMimeType = event.data.type || mediaRecorder?.mimeType || preferredMimeType || 'audio/webm';
-        const ext = getAudioFileExtension(actualMimeType);
-        const nextChunkIndex = chunkCount + 1;
-        const file = new File([event.data], `recording-${Date.now()}-part-${String(nextChunkIndex).padStart(2, '0')}.${ext}`, {
-          type: actualMimeType,
-        });
-        chunkCount = nextChunkIndex;
+      const queueChunkUpload = (file: File, chunkIndex: number) => {
         chunkQueue = chunkQueue
-          .then(() => options.onChunk?.(file, nextChunkIndex))
+          .then(() => options.onChunk?.(file, chunkIndex))
           .catch(() => undefined);
       };
 
-      mediaRecorder.onerror = () => {
-        if (done) return;
-        done = true;
-        cleanup();
-        reject(new Error('녹음 중 오류가 발생했습니다.'));
+      const flushCurrentChunk = (recorderMimeType?: string) => {
+        const actualMimeType =
+          recorderMimeType ||
+          currentChunkParts.find((part): part is Blob => part instanceof Blob && Boolean(part.type))?.type ||
+          preferredMimeType ||
+          'audio/webm';
+        const blob = new Blob(currentChunkParts, { type: actualMimeType });
+        currentChunkParts = [];
+        if (blob.size === 0) return;
+
+        const ext = getAudioFileExtension(actualMimeType);
+        const nextChunkIndex = chunkCount + 1;
+        const file = new File(
+          [blob],
+          `recording-${Date.now()}-part-${String(nextChunkIndex).padStart(2, '0')}.${ext}`,
+          { type: actualMimeType },
+        );
+        chunkCount = nextChunkIndex;
+        queueChunkUpload(file, nextChunkIndex);
       };
 
-      mediaRecorder.onstop = () => {
-        if (done) return;
-        done = true;
-        chunkQueue
-          .catch(() => undefined)
-          .finally(() => {
-            const elapsed = Math.max(0, Date.now() - startedAt);
-            cleanup();
-            resolve({ chunkCount, elapsedMs: elapsed });
-          });
+      const scheduleChunkBoundary = () => {
+        if (chunkTimeoutId) window.clearTimeout(chunkTimeoutId);
+        chunkTimeoutId = window.setTimeout(() => {
+          if (!mediaRecorder || mediaRecorder.state === 'inactive' || done) return;
+          mediaRecorder.stop();
+        }, options.chunkDurationMs);
       };
 
-      mediaRecorder.start(options.chunkDurationMs);
+      const startRecorder = () => {
+        if (!stream) return;
+        currentChunkParts = [];
+        mediaRecorder = preferredMimeType
+          ? new MediaRecorder(stream, { mimeType: preferredMimeType })
+          : new MediaRecorder(stream);
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) currentChunkParts.push(event.data);
+        };
+
+        mediaRecorder.onerror = () => {
+          if (done) return;
+          done = true;
+          cleanup();
+          reject(new Error('녹음 중 오류가 발생했습니다.'));
+        };
+
+        mediaRecorder.onstop = () => {
+          const recorderMimeType = mediaRecorder?.mimeType || preferredMimeType;
+          if (chunkTimeoutId) {
+            window.clearTimeout(chunkTimeoutId);
+            chunkTimeoutId = 0;
+          }
+          flushCurrentChunk(recorderMimeType);
+
+          if (!done && !shouldStopAfterCurrentChunk) {
+            startRecorder();
+            return;
+          }
+
+          done = true;
+          chunkQueue
+            .catch(() => undefined)
+            .finally(() => {
+              const elapsed = Math.max(0, Date.now() - startedAt);
+              cleanup();
+              resolve({ chunkCount, elapsedMs: elapsed });
+            });
+        };
+
+        mediaRecorder.start();
+        scheduleChunkBoundary();
+      };
+
+      startRecorder();
       options.onTick?.(options.maxDurationMs, 0);
       pumpLevel();
       timeoutId = window.setTimeout(() => {
+        shouldStopAfterCurrentChunk = true;
         if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
       }, options.maxDurationMs);
     } catch (error) {
@@ -287,6 +337,7 @@ export function startChunkedRecordedAudioSession(options: ChunkedRecordingSessio
   return {
     completion,
     stop: () => {
+      shouldStopAfterCurrentChunk = true;
       if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
     },
     cancel: () => {

@@ -51,15 +51,18 @@ async function transcribeAudio(buffer: Buffer, fileName: string, diarization = t
 
   const file = await toFile(buffer, fileName);
   try {
-    const result = await openai.audio.transcriptions.create({
-      file,
-      model: diarization
-        ? process.env.OPENAI_STT_DIARIZE_MODEL ?? 'gpt-4o-transcribe-diarize'
-        : process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
-      language: 'ko',
-      response_format: diarization ? 'diarized_json' : 'json',
-      ...(diarization ? { chunking_strategy: 'auto' } : {}),
-    } as any);
+    const createTranscription = async (useDiarization: boolean) =>
+      openai.audio.transcriptions.create({
+        file,
+        model: useDiarization
+          ? process.env.OPENAI_STT_DIARIZE_MODEL ?? 'gpt-4o-transcribe-diarize'
+          : process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
+        language: 'ko',
+        response_format: useDiarization ? 'diarized_json' : 'json',
+        ...(useDiarization ? { chunking_strategy: 'auto' } : {}),
+      } as any);
+
+    let result = await createTranscription(diarization);
 
     if (diarization) {
       const segments = ((result as any).segments ?? []) as Array<{
@@ -69,16 +72,31 @@ async function transcribeAudio(buffer: Buffer, fileName: string, diarization = t
         end?: number;
       }>;
 
-      return {
-        utterances: segments
-          .filter((segment) => segment.text && segment.text.trim().length > 0)
-          .map((segment, index) => ({
-            speakerLabel: segment.speaker?.toLowerCase() ?? `speaker_${index + 1}`,
-            startMs: Math.round((segment.start ?? 0) * 1000),
-            endMs: Math.round((segment.end ?? 0) * 1000),
-            koreanText: segment.text!.trim(),
-          })),
-      };
+      let utterances = segments
+        .filter((segment) => segment.text && segment.text.trim().length > 0)
+        .map((segment, index) => ({
+          speakerLabel: segment.speaker?.toLowerCase() ?? `speaker_${index + 1}`,
+          startMs: Math.round((segment.start ?? 0) * 1000),
+          endMs: Math.round((segment.end ?? 0) * 1000),
+          koreanText: segment.text!.trim(),
+        }));
+
+      if (utterances.length === 0) {
+        result = await createTranscription(false);
+        const fallbackText = ((result as any).text ?? '').trim();
+        if (fallbackText) {
+          utterances = [
+            {
+              speakerLabel: 'speaker_1',
+              startMs: 0,
+              endMs: 2000,
+              koreanText: fallbackText,
+            },
+          ];
+        }
+      }
+
+      return { utterances };
     }
 
     return {

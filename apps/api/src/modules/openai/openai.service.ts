@@ -394,91 +394,108 @@ export class OpenAiService {
   }
 
   async transcribeAudio(buffer: Buffer, fileName: string, diarization = false) {
-  if (!this.client) {
+    if (!this.client) {
+      return {
+        utterances: [
+          { speakerLabel: 'speaker_1', startMs: 0, endMs: 1800, koreanText: '나 지금 애 데리러 가는 중이야' },
+        ],
+      };
+    }
+
+    const file = await OpenAI.toFile(buffer, fileName);
+    const createTranscription = async (useDiarization: boolean) => {
+      try {
+        return await this.client!.audio.transcriptions.create({
+          file,
+          model: useDiarization
+            ? process.env.OPENAI_STT_DIARIZE_MODEL ?? 'gpt-4o-transcribe-diarize'
+            : process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
+          language: 'ko',
+          response_format: useDiarization ? 'diarized_json' : 'json',
+          ...(useDiarization ? { chunking_strategy: 'auto' } : {}),
+        } as any);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/audio duration .* longer than .* maximum/i.test(message)) {
+          throw new BadRequestException(
+            '오디오 길이가 너무 깁니다. 현재 모델은 약 23분까지만 처리할 수 있어요. 파일을 더 짧게 나눠 업로드해 주세요.',
+          );
+        }
+        throw error;
+      }
+    };
+
+    let result: any = await createTranscription(diarization);
+
+    if (diarization) {
+      const segments = ((result as any).segments ?? []) as Array<{
+        speaker?: string;
+        text?: string;
+        start?: number;
+        end?: number;
+      }>;
+
+      let utterances = segments
+        .filter((s) => s.text && s.text.trim().length > 0)
+        .map((s, index) => ({
+          speakerLabel: s.speaker?.toLowerCase() ?? `speaker_${index + 1}`,
+          startMs: Math.round((s.start ?? 0) * 1000),
+          endMs: Math.round((s.end ?? 0) * 1000),
+          koreanText: s.text!.trim(),
+        }));
+
+      if (utterances.length === 0) {
+        result = await createTranscription(false);
+        const fallbackText = ((result as any).text ?? '').trim();
+        if (fallbackText) {
+          utterances = [
+            {
+              speakerLabel: 'speaker_1',
+              startMs: 0,
+              endMs: 2000,
+              koreanText: fallbackText,
+            },
+          ];
+        }
+      }
+
+      const speakerCounts = utterances.reduce<Record<string, number>>((acc, utterance) => {
+        acc[utterance.speakerLabel] = (acc[utterance.speakerLabel] ?? 0) + 1;
+        return acc;
+      }, {});
+      const firstUtterancesPreview = utterances.slice(0, 3).map((utterance) => ({
+        speakerLabel: utterance.speakerLabel,
+        startMs: utterance.startMs,
+        endMs: utterance.endMs,
+        koreanText: utterance.koreanText.slice(0, 60),
+      }));
+      const lastUtterancesPreview = utterances.slice(-3).map((utterance) => ({
+        speakerLabel: utterance.speakerLabel,
+        startMs: utterance.startMs,
+        endMs: utterance.endMs,
+        koreanText: utterance.koreanText.slice(0, 60),
+      }));
+      const firstStartMs = utterances[0]?.startMs ?? 0;
+      const lastEndMs = utterances[utterances.length - 1]?.endMs ?? 0;
+      const emptySegmentCount = segments.filter((segment) => !segment.text || !segment.text.trim()).length;
+      console.info(
+        `[STT diarization] file=${fileName} raw_segments=${segments.length} empty_segments=${emptySegmentCount} saved_utterances=${utterances.length} speakers=${Object.keys(
+          speakerCounts,
+        ).length} first_start_ms=${firstStartMs} last_end_ms=${lastEndMs} speaker_counts=${JSON.stringify(speakerCounts)}`,
+      );
+      console.info(`[STT diarization preview:first] file=${fileName} ${JSON.stringify(firstUtterancesPreview)}`);
+      console.info(`[STT diarization preview:last] file=${fileName} ${JSON.stringify(lastUtterancesPreview)}`);
+
+      return { utterances };
+    }
+
+    const text = ((result as any).text ?? '').trim();
     return {
       utterances: [
-        { speakerLabel: 'speaker_1', startMs: 0, endMs: 1800, koreanText: '나 지금 애 데리러 가는 중이야' },
+        { speakerLabel: 'speaker_1', startMs: 0, endMs: 2000, koreanText: text },
       ],
     };
   }
-
-  const file = await OpenAI.toFile(buffer, fileName);
-
-  let result: any;
-  try {
-    result = await this.client.audio.transcriptions.create({
-      file,
-      model: diarization
-        ? process.env.OPENAI_STT_DIARIZE_MODEL ?? 'gpt-4o-transcribe-diarize'
-        : process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
-      language: 'ko',
-      response_format: diarization ? 'diarized_json' : 'json',
-      ...(diarization ? { chunking_strategy: 'auto' } : {}),
-    } as any);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/audio duration .* longer than .* maximum/i.test(message)) {
-      throw new BadRequestException(
-        '오디오 길이가 너무 깁니다. 현재 모델은 약 23분까지만 처리할 수 있어요. 파일을 더 짧게 나눠 업로드해 주세요.',
-      );
-    }
-    throw error;
-  }
-
-  if (diarization) {
-    const segments = ((result as any).segments ?? []) as Array<{
-      speaker?: string;
-      text?: string;
-      start?: number;
-      end?: number;
-    }>;
-
-    const utterances = segments
-      .filter((s) => s.text && s.text.trim().length > 0)
-      .map((s, index) => ({
-        speakerLabel: s.speaker?.toLowerCase() ?? `speaker_${index + 1}`,
-        startMs: Math.round((s.start ?? 0) * 1000),
-        endMs: Math.round((s.end ?? 0) * 1000),
-        koreanText: s.text!.trim(),
-      }));
-
-    const speakerCounts = utterances.reduce<Record<string, number>>((acc, utterance) => {
-      acc[utterance.speakerLabel] = (acc[utterance.speakerLabel] ?? 0) + 1;
-      return acc;
-    }, {});
-    const firstUtterancesPreview = utterances.slice(0, 3).map((utterance) => ({
-      speakerLabel: utterance.speakerLabel,
-      startMs: utterance.startMs,
-      endMs: utterance.endMs,
-      koreanText: utterance.koreanText.slice(0, 60),
-    }));
-    const lastUtterancesPreview = utterances.slice(-3).map((utterance) => ({
-      speakerLabel: utterance.speakerLabel,
-      startMs: utterance.startMs,
-      endMs: utterance.endMs,
-      koreanText: utterance.koreanText.slice(0, 60),
-    }));
-    const firstStartMs = utterances[0]?.startMs ?? 0;
-    const lastEndMs = utterances[utterances.length - 1]?.endMs ?? 0;
-    const emptySegmentCount = segments.filter((segment) => !segment.text || !segment.text.trim()).length;
-    console.info(
-      `[STT diarization] file=${fileName} raw_segments=${segments.length} empty_segments=${emptySegmentCount} saved_utterances=${utterances.length} speakers=${Object.keys(
-        speakerCounts,
-      ).length} first_start_ms=${firstStartMs} last_end_ms=${lastEndMs} speaker_counts=${JSON.stringify(speakerCounts)}`,
-    );
-    console.info(`[STT diarization preview:first] file=${fileName} ${JSON.stringify(firstUtterancesPreview)}`);
-    console.info(`[STT diarization preview:last] file=${fileName} ${JSON.stringify(lastUtterancesPreview)}`);
-
-    return { utterances };
-  }
-
-  const text = (result as any).text ?? '';
-  return {
-    utterances: [
-      { speakerLabel: 'speaker_1', startMs: 0, endMs: 2000, koreanText: text },
-    ],
-  };
-}
 
   async transcribeEnglishAudio(buffer: Buffer, fileName: string) {
     if (!this.client) {
