@@ -1,0 +1,4 @@
+
+> @elp/ui@0.1.0 typecheck /home/parkjaekyu/projects/english-learning-platform/packages/ui
+> tsc -p tsconfig.json --noEmit
+

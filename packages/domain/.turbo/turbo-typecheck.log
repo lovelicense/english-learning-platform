@@ -1,0 +1,4 @@
+
+> @elp/domain@0.1.0 typecheck /home/parkjaekyu/projects/english-learning-platform/packages/domain
+> tsc -p tsconfig.json --noEmit
+

@@ -1,0 +1,4 @@
+
+> @elp/storage@0.1.0 typecheck /home/parkjaekyu/projects/english-learning-platform/packages/storage
+> tsc -p tsconfig.json --noEmit
+

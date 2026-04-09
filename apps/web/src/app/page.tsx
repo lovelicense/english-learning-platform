@@ -55,14 +55,14 @@ export default function HomePage() {
     <main className="container grid landing" style={{ gap: 24 }}>
       <section className="hero card">
         <div>
-          <h1 className="h1" style={{ marginTop: 14 }}>내 말 기반 영어훈련 앱</h1>
+          <h1 className="h1" style={{ marginTop: 14 }}>내 언어 데이터 플랫폼</h1>
           <p className="muted" style={{ marginTop: 12 }}>
-            로그인 후 녹음과 파일 업로드, 영어 표현 생성, 발음 연습, 복습까지 한 흐름으로 이어서 학습할 수 있습니다.
+            내가 실제로 말한 음성과 문장을 모아 정리하고, 영어 학습과 다양한 AI 활용으로 다시 연결할 수 있는 개인 언어 데이터 서비스입니다.
           </p>
           <div className="grid feature-list" style={{ marginTop: 18 }}>
-            <div className="mini-card"><strong>1. 바로 시작</strong><div className="muted">로그인 후 학습 화면으로 바로 이동합니다.</div></div>
-            <div className="mini-card"><strong>2. 녹음과 업로드</strong><div className="muted">내 음성을 불러오거나 바로 녹음해서 학습 자료로 만듭니다.</div></div>
-            <div className="mini-card"><strong>3. 영어 학습</strong><div className="muted">표현 생성, 듣기, 말하기 테스트와 복습까지 이어집니다.</div></div>
+            <div className="mini-card"><strong>1. 수집</strong><div className="muted">녹음과 업로드로 내 언어 데이터를 모읍니다.</div></div>
+            <div className="mini-card"><strong>2. 정리</strong><div className="muted">문장, 화자, 맥락, 표현을 구조화해 정리합니다.</div></div>
+            <div className="mini-card"><strong>3. 활용</strong><div className="muted">영어 학습과 다양한 AI 활용으로 다시 연결합니다.</div></div>
           </div>
         </div>
       </section>

@@ -79,6 +79,26 @@ async function decodeAudioFile(file: File) {
   }
 }
 
+export async function normalizeAudioFileForUpload(file: File): Promise<File> {
+  const normalizedType = (file.type || "").toLowerCase();
+  const normalizedName = file.name.toLowerCase();
+  const alreadySafeFormat =
+    normalizedType.includes("wav") ||
+    normalizedType.includes("mpeg") ||
+    normalizedType.includes("mp3") ||
+    normalizedName.endsWith(".wav") ||
+    normalizedName.endsWith(".mp3");
+
+  if (alreadySafeFormat) {
+    return file;
+  }
+
+  const decoded = await decodeAudioFile(file);
+  const baseName = sanitizeBaseName(file.name);
+  const blob = encodeAudioBufferToWav(decoded, 0, decoded.length);
+  return new File([blob], `${baseName}.wav`, { type: "audio/wav" });
+}
+
 export async function prepareAudioChunksForUpload(
   file: File,
   maxChunkDurationMs: number,

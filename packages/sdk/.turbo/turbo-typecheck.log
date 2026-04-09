@@ -1,0 +1,7 @@
+
+> @elp/sdk@0.1.0 typecheck /home/parkjaekyu/projects/english-learning-platform/packages/sdk
+> tsc -p tsconfig.json --noEmit
+
+src/index.ts(1,133): error TS6059: File '/home/parkjaekyu/projects/english-learning-platform/packages/shared/src/index.ts' is not under 'rootDir' '/home/parkjaekyu/projects/english-learning-platform/packages/sdk/src'. 'rootDir' is expected to contain all source files.
+src/index.ts(3,17): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+ ELIFECYCLE  Command failed with exit code 2.

@@ -1,0 +1,4 @@
+
+> @elp/web@ typecheck /home/parkjaekyu/projects/english-learning-platform/apps/web
+> tsc -p tsconfig.json --noEmit
+

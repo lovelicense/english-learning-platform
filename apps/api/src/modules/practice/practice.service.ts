@@ -38,12 +38,23 @@ export class PracticeService {
     promptKorean?: string,
     promptContext?: string,
   ) {
-    const expression = await this.prisma.expression.findFirst({ where: { id: expressionId, userId } });
+    const expression = await this.prisma.expression.findFirst({
+      where: { id: expressionId, userId },
+      include: {
+        utterance: {
+          include: {
+            recording: true,
+          },
+        },
+      },
+    });
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
 
     const evaluation = await this.openai.evaluatePracticeAnswer({
       koreanPrompt: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
+      conversationSummary: expression.utterance?.recording?.analysisSummary ?? undefined,
+      currentIntent: expression.utterance?.analysisIntent ?? undefined,
       targetEnglish: expression.englishBase,
       userAnswer: answer.trim(),
       mode: 'text',
@@ -99,7 +110,16 @@ export class PracticeService {
     promptKorean?: string,
     promptContext?: string,
   ) {
-    const expression = await this.prisma.expression.findFirst({ where: { id: expressionId, userId } });
+    const expression = await this.prisma.expression.findFirst({
+      where: { id: expressionId, userId },
+      include: {
+        utterance: {
+          include: {
+            recording: true,
+          },
+        },
+      },
+    });
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
 
     const buffer = await this.storage.getObjectBuffer(audioKey);
@@ -115,6 +135,8 @@ export class PracticeService {
     const evaluation = await this.openai.evaluatePracticeAnswer({
       koreanPrompt: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
+      conversationSummary: expression.utterance?.recording?.analysisSummary ?? undefined,
+      currentIntent: expression.utterance?.analysisIntent ?? undefined,
       targetEnglish: expression.englishBase,
       userAnswer: answer,
       mode: 'voice',

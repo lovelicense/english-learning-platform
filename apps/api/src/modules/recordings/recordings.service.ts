@@ -144,7 +144,6 @@ export class RecordingsService {
       where: { id: utteranceId },
       data: { koreanText: koreanText.trim() },
     });
-    await this.invalidateRecordingAnalysis(utterance.recordingId);
     return updated;
   }
 
@@ -172,7 +171,6 @@ export class RecordingsService {
         where: { id: utteranceId },
       }),
     ]);
-    await this.invalidateRecordingAnalysis(utterance.recordingId);
 
     return {
       success: true,
@@ -206,7 +204,6 @@ export class RecordingsService {
         data: { isMine: true },
       }),
     ]);
-    await this.invalidateRecordingAnalysis(recordingId);
 
     return this.getOne(userId, recordingId);
   }
@@ -238,7 +235,6 @@ export class RecordingsService {
       where: { recordingId, speakerLabel: normalizedSpeakerLabel },
       data: { speakerLabel: normalizedNextSpeakerLabel },
     });
-    await this.invalidateRecordingAnalysis(recordingId);
 
     return this.getOne(userId, recordingId);
   }
@@ -285,12 +281,12 @@ export class RecordingsService {
         .filter((utteranceId): utteranceId is string => Boolean(utteranceId)),
     );
     const intentUpdates = analysis.intents
-      .map((item) => {
+      .map((item, index) => {
         const matchedUtteranceId = item.utteranceId && validUtteranceIds.has(item.utteranceId)
           ? item.utteranceId
           : input.turns.find(
               (turn) => turn.speakerLabel === item.speakerLabel && turn.koreanText === item.koreanText,
-            )?.utteranceId;
+            )?.utteranceId ?? input.turns[index]?.utteranceId;
         const utteranceId = matchedUtteranceId && validUtteranceIds.has(matchedUtteranceId) ? matchedUtteranceId : null;
         if (!utteranceId) return null;
         return this.prisma.utterance.updateMany({

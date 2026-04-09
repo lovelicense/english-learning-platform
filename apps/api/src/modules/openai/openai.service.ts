@@ -41,6 +41,8 @@ type PracticeEvaluationInput = {
   easyAnswer?: string;
   naturalAnswer?: string;
   promptContext?: string;
+  conversationSummary?: string;
+  currentIntent?: string;
 };
 
 type PracticeEvaluationResult = {
@@ -205,11 +207,17 @@ export class OpenAiService {
             'If the Korean line implies a reason or constraint from context, reflect that meaning naturally.',
             'If relationship, situation, or desired tone are provided, incorporate them.',
             'If conversation summary and current intent are provided, use them as high-priority guidance.',
+            'The Korean source meaning is the top priority. Do not change semantic direction or viewpoint.',
+            'base, easy, natural, and note must all preserve the same core meaning and direction.',
+            'All four outputs must be mutually consistent. They must not disagree about who moves, who receives, or direction of action.',
+            'Pay special attention to directional/confusable pairs such as take/bring, come/go, give/take, lend/borrow, and here/there.',
+            'If the Korean is ambiguous, choose the most likely meaning from context, then keep all outputs consistent with that one choice.',
             'Return JSON with base, easy, natural, note.',
             'base: the best core sentence for memorizing and speaking.',
             'easy: simpler and easier spoken English with the same meaning.',
             'natural: the most natural conversational phrasing.',
             'note: explain the nuance and explicitly mention the key intent and context used in the interpretation.',
+            'note must describe the same meaning used in base, easy, and natural, and must not introduce a different verb or direction.',
             'Keep note concise but concrete.',
           ].join(' '),
         },
@@ -256,11 +264,16 @@ export class OpenAiService {
             'Do not require exact sentence match if the meaning is preserved.',
             'Score meaning delivery, naturalness, and grammar separately from 0 to 100.',
             'Then produce an overall score from 0 to 100.',
+            'The Korean prompt is the highest-priority ground truth for meaning.',
+            'Treat targetEnglish, easyAnswer, naturalAnswer, and note as references, not absolute truth.',
+            'If any reference expression conflicts with the Korean prompt, follow the Korean prompt and do not copy the conflicting wording into suggested answers.',
+            'Pay special attention to directional/confusable pairs such as take/bring, come/go, give/take, lend/borrow, and here/there.',
             'Provide concise Korean feedback.',
             'strengthComment: what the learner did well.',
             'correctionComment: what to improve and why.',
-            'suggestedAnswer: a strong recommended answer.',
-            'suggestedAnswerAlt: an alternative natural answer if relevant.',
+            'suggestedAnswer: a strong recommended answer that matches the Korean prompt meaning first.',
+            'suggestedAnswerAlt: an alternative natural answer with the same meaning as the Korean prompt.',
+            'If the provided reference expression appears semantically wrong, you may correct it in suggestedAnswer and mention the mismatch briefly in correctionComment.',
             'Be encouraging and practical.',
             'Return JSON only.',
           ].join(' '),
@@ -272,6 +285,8 @@ export class OpenAiService {
             `답변 방식: ${input.mode}`,
             `한국어 문제: ${input.koreanPrompt}`,
             input.promptContext ? `문제 상황 설명: ${input.promptContext}` : null,
+            input.conversationSummary ? `대화 요약: ${input.conversationSummary}` : null,
+            input.currentIntent ? `현재 발화 의도: ${input.currentIntent}` : null,
             `기준 영어 표현: ${input.targetEnglish}`,
             input.easyAnswer ? `쉬운 대안 표현: ${input.easyAnswer}` : null,
             input.naturalAnswer ? `자연스러운 대안 표현: ${input.naturalAnswer}` : null,

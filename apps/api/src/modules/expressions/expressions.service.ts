@@ -296,12 +296,12 @@ export class ExpressionsService {
 
     const validUtteranceIds = new Set(orderedUtterances.map((utterance) => utterance.id));
     const intentUpdates = analysis.intents
-      .map((item) => {
+      .map((item, index) => {
         const matchedUtteranceId = item.utteranceId && validUtteranceIds.has(item.utteranceId)
           ? item.utteranceId
           : orderedUtterances.find(
               (utterance) => utterance.speakerLabel === item.speakerLabel && utterance.koreanText === item.koreanText,
-            )?.id;
+            )?.id ?? orderedUtterances[index]?.id;
         const utteranceId = matchedUtteranceId && validUtteranceIds.has(matchedUtteranceId) ? matchedUtteranceId : null;
         if (!utteranceId) return null;
         return this.prisma.utterance.updateMany({

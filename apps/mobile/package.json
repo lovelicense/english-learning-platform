@@ -1,0 +1,29 @@
+{
+  "name": "@elp/mobile",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "dev": "expo start",
+    "android": "expo run:android",
+    "build": "echo mobile build will be added after Expo install",
+    "lint": "echo mobile lint pending Expo install",
+    "typecheck": "echo mobile typecheck pending Expo install"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.26.0",
+    "expo": "^52.0.0",
+    "expo-file-system": "~18.0.12",
+    "expo-router": "^4.0.0",
+    "expo-secure-store": "~14.0.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-native": "^0.76.0",
+    "react-native-web": "~0.19.13",
+    "zustand": "^5.0.0",
+    "@tanstack/react-query": "^5.62.0"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.12",
+    "typescript": "^5.6.3"
+  }
+}

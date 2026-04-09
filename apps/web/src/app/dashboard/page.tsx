@@ -4,15 +4,23 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, createPresignedUploadTask } from "../../lib/api-client";
-import { prepareAudioChunksForUpload } from "../../lib/audio-split";
+import { normalizeAudioFileForUpload, prepareAudioChunksForUpload } from "../../lib/audio-split";
 import { clearSession, getStoredUser, getToken } from "../../lib/auth";
 import {
   buildRecordingContextPayload,
   EMPTY_RECORDING_CONTEXT,
   loadRecordingContext,
+  loadRecentGenerationContext,
   saveRecordingContext,
+  saveRecentGenerationContext,
   type RecordingGenerationContext,
 } from "../../lib/recording-context";
+import {
+  DEFAULT_RECORDING_ANALYSIS_MODE,
+  loadRecordingAnalysisMode,
+  saveRecordingAnalysisMode,
+  type RecordingAnalysisMode,
+} from "../../lib/recording-analysis-preference";
 import { startChunkedRecordedAudioSession, startRecordedAudioSession, type RecordingSession } from "../../lib/recorder";
 
 type MeResponse = { userId: string; email: string };
@@ -254,6 +262,30 @@ type FailedManualChunk = {
   reason: string;
 };
 
+type TtsLibraryPlaybackPlan = {
+  expressionIds: string[];
+  repeatCount: 1 | 2 | 3;
+  gapMs: number;
+  expressionIndex: number;
+  repeatIndex: number;
+  sessionId: number;
+};
+
+const RELATIONSHIP_TEMPLATES = [
+  "엄마 - 아이",
+  "아빠 - 아이",
+  "남편 - 아내",
+  "가족",
+  "회사 상사 - 동료",
+  "부부",
+  "친구",
+  "손님 - 직원",
+  "부모 - 자녀",
+  "선생님 - 학생",
+];
+const SITUATION_TEMPLATES = ["집", "이동 중", "식사 중", "가족 식사", "병원", "학교", "가게", "통화 중"];
+const TONE_TEMPLATES = ["자연스럽게", "부드럽게", "단호하게", "친근하게", "공손하게"];
+
 export default function DashboardPage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
@@ -264,7 +296,9 @@ export default function DashboardPage() {
   const [uploadPercent, setUploadPercent] = useState(0);
   const [recording, setRecording] = useState<RecordingResponse | null>(null);
   const [recordingContext, setRecordingContext] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
+  const [recordingContextDraft, setRecordingContextDraft] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
   const [recordingAnalysis, setRecordingAnalysis] = useState<RecordingAnalysis | null>(null);
+  const [analysisNeedsRefresh, setAnalysisNeedsRefresh] = useState(false);
   const [recordings, setRecordings] = useState<RecordingSummary[]>([]);
   const [utteranceDrafts, setUtteranceDrafts] = useState<Record<string, string>>({});
   const [expressions, setExpressions] = useState<Expression[]>([]);
@@ -297,8 +331,16 @@ export default function DashboardPage() {
   const [activeTimeoutMessage, setActiveTimeoutMessage] = useState("");
   const [showAutoFlowHelp, setShowAutoFlowHelp] = useState(false);
   const [showManualGenerateComposer, setShowManualGenerateComposer] = useState(false);
+  const [showManualGenerateContext, setShowManualGenerateContext] = useState(false);
   const [manualGenerateText, setManualGenerateText] = useState("");
+  const [recentManualContext, setRecentManualContext] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
+  const [recordingAnalysisMode, setRecordingAnalysisMode] = useState<RecordingAnalysisMode>(DEFAULT_RECORDING_ANALYSIS_MODE);
   const [manualRecordingLimitMs, setManualRecordingLimitMs] = useState(MANUAL_RECORDING_MAX_MS);
+  const [ttsLibraryRepeatCount, setTtsLibraryRepeatCount] = useState<1 | 2 | 3>(1);
+  const [ttsLibraryGapMs, setTtsLibraryGapMs] = useState(0);
+  const [isTtsLibraryPlaying, setIsTtsLibraryPlaying] = useState(false);
+  const [isTtsLibraryPreparing, setIsTtsLibraryPreparing] = useState(false);
+  const [ttsLibraryCurrentExpressionId, setTtsLibraryCurrentExpressionId] = useState("");
   const [activeRecordingSessionId, setActiveRecordingSessionId] = useState("");
   const [activeRecordingSessionStatus, setActiveRecordingSessionStatus] = useState("");
   const [manualRecordingStats, setManualRecordingStats] = useState<ManualRecordingStats>({
@@ -319,6 +361,7 @@ export default function DashboardPage() {
   });
   const [visibleCounts, setVisibleCounts] = useState<Record<keyof typeof DEFAULT_PREVIEW_COUNTS, number>>(DEFAULT_PREVIEW_COUNTS);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsLibraryAudioRef = useRef<HTMLAudioElement | null>(null);
   const expressionDetailRef = useRef<HTMLDivElement | null>(null);
   const recordingDetailRef = useRef<HTMLDivElement | null>(null);
   const rawAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -335,6 +378,11 @@ export default function DashboardPage() {
   const abortControllersRef = useRef<AbortController[]>([]);
   const userCancelledRef = useRef(false);
   const sessionPollTimeoutRef = useRef<number | null>(null);
+  const recordingContextRef = useRef<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
+  const ttsLibraryPlaybackPlanRef = useRef<TtsLibraryPlaybackPlan | null>(null);
+  const ttsLibraryPlaybackTimeoutRef = useRef<number | null>(null);
+  const ttsLibraryPlaybackSessionIdRef = useRef(0);
+  const ttsLibraryAudioCacheRef = useRef<Map<string, string>>(new Map());
 
   const selectedExpression = useMemo(
     () => expressions.find((item) => item.id === selectedExpressionId) ?? expressions[0] ?? null,
@@ -415,6 +463,8 @@ export default function DashboardPage() {
     ? intentByUtteranceId.get(selectedExpression.utteranceId) ?? ""
     : "";
   const visibleRecordingSummary = recordingAnalysis?.summary ?? recording?.analysisSummary ?? "";
+  const hasUnsavedContextChanges = !contextsEqual(recordingContextDraft, recordingContext);
+  const hasAnyAnalysis = Boolean(visibleRecordingSummary) || (recording?.utterances ?? []).some((item) => Boolean(item.analysisIntent));
   const isReviewAnswerHidden =
     Boolean(activeReviewExpressionId) && selectedExpression?.id === activeReviewExpressionId && !score;
 
@@ -485,15 +535,40 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!recording?.id) {
       setRecordingContext(EMPTY_RECORDING_CONTEXT);
+      setRecordingContextDraft(EMPTY_RECORDING_CONTEXT);
+      setAnalysisNeedsRefresh(false);
       return;
     }
-    setRecordingContext(loadRecordingContext(recording.id));
+    const fallbackContext = buildRecordingContextFromAnalysis(recording);
+    const storedContext = loadRecordingContext(recording.id);
+    const nextContext = contextsEqual(storedContext, EMPTY_RECORDING_CONTEXT) ? fallbackContext : storedContext;
+    setRecordingContext(nextContext);
+    setRecordingContextDraft(nextContext);
+    const analysisContext = buildRecordingContextFromAnalysis(recording);
+    const hasAnalysisContent = Boolean(recording.analysisSummary) || recording.utterances.some((item) => Boolean(item.analysisIntent));
+    setAnalysisNeedsRefresh(hasAnalysisContent && !contextsEqual(nextContext, analysisContext));
   }, [recording?.id]);
 
   useEffect(() => {
-    if (!recording?.id) return;
-    saveRecordingContext(recording.id, recordingContext);
-  }, [recording?.id, recordingContext]);
+    recordingContextRef.current = recordingContext;
+  }, [recordingContext]);
+
+  useEffect(() => {
+    setRecentManualContext(loadRecentGenerationContext());
+    setRecordingAnalysisMode(loadRecordingAnalysisMode());
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (ttsLibraryPlaybackTimeoutRef.current) {
+        window.clearTimeout(ttsLibraryPlaybackTimeoutRef.current);
+      }
+      for (const objectUrl of ttsLibraryAudioCacheRef.current.values()) {
+        URL.revokeObjectURL(objectUrl);
+      }
+      ttsLibraryAudioCacheRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (!getToken()) {
@@ -540,12 +615,32 @@ export default function DashboardPage() {
     setRecordingRemainingMs(0);
   }
 
-  function formatAudioTime(seconds: number) {
-    const totalSeconds = Math.max(0, Math.floor(seconds));
-    const minutes = Math.floor(totalSeconds / 60);
-    const remain = totalSeconds % 60;
-    return `${minutes}:${remain.toString().padStart(2, "0")}`;
-  }
+function formatAudioTime(seconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(totalSeconds / 60);
+  const remain = totalSeconds % 60;
+  return `${minutes}:${remain.toString().padStart(2, "0")}`;
+}
+
+function formatRecordingSeconds(ms: number) {
+  return `${Math.max(0, ms / 1000).toFixed(1)}초`;
+}
+
+function formatGapLabel(ms: number) {
+  return ms === 0 ? "없음" : `${(ms / 1000).toFixed(ms % 1000 === 0 ? 0 : 1)}초`;
+}
+
+function contextsEqual(left: RecordingGenerationContext, right: RecordingGenerationContext) {
+  return left.relationship === right.relationship && left.situation === right.situation && left.tone === right.tone;
+}
+
+function buildRecordingContextFromAnalysis(recording: RecordingResponse | null): RecordingGenerationContext {
+  return {
+    relationship: recording?.analysisRelationship ?? "",
+    situation: recording?.analysisSituation ?? "",
+    tone: recording?.analysisTone ?? "",
+  };
+}
 
   function seekRawAudio(timeSeconds: number, autoPlay = false) {
     const player = rawAudioRef.current;
@@ -803,6 +898,193 @@ export default function DashboardPage() {
     setRecordingAnalysis(null);
   }
 
+  async function runRecordingAnalysis(
+    recordingId: string,
+    successMessage?: string,
+    context: RecordingGenerationContext = recordingContextRef.current,
+  ) {
+    const result = await apiFetch<RecordingAnalysis>(`/recordings/${recordingId}/analyze`, {
+      method: "POST",
+      body: JSON.stringify(buildRecordingContextPayload(context)),
+    });
+    const refreshedRecording = await apiFetch<RecordingResponse>(`/recordings/${recordingId}`);
+    setRecording((current) => (current?.id === recordingId ? refreshedRecording : current));
+    syncUtteranceDrafts(refreshedRecording);
+    setRecordingAnalysis(result);
+    setAnalysisNeedsRefresh(false);
+    if (successMessage) {
+      setMessage(successMessage);
+    }
+    return result;
+  }
+
+  async function runAutoRecordingAnalysis(recordingId: string, successMessage?: string) {
+    if (recordingAnalysisMode !== "auto") return null;
+    return runRecordingAnalysis(recordingId, successMessage);
+  }
+
+  function handleRecordingAnalysisModeChange(mode: RecordingAnalysisMode) {
+    setRecordingAnalysisMode(mode);
+    saveRecordingAnalysisMode(mode);
+  }
+
+  function stopTtsLibraryPlayback() {
+    ttsLibraryPlaybackPlanRef.current = null;
+    ttsLibraryPlaybackSessionIdRef.current += 1;
+    if (ttsLibraryPlaybackTimeoutRef.current) {
+      window.clearTimeout(ttsLibraryPlaybackTimeoutRef.current);
+      ttsLibraryPlaybackTimeoutRef.current = null;
+    }
+    const player = ttsLibraryAudioRef.current;
+    if (player) {
+      player.pause();
+      player.currentTime = 0;
+      player.removeAttribute("src");
+      player.load();
+    }
+    setIsTtsLibraryPlaying(false);
+    setIsTtsLibraryPreparing(false);
+    setTtsLibraryCurrentExpressionId("");
+  }
+
+  async function getCachedTtsLibrarySrc(expression: Expression) {
+    const cached = ttsLibraryAudioCacheRef.current.get(expression.id);
+    if (cached) return cached;
+    if (!expression.ttsUrl) {
+      throw new Error("TTS 재생 URL이 없습니다.");
+    }
+
+    const response = await fetch(expression.ttsUrl);
+    if (!response.ok) {
+      throw new Error("TTS 음성 파일을 불러오지 못했습니다.");
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    ttsLibraryAudioCacheRef.current.set(expression.id, objectUrl);
+    return objectUrl;
+  }
+
+  async function playTtsLibraryPlanStep(plan: TtsLibraryPlaybackPlan) {
+    const expressionId = plan.expressionIds[plan.expressionIndex];
+    const expression = completedTtsExpressions.find((item) => item.id === expressionId);
+    if (!expression) {
+      stopTtsLibraryPlayback();
+      return;
+    }
+
+    const activeSessionId = plan.sessionId;
+    setIsTtsLibraryPreparing(true);
+    setTtsLibraryCurrentExpressionId(expression.id);
+    try {
+      const src = await getCachedTtsLibrarySrc(expression);
+      if (ttsLibraryPlaybackSessionIdRef.current !== activeSessionId) return;
+      const player = ttsLibraryAudioRef.current;
+      if (!player) return;
+      player.src = src;
+      player.load();
+      setIsTtsLibraryPreparing(false);
+      setIsTtsLibraryPlaying(true);
+      await player.play();
+    } catch (err) {
+      if (ttsLibraryPlaybackSessionIdRef.current !== activeSessionId) return;
+      setIsTtsLibraryPreparing(false);
+      setIsTtsLibraryPlaying(false);
+      setError(err instanceof Error ? err.message : "TTS 라이브러리 재생에 실패했습니다.");
+    }
+  }
+
+  function handleTtsLibraryAudioEnded() {
+    const plan = ttsLibraryPlaybackPlanRef.current;
+    if (!plan) return;
+
+    const isLastRepeat = plan.repeatIndex + 1 >= plan.repeatCount;
+    const isLastExpression = plan.expressionIndex + 1 >= plan.expressionIds.length;
+
+    if (isLastRepeat && isLastExpression) {
+      stopTtsLibraryPlayback();
+      setMessage("TTS 전체 재생이 끝났습니다.");
+      return;
+    }
+
+    const nextPlan: TtsLibraryPlaybackPlan = isLastRepeat
+      ? {
+          ...plan,
+          expressionIndex: plan.expressionIndex + 1,
+          repeatIndex: 0,
+        }
+      : {
+          ...plan,
+          repeatIndex: plan.repeatIndex + 1,
+        };
+    ttsLibraryPlaybackPlanRef.current = nextPlan;
+    const delayMs = nextPlan.gapMs;
+    if (delayMs > 0) {
+      ttsLibraryPlaybackTimeoutRef.current = window.setTimeout(() => {
+        playTtsLibraryPlanStep(nextPlan).catch(() => undefined);
+      }, delayMs);
+    } else {
+      void playTtsLibraryPlanStep(nextPlan);
+    }
+  }
+
+  async function startTtsLibraryPlayback() {
+    if (completedTtsExpressions.length === 0) {
+      setError("재생할 TTS 완료 표현이 없습니다.");
+      return;
+    }
+
+    stopTtsLibraryPlayback();
+    setError("");
+    setMessage("");
+    const nextSessionId = ttsLibraryPlaybackSessionIdRef.current + 1;
+    ttsLibraryPlaybackSessionIdRef.current = nextSessionId;
+    const plan: TtsLibraryPlaybackPlan = {
+      expressionIds: completedTtsExpressions.map((item) => item.id),
+      repeatCount: ttsLibraryRepeatCount,
+      gapMs: ttsLibraryGapMs,
+      expressionIndex: 0,
+      repeatIndex: 0,
+      sessionId: nextSessionId,
+    };
+    ttsLibraryPlaybackPlanRef.current = plan;
+    await playTtsLibraryPlanStep(plan);
+  }
+
+  function markAnalysisAsOutdated() {
+    setAnalysisNeedsRefresh(true);
+  }
+
+  function updateRecordingContextField(field: keyof RecordingGenerationContext, value: string) {
+    setRecordingContextDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  async function handleSaveRecordingContext() {
+    if (!recording?.id) return;
+    if (!hasUnsavedContextChanges) {
+      setMessage("저장할 맥락 변경사항이 없습니다.");
+      return;
+    }
+
+    const nextContext = recordingContextDraft;
+    setError("");
+    setMessage("");
+    setLoading("save-recording-context");
+    try {
+      saveRecordingContext(recording.id, nextContext);
+      setRecordingContext(nextContext);
+      if (recordingAnalysisMode === "auto") {
+        await runRecordingAnalysis(recording.id, "맥락 힌트를 저장하고 대화 분석을 자동으로 갱신했습니다.", nextContext);
+      } else {
+        markAnalysisAsOutdated();
+        setMessage("대화 맥락 힌트를 저장했습니다. 분석을 다시 실행하면 최신 맥락이 반영됩니다.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "대화 맥락 저장에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
   function updateLocalUtterance(utteranceId: string, koreanText: string) {
     setRecording((current) => {
       if (!current) return current;
@@ -860,27 +1142,28 @@ export default function DashboardPage() {
   }
 
   async function uploadAndProcessFile(file: File) {
-    return uploadAndProcessFileInternal(file, { trackFlow: true, selectProcessedRecording: true });
+    return uploadAndProcessFileInternal(file, { trackFlow: true, selectProcessedRecording: true, normalizeAudio: true });
   }
 
   async function uploadAndProcessFileInternal(
     file: File,
-    options: { trackFlow?: boolean; selectProcessedRecording?: boolean } = {},
+    options: { trackFlow?: boolean; selectProcessedRecording?: boolean; normalizeAudio?: boolean } = {},
   ) {
+    const uploadFile = options.normalizeAudio ? await normalizeAudioFileForUpload(file) : file;
     if (options.trackFlow) {
-      markFlow("presign", `${file.name} 업로드 준비`);
+      markFlow("presign", `${uploadFile.name} 업로드 준비`);
     }
     const presign = await runWithTimeout("presign", (signal) => apiFetch<PresignResponse>("/recordings/presign", {
       method: "POST",
-      body: JSON.stringify({ fileName: file.name, contentType: file.type || "audio/webm" }),
+      body: JSON.stringify({ fileName: uploadFile.name, contentType: uploadFile.type || "audio/webm" }),
       signal,
     }));
 
     if (options.trackFlow) {
-      markFlow("upload", `${Math.max(1, Math.round(file.size / 1024))}KB 파일 업로드`);
+      markFlow("upload", `${Math.max(1, Math.round(uploadFile.size / 1024))}KB 파일 업로드`);
     }
     setUploadPercent(1);
-    const uploadTask = createPresignedUploadTask(presign.uploadUrl, file, (percent) => setUploadPercent(percent));
+    const uploadTask = createPresignedUploadTask(presign.uploadUrl, uploadFile, (percent) => setUploadPercent(percent));
     uploadTaskRef.current = uploadTask;
     try {
       await Promise.race<void>([
@@ -949,17 +1232,18 @@ export default function DashboardPage() {
   }
 
   async function uploadSessionPart(sessionId: string, partNumber: number, file: File) {
+    const uploadFile = await normalizeAudioFileForUpload(file);
     const presign = await apiFetch<RecordingSessionPartPresignResponse>(`/recording-sessions/${sessionId}/parts/presign`, {
       method: "POST",
       body: JSON.stringify({
         partNumber,
-        fileName: file.name,
-        contentType: file.type || "audio/webm",
-        sizeBytes: file.size,
+        fileName: uploadFile.name,
+        contentType: uploadFile.type || "audio/webm",
+        sizeBytes: uploadFile.size,
       }),
     });
 
-    const uploadTask = createPresignedUploadTask(presign.uploadUrl, file, (percent) => setUploadPercent(percent));
+    const uploadTask = createPresignedUploadTask(presign.uploadUrl, uploadFile, (percent) => setUploadPercent(percent));
     uploadTaskRef.current = uploadTask;
     try {
       await uploadTask.promise;
@@ -971,11 +1255,11 @@ export default function DashboardPage() {
       method: "POST",
       body: JSON.stringify({
         durationMs: undefined,
-        sizeBytes: file.size,
+        sizeBytes: uploadFile.size,
       }),
     });
 
-    setSelectedFile(file);
+    setSelectedFile(uploadFile);
     await refreshRecordings();
     return presign;
   }
@@ -1473,7 +1757,15 @@ export default function DashboardPage() {
     setLoading(`save-${utteranceId}`);
     try {
       await saveUtteranceText(utteranceId);
-      setMessage("변환된 문장을 수정해 저장했습니다.");
+      if (recording?.id) {
+        await runAutoRecordingAnalysis(recording.id, "문장을 저장하고 대화 분석을 자동으로 갱신했습니다.");
+      } else {
+        setMessage("변환된 문장을 수정해 저장했습니다.");
+      }
+      if (recordingAnalysisMode !== "auto") {
+        markAnalysisAsOutdated();
+        setMessage("변환된 문장을 수정해 저장했습니다.");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "문장 저장에 실패했습니다.");
     } finally {
@@ -1501,14 +1793,18 @@ export default function DashboardPage() {
       if (recording) {
         const loaded = await apiFetch<RecordingResponse>(`/recordings/${recording.id}`);
         setRecordingWithDrafts(loaded);
+        await runAutoRecordingAnalysis(loaded.id, "문장을 삭제하고 대화 분석을 자동으로 갱신했습니다.");
       }
       await refreshLists();
       await refreshRecordings();
-      setMessage(
-        response.deletedExpressionCount > 0
-          ? `문장과 연결된 영어 표현 ${response.deletedExpressionCount}개를 함께 삭제했습니다.`
-          : "문장을 삭제했습니다.",
-      );
+      if (recordingAnalysisMode !== "auto") {
+        markAnalysisAsOutdated();
+        setMessage(
+          response.deletedExpressionCount > 0
+            ? `문장과 연결된 영어 표현 ${response.deletedExpressionCount}개를 함께 삭제했습니다.`
+            : "문장을 삭제했습니다.",
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "문장 삭제에 실패했습니다.");
     } finally {
@@ -1531,10 +1827,13 @@ export default function DashboardPage() {
         body: JSON.stringify({ koreanText: text.trim(), ...buildRecordingContextPayload(recordingContext) }),
         signal,
       }));
+      saveRecentGenerationContext(recordingContext);
+      setRecentManualContext(recordingContext);
       await refreshLists(expression.id);
       scrollToDashboardSection("expressions");
       setManualGenerateText("");
       setShowManualGenerateComposer(false);
+      setShowManualGenerateContext(false);
       setMessage("직접 입력한 문장으로 표현을 생성했습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "표현 생성에 실패했습니다.");
@@ -1918,7 +2217,11 @@ export default function DashboardPage() {
         body: JSON.stringify({ speakerLabel }),
       });
       setRecordingWithDrafts(updated);
-      setMessage(`${speakerLabel}를 내 화자로 지정했습니다. 이후 문장 추출과 표현 생성이 이 선택을 기준으로 동작합니다.`);
+      await runAutoRecordingAnalysis(updated.id, "내 화자 설정을 반영해 대화 분석을 자동으로 갱신했습니다.");
+      if (recordingAnalysisMode !== "auto") {
+        markAnalysisAsOutdated();
+        setMessage(`${speakerLabel}를 내 화자로 지정했습니다. 이후 문장 추출과 표현 생성이 이 선택을 기준으로 동작합니다.`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "내 화자 설정에 실패했습니다.");
     } finally {
@@ -1939,7 +2242,11 @@ export default function DashboardPage() {
         body: JSON.stringify({ speakerLabel, nextSpeakerLabel: nextSpeakerLabel.trim() }),
       });
       setRecordingWithDrafts(updated);
-      setMessage(`${speakerLabel} 이름을 "${nextSpeakerLabel.trim()}"로 저장했습니다.`);
+      await runAutoRecordingAnalysis(updated.id, "화자 이름 변경을 반영해 대화 분석을 자동으로 갱신했습니다.");
+      if (recordingAnalysisMode !== "auto") {
+        markAnalysisAsOutdated();
+        setMessage(`${speakerLabel} 이름을 "${nextSpeakerLabel.trim()}"로 저장했습니다.`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "화자 이름 저장에 실패했습니다.");
     } finally {
@@ -2002,12 +2309,7 @@ export default function DashboardPage() {
     setMessage("");
     setLoading("analyze-recording");
     try {
-      const result = await apiFetch<RecordingAnalysis>(`/recordings/${recording.id}/analyze`, {
-        method: "POST",
-        body: JSON.stringify(buildRecordingContextPayload(recordingContext)),
-      });
-      setRecordingAnalysis(result);
-      setMessage("대화 요약과 발화 의도 분석을 불러왔습니다.");
+      await runRecordingAnalysis(recording.id, "대화 요약과 발화 의도 분석을 불러왔습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "대화 분석에 실패했습니다.");
     } finally {
@@ -2024,8 +2326,11 @@ export default function DashboardPage() {
       <section className="card hero compact">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <h1 className="h1" style={{ marginBottom: 8 }}>서비스 대시보드</h1>
+            <h1 className="h1" style={{ marginBottom: 8 }}>내 언어 데이터 대시보드</h1>
             <p className="muted">로그인 사용자: <strong>{user?.email ?? getStoredUser()?.email ?? "-"}</strong></p>
+            <p className="muted" style={{ marginTop: 8 }}>
+              녹음, 문장, 표현, 테스트 기록을 한곳에 모아 정리하고 학습과 재활용으로 이어갑니다.
+            </p>
           </div>
           <div className="row">
             <button
@@ -2033,7 +2338,7 @@ export default function DashboardPage() {
               onClick={() => setShowManualGenerateComposer((current) => !current)}
               disabled={!!loading}
             >
-              {showManualGenerateComposer ? "직접 문장 생성 닫기" : "직접 문장 생성"}
+              {showManualGenerateComposer ? "빠른 문장 저장 닫기" : "빠른 문장 저장"}
             </button>
             <button className="button secondary" onClick={() => { clearSession(); router.replace("/"); }}>로그아웃</button>
           </div>
@@ -2044,9 +2349,9 @@ export default function DashboardPage() {
         {activeTimeoutMessage && <div className="timeout-box" style={{ marginTop: 12 }}>{activeTimeoutMessage}</div>}
         {showManualGenerateComposer && (
           <div className="mini-card" style={{ marginTop: 14 }}>
-            <strong>직접 문장 생성</strong>
+            <strong>빠른 문장 저장</strong>
             <div className="muted" style={{ marginTop: 8 }}>
-              한국어 문장과 대화 맥락 힌트를 함께 입력하면, 그 맥락을 참고해서 영어 표현을 생성합니다.
+              한국어 문장을 먼저 빠르게 남기고, 필요하면 관계·상황·톤을 덧붙여 영어 표현 생성에 활용합니다.
             </div>
             <div className="grid" style={{ marginTop: 12 }}>
               <textarea
@@ -2056,35 +2361,109 @@ export default function DashboardPage() {
                 onChange={(event) => setManualGenerateText(event.target.value)}
                 placeholder="예: 버스 10분 뒤에 와."
               />
-              <input
-                className="input"
-                value={recordingContext.relationship}
-                onChange={(event) => setRecordingContext((current) => ({ ...current, relationship: event.target.value }))}
-                placeholder="대화 관계 예: 엄마 - 아이, 손님 - 직원"
-              />
-              <textarea
-                className="input"
-                style={{ minHeight: 88, resize: "vertical" }}
-                value={recordingContext.situation}
-                onChange={(event) => setRecordingContext((current) => ({ ...current, situation: event.target.value }))}
-                placeholder="대화 상황 예: 아이가 혼자 집에 있겠다고 해서 엄마가 위험하다고 설명하는 상황"
-              />
-              <input
-                className="input"
-                value={recordingContext.tone}
-                onChange={(event) => setRecordingContext((current) => ({ ...current, tone: event.target.value }))}
-                placeholder="원하는 영어 톤 예: 자연스럽고 부드럽지만 단호한 일상 회화"
-              />
+              <div className="row" style={{ gap: 10 }}>
+                <button
+                  className="button ghost"
+                  onClick={() => setShowManualGenerateContext((current) => !current)}
+                  disabled={!!loading}
+                >
+                  {showManualGenerateContext ? "맥락 입력 접기" : "맥락 추가"}
+                </button>
+                <button
+                  className="button ghost"
+                  onClick={() => {
+                    setRecordingContext(recentManualContext);
+                    setShowManualGenerateContext(true);
+                  }}
+                  disabled={
+                    !!loading ||
+                    (!recentManualContext.relationship && !recentManualContext.situation && !recentManualContext.tone)
+                  }
+                >
+                  최근 맥락 다시 사용
+                </button>
+              </div>
+              {showManualGenerateContext && (
+                <div className="grid" style={{ gap: 12 }}>
+                  <div>
+                    <div className="muted" style={{ marginBottom: 8 }}>관계 템플릿</div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      {RELATIONSHIP_TEMPLATES.map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          className={`chip ${recordingContext.relationship === item ? "selected" : ""}`}
+                          onClick={() => setRecordingContext((current) => ({ ...current, relationship: item }))}
+                        >
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      className="input"
+                      style={{ marginTop: 10 }}
+                      value={recordingContext.relationship}
+                      onChange={(event) => setRecordingContext((current) => ({ ...current, relationship: event.target.value }))}
+                      placeholder="대화 관계 예: 엄마 - 아이, 손님 - 직원"
+                    />
+                  </div>
+                  <div>
+                    <div className="muted" style={{ marginBottom: 8 }}>상황 템플릿</div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      {SITUATION_TEMPLATES.map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          className={`chip ${recordingContext.situation === item ? "selected" : ""}`}
+                          onClick={() => setRecordingContext((current) => ({ ...current, situation: item }))}
+                        >
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      className="input"
+                      style={{ marginTop: 10, minHeight: 88, resize: "vertical" }}
+                      value={recordingContext.situation}
+                      onChange={(event) => setRecordingContext((current) => ({ ...current, situation: event.target.value }))}
+                      placeholder="대화 상황 예: 아이가 혼자 집에 있겠다고 해서 엄마가 위험하다고 설명하는 상황"
+                    />
+                  </div>
+                  <div>
+                    <div className="muted" style={{ marginBottom: 8 }}>톤 템플릿</div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      {TONE_TEMPLATES.map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          className={`chip ${recordingContext.tone === item ? "selected" : ""}`}
+                          onClick={() => setRecordingContext((current) => ({ ...current, tone: item }))}
+                        >
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      className="input"
+                      style={{ marginTop: 10 }}
+                      value={recordingContext.tone}
+                      onChange={(event) => setRecordingContext((current) => ({ ...current, tone: event.target.value }))}
+                      placeholder="원하는 영어 톤 예: 자연스럽고 부드럽지만 단호한 일상 회화"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
             <div className="row" style={{ marginTop: 12 }}>
               <button className="button" onClick={handleGenerateFromText} disabled={!!loading || !manualGenerateText.trim()}>
-                {loading === "manual-generate" ? "생성 중..." : "영어 표현 생성"}
+                {loading === "manual-generate" ? "생성 중..." : "저장 후 영어 표현 생성"}
               </button>
               <button
                 className="button ghost"
                 onClick={() => {
                   setShowManualGenerateComposer(false);
                   setManualGenerateText("");
+                  setShowManualGenerateContext(false);
                 }}
                 disabled={!!loading}
               >
@@ -2118,7 +2497,7 @@ export default function DashboardPage() {
             <button className="button" onClick={handleAutoRecordFlow} disabled={!!loading}>
               {loading === "auto-flow"
                 ? flowStepId === "recording" && isMicRecording
-                  ? "녹음 중..."
+                  ? `녹음 중... ${formatRecordingSeconds(recordingElapsedMs)}`
                   : currentFlowStep
                   ? `${currentFlowStep.label}...`
                   : "처리 중..."
@@ -2135,6 +2514,11 @@ export default function DashboardPage() {
               </button>
             )}
           </div>
+          {loading === "auto-flow" && flowStepId === "recording" && isMicRecording && (
+            <div className="muted" style={{ marginTop: 8 }}>
+              원클릭 녹음 시간: 경과 {formatRecordingSeconds(recordingElapsedMs)} · 남은 시간 {formatRecordingSeconds(recordingRemainingMs)}
+            </div>
+          )}
         </div>
         {showAutoFlowHelp && (
           <div className="help-panel" style={{ marginTop: 14 }}>
@@ -2258,8 +2642,8 @@ export default function DashboardPage() {
         <section ref={recordingsSectionRef} className="card panel-lg">
           {renderSectionIntro(
             "recordings",
-            "1. 수동 녹음 업로드 / 텍스트 변환",
-            "파일 업로드 또는 브라우저 장시간 녹음으로 음성을 글자로 변환합니다.",
+            "1. 음성 데이터 수집 / 텍스트 정리",
+            "파일 업로드 또는 브라우저 녹음으로 음성을 수집하고 텍스트로 정리합니다.",
             `저장된 녹음 ${recordings.length}개 · 현재 문장 ${recording?.utterances.length ?? 0}개`,
           )}
           {expandedSections.recordings && (
@@ -2288,7 +2672,9 @@ export default function DashboardPage() {
               }}
             />
             <button className="button ghost" onClick={handleRecordDemo} disabled={!!loading}>
-              {loading === "record" ? "녹음 중..." : "브라우저 녹음 (최대 5분)"}
+              {loading === "record" && isMicRecording
+                ? `녹음 중... ${formatRecordingSeconds(recordingElapsedMs)}`
+                : "브라우저 녹음 (최대 5분)"}
             </button>
             {loading === "record" && isMicRecording && (
               <button className="button secondary" onClick={handleStopRecording}>
@@ -2302,6 +2688,11 @@ export default function DashboardPage() {
               <button className="button danger" onClick={() => cancelActiveOperations(true)}>취소</button>
             )}
           </div>
+          {loading === "record" && isMicRecording && (
+            <div className="muted" style={{ marginTop: 10 }}>
+              브라우저 녹음 시간: 경과 {formatRecordingSeconds(recordingElapsedMs)} · 남은 시간 {formatRecordingSeconds(recordingRemainingMs)}
+            </div>
+          )}
           <div className="muted" style={{ marginTop: 10 }}>
             선택 파일: {selectedFile ? `${selectedFile.name} (${Math.round(selectedFile.size / 1024)} KB)` : "없음"}
           </div>
@@ -2500,25 +2891,68 @@ export default function DashboardPage() {
                 <div className="grid" style={{ marginTop: 12 }}>
                   <input
                     className="input"
-                    value={recordingContext.relationship}
-                    onChange={(event) => setRecordingContext((current) => ({ ...current, relationship: event.target.value }))}
+                    value={recordingContextDraft.relationship}
+                    onChange={(event) => updateRecordingContextField("relationship", event.target.value)}
                     placeholder="예: 엄마 - 아이"
                   />
                   <textarea
                     className="input"
                     style={{ minHeight: 96, resize: "vertical" }}
-                    value={recordingContext.situation}
-                    onChange={(event) => setRecordingContext((current) => ({ ...current, situation: event.target.value }))}
+                    value={recordingContextDraft.situation}
+                    onChange={(event) => updateRecordingContextField("situation", event.target.value)}
                     placeholder="예: 아이가 혼자 집에 있겠다고 하고, 엄마가 위험해서 안 된다고 설명하는 상황"
                   />
                   <input
                     className="input"
-                    value={recordingContext.tone}
-                    onChange={(event) => setRecordingContext((current) => ({ ...current, tone: event.target.value }))}
+                    value={recordingContextDraft.tone}
+                    onChange={(event) => updateRecordingContextField("tone", event.target.value)}
                     placeholder="예: 자연스럽고 부드럽지만 단호한 미국식 일상 회화"
                   />
                 </div>
+                <div className="mini-card" style={{ marginTop: 12 }}>
+                  <strong>분석 상태</strong>
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    {hasUnsavedContextChanges
+                      ? "맥락 힌트에 저장되지 않은 변경사항이 있습니다."
+                      : analysisNeedsRefresh
+                      ? "대화 또는 맥락이 바뀌어 분석을 다시 실행해야 합니다."
+                      : hasAnyAnalysis
+                      ? "현재 보이는 대화 요약과 문장의도는 최신 분석입니다."
+                      : "아직 대화 요약/의도 분석을 실행하지 않았습니다."}
+                  </div>
+                </div>
+                <div className="mini-card" style={{ marginTop: 12 }}>
+                  <strong>분석 실행 방식</strong>
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    기본값은 수동입니다. 자동을 선택하면 맥락/문장/화자 수정 후 대화 요약과 의도를 다시 분석합니다.
+                  </div>
+                  <div className="row" style={{ marginTop: 12 }}>
+                    <button
+                      type="button"
+                      className={`chip ${recordingAnalysisMode === "manual" ? "selected" : ""}`}
+                      onClick={() => handleRecordingAnalysisModeChange("manual")}
+                      disabled={!!loading}
+                    >
+                      수동
+                    </button>
+                    <button
+                      type="button"
+                      className={`chip ${recordingAnalysisMode === "auto" ? "selected" : ""}`}
+                      onClick={() => handleRecordingAnalysisModeChange("auto")}
+                      disabled={!!loading}
+                    >
+                      자동
+                    </button>
+                  </div>
+                </div>
                 <div className="row" style={{ marginTop: 12 }}>
+                  <button
+                    className="button ghost"
+                    onClick={handleSaveRecordingContext}
+                    disabled={!!loading || !hasUnsavedContextChanges}
+                  >
+                    {loading === "save-recording-context" ? "맥락 저장 중..." : "맥락 저장"}
+                  </button>
                   <button className="button secondary" onClick={handleAnalyzeConversation} disabled={!!loading || recording.utterances.length === 0}>
                     {loading === "analyze-recording" ? "분석 중..." : "대화 요약/의도 분석"}
                   </button>
@@ -2540,15 +2974,13 @@ export default function DashboardPage() {
                   </button>
                 </div>
               </div>
-              {visibleRecordingSummary && (
-                <div className="mini-card">
-                  <strong>대화 요약</strong>
-                  <div style={{ marginTop: 10, lineHeight: 1.6 }}>{visibleRecordingSummary}</div>
-                  <div className="muted" style={{ marginTop: 10 }}>
-                    아래 각 발화 카드에서 문장별 intent도 함께 확인할 수 있습니다.
-                  </div>
+              <div className="mini-card">
+                <strong>대화 요약</strong>
+                <div style={{ marginTop: 10, lineHeight: 1.6 }}>{visibleRecordingSummary || "아직 분석된 대화 요약이 없습니다."}</div>
+                <div className="muted" style={{ marginTop: 10 }}>
+                  아래 각 발화 카드에서 문장별 intent도 함께 확인할 수 있습니다.
                 </div>
-              )}
+              </div>
               {recording.diarization && speakerOptions.length > 0 && (
                 <div className="mini-card">
                   <strong>내 화자 선택</strong>
@@ -2675,12 +3107,10 @@ export default function DashboardPage() {
                       {loading === `delete-utterance-${utterance.id}` ? "삭제 중..." : "문장 삭제"}
                     </button>
                   </div>
-                  {intentByUtteranceId.get(utterance.id) && (
-                    <div className="mini-card" style={{ marginTop: 12 }}>
-                      <strong>이 발화의 의도</strong>
-                      <div style={{ marginTop: 8 }}>{intentByUtteranceId.get(utterance.id)}</div>
-                    </div>
-                  )}
+                  <div className="mini-card" style={{ marginTop: 12 }}>
+                    <strong>이 발화의 의도</strong>
+                    <div style={{ marginTop: 8 }}>{intentByUtteranceId.get(utterance.id) || "아직 분석된 발화 의도가 없습니다."}</div>
+                  </div>
                 </div>
               ))}
               {renderListControls("utterances", recording.utterances.length)}
@@ -2695,8 +3125,8 @@ export default function DashboardPage() {
         <section ref={expressionsSectionRef} className="card panel-lg">
           {renderSectionIntro(
             "expressions",
-            "2. 영어 표현 & TTS",
-            "생성된 표현을 선택하고 TTS를 만들어 재생합니다.",
+            "2. 영어 표현 생성 / 영어 음성 생성",
+            "생성된 표현을 선택하고 영어 음성을 만들어 듣고 활용합니다.",
             `표현 ${expressions.length}개 · TTS 완료 ${completedTtsExpressions.length}개`,
           )}
           {expandedSections.expressions && (
@@ -2782,21 +3212,19 @@ export default function DashboardPage() {
                         </button>
                       </div>
                     </div>
-                    {visibleRecordingSummary && (
-                      <div className="mini-card">
-                        <strong>대화 요약</strong>
-                        <div style={{ marginTop: 8 }}>{visibleRecordingSummary}</div>
-                      </div>
-                    )}
-                    {selectedExpressionIntent && (
-                      <div className="mini-card">
-                        <strong>발화 의도</strong>
-                        <div style={{ marginTop: 8 }}>{selectedExpressionIntent}</div>
-                      </div>
-                    )}
+                    <div className="mini-card">
+                      <strong>대화 요약</strong>
+                      <div style={{ marginTop: 8 }}>{visibleRecordingSummary || "아직 분석된 대화 요약이 없습니다."}</div>
+                    </div>
+                    <div className="mini-card">
+                      <strong>발화 의도</strong>
+                      <div style={{ marginTop: 8 }}>{selectedExpressionIntent || "아직 분석된 발화 의도가 없습니다."}</div>
+                    </div>
                     <div className="row">
                       <button className="button" onClick={handleGenerateTts} disabled={!!loading}>
-                        {loading === "tts" ? "TTS 생성 중..." : "TTS 생성"}
+                        {loading === "tts"
+                          ? (selectedExpression?.ttsKey ? "TTS 재생성 중..." : "TTS 생성 중...")
+                          : (selectedExpression?.ttsKey ? "TTS 재생성" : "TTS 생성")}
                       </button>
                       <button
                         className="button ghost"
@@ -3083,46 +3511,122 @@ export default function DashboardPage() {
                   복습 테스트 중에는 정답 노출을 막기 위해 이 목록도 숨겨집니다.
                 </div>
               ) : (
-                <div className="grid" style={{ marginTop: 14 }}>
-                  {completedTtsExpressions.length === 0 && (
-                    <div className="mini-card muted">아직 TTS 생성이 완료된 표현이 없습니다.</div>
-                  )}
-                  {visibleCompletedTtsExpressions.map((expression) => (
-                    <div key={`tts-library-${expression.id}`} className="mini-card">
-                      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                        <strong style={{ flex: 1 }}>{expression.englishBase}</strong>
-                        <span className="tag tag-done">TTS 완료</span>
+                <>
+                  <div className="mini-card" style={{ marginTop: 14 }}>
+                    <strong>전체 재생 옵션</strong>
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      반복 횟수와 문장 사이 텀을 정해서 쉐도잉용으로 이어 들을 수 있습니다. 같은 세션에서 이미 받은 음성은 다시 다운로드하지 않고 재사용합니다.
+                    </div>
+                    <div className="grid" style={{ marginTop: 12 }}>
+                      <div>
+                        <div className="muted" style={{ marginBottom: 8 }}>문장당 반복 횟수</div>
+                        <div className="row" style={{ gap: 8 }}>
+                          {[1, 2, 3].map((count) => (
+                            <button
+                              key={`tts-repeat-${count}`}
+                              type="button"
+                              className={`chip ${ttsLibraryRepeatCount === count ? "selected" : ""}`}
+                              onClick={() => setTtsLibraryRepeatCount(count as 1 | 2 | 3)}
+                              disabled={isTtsLibraryPlaying || isTtsLibraryPreparing}
+                            >
+                              {count}회
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                      <div className="muted" style={{ marginTop: 8 }}>{expression.koreanText}</div>
-                      <div className="row" style={{ marginTop: 12 }}>
-                        <button
-                          className="button secondary"
-                          onClick={() => {
-                            selectExpressionForPractice(expression);
-                            window.setTimeout(() => audioRef.current?.load(), 50);
-                          }}
-                          disabled={!!loading}
-                        >
-                          선택
-                        </button>
-                        <button
-                          className="button ghost"
-                          onClick={() => {
-                            selectExpressionForPractice(expression);
-                            window.setTimeout(() => {
-                              audioRef.current?.load();
-                              audioRef.current?.play().catch(() => undefined);
-                            }, 50);
-                          }}
-                          disabled={!!loading || !expression.ttsUrl}
-                        >
-                          바로 재생
-                        </button>
+                      <div>
+                        <div className="muted" style={{ marginBottom: 8 }}>반복 사이 텀</div>
+                        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                          {[0, 1000, 2000, 3000].map((gapMs) => (
+                            <button
+                              key={`tts-gap-${gapMs}`}
+                              type="button"
+                              className={`chip ${ttsLibraryGapMs === gapMs ? "selected" : ""}`}
+                              onClick={() => setTtsLibraryGapMs(gapMs)}
+                              disabled={isTtsLibraryPlaying || isTtsLibraryPreparing}
+                            >
+                              {formatGapLabel(gapMs)}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  ))}
-                  {renderListControls("ttsLibrary", completedTtsExpressions.length)}
-                </div>
+                    <div className="row" style={{ marginTop: 12 }}>
+                      <button
+                        className="button"
+                        onClick={() => void startTtsLibraryPlayback()}
+                        disabled={!!loading || completedTtsExpressions.length === 0}
+                      >
+                        {isTtsLibraryPreparing
+                          ? "재생 준비 중..."
+                          : isTtsLibraryPlaying
+                          ? "재생 중..."
+                          : ttsLibraryRepeatCount === 1
+                          ? "전체 연속 재생"
+                          : `문장당 ${ttsLibraryRepeatCount}회 반복 + 전체 연속 재생`}
+                      </button>
+                      <button
+                        className="button ghost"
+                        onClick={stopTtsLibraryPlayback}
+                        disabled={!isTtsLibraryPlaying && !isTtsLibraryPreparing}
+                      >
+                        정지
+                      </button>
+                    </div>
+                    <div className="muted" style={{ marginTop: 10 }}>
+                      현재 설정: 문장당 {ttsLibraryRepeatCount}회 · 반복 사이 텀 {formatGapLabel(ttsLibraryGapMs)}
+                    </div>
+                    <div className="muted" style={{ marginTop: 6 }}>
+                      {ttsLibraryCurrentExpressionId
+                        ? `현재 재생: ${completedTtsExpressions.find((item) => item.id === ttsLibraryCurrentExpressionId)?.englishBase ?? "선택한 문장"}`
+                        : "전체 재생을 시작하면 현재 재생 중인 문장이 여기 표시됩니다."}
+                    </div>
+                    <audio ref={ttsLibraryAudioRef} onEnded={handleTtsLibraryAudioEnded} preload="auto" style={{ display: "none" }} />
+                  </div>
+
+                  <div className="grid" style={{ marginTop: 14 }}>
+                    {completedTtsExpressions.length === 0 && (
+                      <div className="mini-card muted">아직 TTS 생성이 완료된 표현이 없습니다.</div>
+                    )}
+                    {visibleCompletedTtsExpressions.map((expression) => (
+                      <div key={`tts-library-${expression.id}`} className="mini-card">
+                        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                          <strong style={{ flex: 1 }}>{expression.englishBase}</strong>
+                          <span className={`tag ${ttsLibraryCurrentExpressionId === expression.id ? "tag-primary" : "tag-done"}`}>
+                            {ttsLibraryCurrentExpressionId === expression.id ? "재생 중" : "TTS 완료"}
+                          </span>
+                        </div>
+                        <div className="muted" style={{ marginTop: 8 }}>{expression.koreanText}</div>
+                        <div className="row" style={{ marginTop: 12 }}>
+                          <button
+                            className="button secondary"
+                            onClick={() => {
+                              selectExpressionForPractice(expression);
+                              window.setTimeout(() => audioRef.current?.load(), 50);
+                            }}
+                            disabled={!!loading}
+                          >
+                            선택
+                          </button>
+                          <button
+                            className="button ghost"
+                            onClick={() => {
+                              selectExpressionForPractice(expression);
+                              window.setTimeout(() => {
+                                audioRef.current?.load();
+                                audioRef.current?.play().catch(() => undefined);
+                              }, 50);
+                            }}
+                            disabled={!!loading || !expression.ttsUrl}
+                          >
+                            바로 재생
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {renderListControls("ttsLibrary", completedTtsExpressions.length)}
+                  </div>
+                </>
               )}
             </>
           )}

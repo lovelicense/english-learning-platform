@@ -1,0 +1,6 @@
+
+> @elp/ai@0.1.0 typecheck /home/parkjaekyu/projects/english-learning-platform/packages/ai
+> tsc -p tsconfig.json --noEmit
+
+src/index.ts(1,63): error TS6059: File '/home/parkjaekyu/projects/english-learning-platform/packages/shared/src/index.ts' is not under 'rootDir' '/home/parkjaekyu/projects/english-learning-platform/packages/ai/src'. 'rootDir' is expected to contain all source files.
+ ELIFECYCLE  Command failed with exit code 2.

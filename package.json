@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "turbo run dev --parallel",
     "dev:web": "pnpm --filter @elp/web dev",
+    "dev:mobile": "pnpm --filter @elp/mobile dev",
     "dev:api": "pnpm --filter @elp/api start:dev",
     "dev:worker": "pnpm --filter @elp/worker dev",
     "build": "turbo run build",
