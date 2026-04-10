@@ -1,6 +1,35 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import OpenAI from 'openai';
 
+function splitTranscriptChunks(text: string) {
+  return text
+    .split(/[\n?.!]+/g)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
+}
+
+function normalizeTranscriptChunk(text: string) {
+  return text.replace(/\s+/g, ' ').replace(/[^\p{L}\p{N} ]/gu, '').trim();
+}
+
+function scoreTranscriptText(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return Number.NEGATIVE_INFINITY;
+
+  const chunks = splitTranscriptChunks(trimmed);
+  const normalizedChunks = chunks.map(normalizeTranscriptChunk).filter(Boolean);
+  const counts = normalizedChunks.reduce<Map<string, number>>((acc, chunk) => {
+    acc.set(chunk, (acc.get(chunk) ?? 0) + 1);
+    return acc;
+  }, new Map());
+
+  const duplicatePenalty = Array.from(counts.values()).reduce((sum, count) => sum + Math.max(0, count - 1) * 60, 0);
+  const uniqueChunkBonus = counts.size * 18;
+  const chunkCountBonus = normalizedChunks.length * 8;
+
+  return trimmed.length + uniqueChunkBonus + chunkCountBonus - duplicatePenalty;
+}
+
 type ExpressionContextTurn = {
   utteranceId?: string;
   speakerLabel: string;
@@ -22,6 +51,8 @@ type GenerateExpressionInput = {
   koreanText: string;
   speakerLabel?: string;
   isMine?: boolean;
+  sourceContextNote?: string;
+  participantContext?: string;
   relationship?: string;
   situation?: string;
   tone?: string;
@@ -41,8 +72,10 @@ type PracticeEvaluationInput = {
   easyAnswer?: string;
   naturalAnswer?: string;
   promptContext?: string;
+  sourceContextNote?: string;
   conversationSummary?: string;
   currentIntent?: string;
+  participantContext?: string;
 };
 
 type PracticeEvaluationResult = {
@@ -84,6 +117,7 @@ export class OpenAiService {
     relationship?: string;
     situation?: string;
     tone?: string;
+    participantContext?: string;
     turns: ExpressionContextTurn[];
   }): Promise<ConversationAnalysis> {
     if (!this.client) {
@@ -124,6 +158,7 @@ export class OpenAiService {
             input.relationship ? `대화 관계: ${input.relationship}` : null,
             input.situation ? `대화 상황: ${input.situation}` : null,
             input.tone ? `원하는 영어 톤: ${input.tone}` : null,
+            input.participantContext ? input.participantContext : null,
             `대화 전체:\n${conversationBlock}`,
           ]
             .filter(Boolean)
@@ -177,6 +212,8 @@ export class OpenAiService {
       payload.relationship ? `대화 관계: ${payload.relationship}` : null,
       payload.situation ? `대화 상황: ${payload.situation}` : null,
       payload.tone ? `원하는 영어 톤: ${payload.tone}` : null,
+      payload.participantContext ? payload.participantContext : null,
+      payload.sourceContextNote ? `문장별 맥락 메모: ${payload.sourceContextNote}` : null,
       payload.conversationSummary ? `대화 전체 요약: ${payload.conversationSummary}` : null,
       payload.currentIntent ? `현재 발화 의도: ${payload.currentIntent}` : null,
       payload.previousTurns?.length
@@ -285,6 +322,8 @@ export class OpenAiService {
             `답변 방식: ${input.mode}`,
             `한국어 문제: ${input.koreanPrompt}`,
             input.promptContext ? `문제 상황 설명: ${input.promptContext}` : null,
+            input.participantContext ? input.participantContext : null,
+            input.sourceContextNote ? `문장별 맥락 메모: ${input.sourceContextNote}` : null,
             input.conversationSummary ? `대화 요약: ${input.conversationSummary}` : null,
             input.currentIntent ? `현재 발화 의도: ${input.currentIntent}` : null,
             `기준 영어 표현: ${input.targetEnglish}`,
@@ -418,16 +457,41 @@ export class OpenAiService {
     }
 
     const file = await OpenAI.toFile(buffer, fileName);
+    const nonDiarizationModels = Array.from(
+      new Set([
+        process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
+        process.env.OPENAI_STT_FALLBACK_MODEL ?? 'gpt-4o-transcribe',
+        'whisper-1',
+      ]),
+    );
     const createTranscription = async (useDiarization: boolean) => {
       try {
         return await this.client!.audio.transcriptions.create({
           file,
           model: useDiarization
             ? process.env.OPENAI_STT_DIARIZE_MODEL ?? 'gpt-4o-transcribe-diarize'
-            : process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
+            : nonDiarizationModels[0],
           language: 'ko',
           response_format: useDiarization ? 'diarized_json' : 'json',
           ...(useDiarization ? { chunking_strategy: 'auto' } : {}),
+        } as any);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/audio duration .* longer than .* maximum/i.test(message)) {
+          throw new BadRequestException(
+            '오디오 길이가 너무 깁니다. 현재 모델은 약 23분까지만 처리할 수 있어요. 파일을 더 짧게 나눠 업로드해 주세요.',
+          );
+        }
+        throw error;
+      }
+    };
+    const createPlainTranscription = async (model: string) => {
+      try {
+        return await this.client!.audio.transcriptions.create({
+          file,
+          model,
+          language: 'ko',
+          response_format: 'json',
         } as any);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -460,15 +524,36 @@ export class OpenAiService {
         }));
 
       if (utterances.length === 0) {
-        result = await createTranscription(false);
-        const fallbackText = ((result as any).text ?? '').trim();
-        if (fallbackText) {
+        const candidates: Array<{ model: string; text: string; score: number }> = [];
+
+        for (const model of nonDiarizationModels) {
+          const fallbackResult = await createPlainTranscription(model);
+          const text = ((fallbackResult as any).text ?? '').trim();
+          candidates.push({
+            model,
+            text,
+            score: scoreTranscriptText(text),
+          });
+        }
+
+        const bestCandidate = candidates.sort((left, right) => right.score - left.score)[0];
+        console.info(
+          `[STT fallback] file=${fileName} candidates=${JSON.stringify(
+            candidates.map((candidate) => ({
+              model: candidate.model,
+              score: candidate.score,
+              preview: candidate.text.slice(0, 80),
+            })),
+          )}`,
+        );
+
+        if (bestCandidate?.text) {
           utterances = [
             {
               speakerLabel: 'speaker_1',
               startMs: 0,
               endMs: 2000,
-              koreanText: fallbackText,
+              koreanText: bestCandidate.text,
             },
           ];
         }

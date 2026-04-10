@@ -1,7 +1,16 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class UpdateUtteranceDto {
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  koreanText!: string;
+  koreanText?: string;
+
+  @IsOptional()
+  @IsString()
+  contextNote?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  markAnalysisReview?: boolean;
 }

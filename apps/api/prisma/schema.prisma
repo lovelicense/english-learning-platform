@@ -15,6 +15,12 @@ enum RecordingStatus {
   FAILED
 }
 
+enum RecordingAnalysisStatus {
+  NOT_ANALYZED
+  OK
+  NEEDS_REVIEW
+}
+
 enum RecordingSource {
   WEB
   MOBILE
@@ -74,9 +80,11 @@ model User {
   passwordHash String
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+  personProfiles PersonProfile[]
   recordings   Recording[]
   recordingSessions RecordingSession[]
   recordingJobs RecordingJob[]
+  savedSentences SavedSentence[]
   expressions  Expression[]
   practiceLogs PracticeLog[]
 }
@@ -92,12 +100,59 @@ model Recording {
   analysisRelationship String?
   analysisSituation    String?
   analysisTone         String?
+  analysisStatus       RecordingAnalysisStatus @default(NOT_ANALYZED)
+  analysisStatusReason String?
   analysisUpdatedAt    DateTime?
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
   user                 User            @relation(fields: [userId], references: [id])
   utterances           Utterance[]
+  participants         RecordingParticipant[]
+  speakerProfiles      RecordingSpeakerProfile[]
   sourcePart           RecordingPart?  @relation("PartRecording")
+}
+
+model PersonProfile {
+  id               String   @id @default(cuid())
+  userId           String
+  name             String
+  roleLabel        String?
+  relationshipToMe String?
+  aliases          String?
+  notes            String?
+  isMe             Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id])
+  recordingParticipants RecordingParticipant[]
+  recordingSpeakerProfiles RecordingSpeakerProfile[]
+  savedSentenceParticipants SavedSentenceParticipant[]
+
+  @@unique([userId, name])
+}
+
+model RecordingParticipant {
+  id            String       @id @default(cuid())
+  recordingId   String
+  personProfileId String
+  createdAt     DateTime     @default(now())
+  recording     Recording    @relation(fields: [recordingId], references: [id])
+  personProfile PersonProfile @relation(fields: [personProfileId], references: [id])
+
+  @@unique([recordingId, personProfileId])
+}
+
+model RecordingSpeakerProfile {
+  id            String       @id @default(cuid())
+  recordingId   String
+  speakerLabel  String
+  personProfileId String
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  recording     Recording    @relation(fields: [recordingId], references: [id])
+  personProfile PersonProfile @relation(fields: [personProfileId], references: [id])
+
+  @@unique([recordingId, speakerLabel])
 }
 
 model Utterance {
@@ -105,6 +160,7 @@ model Utterance {
   recordingId  String
   speakerLabel String
   koreanText   String
+  contextNote  String?
   startMs      Int
   endMs        Int
   isMine       Boolean     @default(false)
@@ -118,6 +174,7 @@ model Expression {
   id          String        @id @default(cuid())
   userId      String
   utteranceId String?
+  savedSentenceId String?
   koreanText  String
   englishBase String
   englishEasy String
@@ -129,7 +186,37 @@ model Expression {
   updatedAt   DateTime      @updatedAt
   user        User          @relation(fields: [userId], references: [id])
   utterance    Utterance?    @relation(fields: [utteranceId], references: [id])
+  savedSentence SavedSentence? @relation(fields: [savedSentenceId], references: [id])
   practiceLogs PracticeLog[]
+}
+
+model SavedSentence {
+  id              String       @id @default(cuid())
+  userId          String
+  koreanText      String
+  contextNote     String?
+  relationship    String?
+  situation       String?
+  tone            String?
+  analysisSummary String?
+  analysisIntent  String?
+  analysisUpdatedAt DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  user            User         @relation(fields: [userId], references: [id])
+  participants    SavedSentenceParticipant[]
+  expressions     Expression[]
+}
+
+model SavedSentenceParticipant {
+  id             String        @id @default(cuid())
+  savedSentenceId String
+  personProfileId String
+  createdAt      DateTime      @default(now())
+  savedSentence  SavedSentence @relation(fields: [savedSentenceId], references: [id])
+  personProfile  PersonProfile @relation(fields: [personProfileId], references: [id])
+
+  @@unique([savedSentenceId, personProfileId])
 }
 
 model PracticeLog {

@@ -12,15 +12,23 @@ type ExpressionContextTurn = {
 };
 
 type ExpressionGenerationContext = {
+  sourceContextNote?: string;
+  participantContext?: string;
   relationship?: string;
   situation?: string;
   tone?: string;
+};
+
+type SingleSentenceAnalysis = {
+  summary: string;
+  intent: string;
 };
 
 type RecordingUtteranceContext = {
   id: string;
   speakerLabel: string;
   koreanText: string;
+  contextNote?: string | null;
   isMine: boolean;
   analysisIntent?: string | null;
 };
@@ -35,6 +43,49 @@ type CachedRecordingAnalysis = {
   }>;
 };
 
+function buildParticipantContext(
+  participants: Array<{
+    personProfile: {
+      name: string;
+      roleLabel?: string | null;
+      relationshipToMe?: string | null;
+      aliases?: string | null;
+      notes?: string | null;
+      isMe?: boolean;
+    };
+  }> = [],
+  speakerProfiles: Array<{
+    speakerLabel: string;
+    personProfile: {
+      name: string;
+      roleLabel?: string | null;
+    };
+  }> = [],
+) {
+  const profileLines = participants.map(({ personProfile }) => {
+    const bits = [
+      personProfile.name,
+      personProfile.isMe ? '사용자 본인' : null,
+      personProfile.roleLabel ? `역할: ${personProfile.roleLabel}` : null,
+      personProfile.relationshipToMe ? `사용자와의 관계: ${personProfile.relationshipToMe}` : null,
+      personProfile.aliases ? `별칭: ${personProfile.aliases}` : null,
+      personProfile.notes ? `메모: ${personProfile.notes}` : null,
+    ].filter(Boolean);
+    return `- ${bits.join(' / ')}`;
+  });
+  const speakerLines = speakerProfiles.map(
+    ({ speakerLabel, personProfile }) =>
+      `- ${speakerLabel} = ${personProfile.name}${personProfile.roleLabel ? ` (${personProfile.roleLabel})` : ''}`,
+  );
+
+  return [
+    profileLines.length ? `등장 인물 정보:\n${profileLines.join('\n')}` : null,
+    speakerLines.length ? `화자 매핑:\n${speakerLines.join('\n')}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 @Injectable()
 export class ExpressionsService {
   constructor(
@@ -43,9 +94,11 @@ export class ExpressionsService {
     private readonly storage: StorageService,
   ) {}
 
-  async generate(userId: string, input: { utteranceId?: string; koreanText?: string; relationship?: string; situation?: string; tone?: string }) {
+  async generate(userId: string, input: { utteranceId?: string; savedSentenceId?: string; koreanText?: string; sourceContextNote?: string; participantContext?: string; relationship?: string; situation?: string; tone?: string; personProfileIds?: string[] }) {
     let utteranceId = input.utteranceId;
+    let savedSentenceId = input.savedSentenceId;
     let koreanText = input.koreanText?.trim();
+    const requestedPersonProfileIds = Array.from(new Set((input.personProfileIds ?? []).filter(Boolean)));
     const generationContext = this.toGenerationContext(input);
     let expressionInput:
       | string
@@ -53,6 +106,7 @@ export class ExpressionsService {
           koreanText: string;
           speakerLabel?: string;
           isMine?: boolean;
+          sourceContextNote?: string;
           relationship?: string;
           situation?: string;
           tone?: string;
@@ -72,30 +126,123 @@ export class ExpressionsService {
               utterances: {
                 orderBy: { startMs: 'asc' },
               },
+              participants: {
+                include: { personProfile: true },
+              } as any,
+              speakerProfiles: {
+                include: { personProfile: true },
+              } as any,
             },
           },
         },
-      });
+      } as any) as any;
       if (!utterance) throw new NotFoundException('발화 문장을 찾을 수 없습니다.');
       koreanText = utterance.koreanText;
 
-      const orderedUtterances = utterance.recording.utterances.map((item) => ({
+      const orderedUtterances = utterance.recording.utterances.map((item: any) => ({
         id: item.id,
         speakerLabel: item.speakerLabel,
         koreanText: item.koreanText,
         isMine: item.isMine,
+        contextNote: (item as any).contextNote,
         analysisIntent: (item as any).analysisIntent,
       }));
       const analysis = await this.getOrCreateRecordingAnalysis(utterance.recording.id, orderedUtterances, generationContext);
-      expressionInput = this.buildExpressionInputForUtterance(utterance, orderedUtterances, generationContext, analysis);
+      expressionInput = this.buildExpressionInputForUtterance(
+        utterance,
+        orderedUtterances,
+        {
+          ...generationContext,
+          participantContext: buildParticipantContext(
+            (utterance.recording as any).participants ?? [],
+            (utterance.recording as any).speakerProfiles ?? [],
+          ),
+        },
+        analysis,
+      );
+    } else if (savedSentenceId) {
+      const savedSentence = await (this.prisma as any).savedSentence.findFirst({
+        where: { id: savedSentenceId, userId },
+        include: {
+          participants: {
+            include: { personProfile: true },
+          },
+        },
+      } as any);
+      if (!savedSentence) throw new NotFoundException('저장한 문장을 찾을 수 없습니다.');
+
+      koreanText = savedSentence.koreanText;
+      const analysis = await this.getOrCreateSavedSentenceAnalysis(savedSentence.id, {
+        koreanText: savedSentence.koreanText,
+        relationship: generationContext.relationship ?? savedSentence.relationship ?? undefined,
+        situation: generationContext.situation ?? savedSentence.situation ?? undefined,
+        tone: generationContext.tone ?? savedSentence.tone ?? undefined,
+      });
+      expressionInput = this.buildExpressionInputForSavedSentence(
+        savedSentence.koreanText,
+        {
+          sourceContextNote: generationContext.sourceContextNote ?? savedSentence.contextNote ?? undefined,
+          participantContext:
+            generationContext.participantContext ??
+            buildParticipantContext((savedSentence as any).participants ?? []),
+          relationship: generationContext.relationship ?? savedSentence.relationship ?? undefined,
+          situation: generationContext.situation ?? savedSentence.situation ?? undefined,
+          tone: generationContext.tone ?? savedSentence.tone ?? undefined,
+        },
+        analysis,
+      );
     }
 
     if (!koreanText) throw new NotFoundException('한국어 문장이 필요합니다.');
     if (!expressionInput) {
-      expressionInput = {
+      const profiles = requestedPersonProfileIds.length
+        ? await (this.prisma as any).personProfile.findMany({
+            where: { userId, id: { in: requestedPersonProfileIds } },
+          })
+        : [];
+      if (profiles.length !== requestedPersonProfileIds.length) {
+        throw new NotFoundException('선택한 인물 정보를 찾을 수 없습니다.');
+      }
+      const savedSentence = await (this.prisma as any).savedSentence.create({
+        data: {
+          userId,
+          koreanText,
+          contextNote: generationContext.sourceContextNote ?? null,
+          relationship: generationContext.relationship ?? null,
+          situation: generationContext.situation ?? null,
+          tone: generationContext.tone ?? null,
+          participants: requestedPersonProfileIds.length
+            ? {
+                create: requestedPersonProfileIds.map((personProfileId) => ({
+                  personProfileId,
+                })),
+              }
+            : undefined,
+        },
+        include: {
+          participants: {
+            include: { personProfile: true },
+          },
+        },
+      } as any);
+      savedSentenceId = savedSentence.id;
+      const analysis = await this.getOrCreateSavedSentenceAnalysis(savedSentence.id, {
         koreanText,
+        participantContext:
+          generationContext.participantContext ??
+          buildParticipantContext((savedSentence as any).participants ?? []),
         ...generationContext,
-      };
+      });
+      expressionInput = this.buildExpressionInputForSavedSentence(
+        koreanText,
+        {
+          ...generationContext,
+          participantContext:
+            generationContext.participantContext ??
+            buildParticipantContext((savedSentence as any).participants ?? []),
+        },
+        analysis,
+      );
     }
 
     const generated = await this.openai.generateExpressions(expressionInput);
@@ -103,13 +250,14 @@ export class ExpressionsService {
       data: {
         userId,
         utteranceId,
+        savedSentenceId,
         koreanText,
         englishBase: generated.base,
         englishEasy: generated.easy,
         englishNatural: generated.natural,
         note: generated.note,
       },
-    });
+    } as any);
 
     return expression;
   }
@@ -118,29 +266,35 @@ export class ExpressionsService {
     const generationContext = this.toGenerationContext(input);
     const recording = await this.prisma.recording.findFirst({
       where: { id: input.recordingId, userId },
-      include: {
-        utterances: {
-          orderBy: { startMs: 'asc' },
-          include: {
-            expressions: {
-              select: { id: true },
+        include: {
+          utterances: {
+            orderBy: { startMs: 'asc' },
+            include: {
+              expressions: {
+                select: { id: true },
+              },
             },
           },
+          participants: {
+            include: { personProfile: true },
+          } as any,
+          speakerProfiles: {
+            include: { personProfile: true },
+          } as any,
         },
-      },
-    });
+    } as any) as any;
     if (!recording) throw new NotFoundException('녹음 파일을 찾을 수 없습니다.');
 
     const speakerScope = input.speakerScope ?? 'mine';
     const includeExisting = input.includeExisting ?? false;
-    const orderedUtterances: RecordingUtteranceContext[] = recording.utterances.map((utterance) => ({
+    const orderedUtterances: RecordingUtteranceContext[] = recording.utterances.map((utterance: any) => ({
       id: utterance.id,
       speakerLabel: utterance.speakerLabel,
       koreanText: utterance.koreanText,
       isMine: utterance.isMine,
       analysisIntent: (utterance as any).analysisIntent,
     }));
-    const targetUtterances = recording.utterances.filter((utterance) => {
+    const targetUtterances = recording.utterances.filter((utterance: any) => {
       if (!utterance.koreanText.trim()) return false;
       if (speakerScope === 'mine' && !utterance.isMine) return false;
       if (speakerScope === 'others' && utterance.isMine) return false;
@@ -158,7 +312,10 @@ export class ExpressionsService {
       };
     }
 
-    const analysis = await this.getOrCreateRecordingAnalysis(recording.id, orderedUtterances, generationContext);
+    const analysis = await this.getOrCreateRecordingAnalysis(recording.id, orderedUtterances, {
+      ...generationContext,
+      participantContext: buildParticipantContext((recording as any).participants ?? [], (recording as any).speakerProfiles ?? []),
+    });
 
     const expressions: Array<{
       id: string;
@@ -200,12 +357,15 @@ export class ExpressionsService {
     };
   }
 
-  private toGenerationContext(input: { relationship?: string; situation?: string; tone?: string }): ExpressionGenerationContext {
+  private toGenerationContext(input: { sourceContextNote?: string; participantContext?: string; relationship?: string; situation?: string; tone?: string }): ExpressionGenerationContext {
+    const sourceContextNote = input.sourceContextNote?.trim();
     const relationship = input.relationship?.trim();
     const situation = input.situation?.trim();
     const tone = input.tone?.trim();
 
     return {
+      ...(sourceContextNote ? { sourceContextNote } : {}),
+      ...(input.participantContext?.trim() ? { participantContext: input.participantContext.trim() } : {}),
       ...(relationship ? { relationship } : {}),
       ...(situation ? { situation } : {}),
       ...(tone ? { tone } : {}),
@@ -235,11 +395,30 @@ export class ExpressionsService {
       koreanText: utterance.koreanText,
       speakerLabel: utterance.speakerLabel,
       isMine: utterance.isMine,
+      sourceContextNote: utterance.contextNote ?? undefined,
       ...generationContext,
       conversationSummary: analysis.summary,
       currentIntent,
       previousTurns,
       nextTurns,
+    };
+  }
+
+  private buildExpressionInputForSavedSentence(
+    koreanText: string,
+    generationContext: ExpressionGenerationContext & { sourceContextNote?: string },
+    analysis: SingleSentenceAnalysis,
+  ) {
+    return {
+      koreanText,
+      speakerLabel: '나',
+      isMine: true,
+      sourceContextNote: generationContext.sourceContextNote,
+      ...generationContext,
+      conversationSummary: analysis.summary,
+      currentIntent: analysis.intent,
+      previousTurns: [],
+      nextTurns: [],
     };
   }
 
@@ -319,6 +498,8 @@ export class ExpressionsService {
           analysisRelationship: relationship,
           analysisSituation: situation,
           analysisTone: tone,
+          analysisStatus: 'OK',
+          analysisStatusReason: null,
           analysisUpdatedAt: new Date(),
         } as any,
       } as any),
@@ -330,6 +511,73 @@ export class ExpressionsService {
     ]);
 
     return analysis;
+  }
+
+  private async getOrCreateSavedSentenceAnalysis(
+    savedSentenceId: string,
+    input: {
+      koreanText: string;
+      participantContext?: string;
+      relationship?: string;
+      situation?: string;
+      tone?: string;
+    },
+  ): Promise<SingleSentenceAnalysis> {
+    const savedSentence = await (this.prisma as any).savedSentence.findUnique({
+      where: { id: savedSentenceId },
+    } as any);
+
+    const relationship = input.relationship ?? null;
+    const situation = input.situation ?? null;
+    const tone = input.tone ?? null;
+
+    const canReuse =
+      Boolean(savedSentence?.analysisIntent) &&
+      savedSentence?.relationship === relationship &&
+      savedSentence?.situation === situation &&
+      savedSentence?.tone === tone;
+
+    if (canReuse) {
+      return {
+        summary:
+          savedSentence?.analysisSummary ??
+          '직접 저장한 단일 문장의 상황과 의도를 짧게 정리한 내용입니다.',
+        intent: savedSentence?.analysisIntent ?? '',
+      };
+    }
+
+    const analysis = await this.openai.analyzeConversation({
+      participantContext: input.participantContext,
+      relationship: input.relationship,
+      situation: input.situation,
+      tone: input.tone,
+      turns: [
+        {
+          utteranceId: savedSentenceId,
+          speakerLabel: '나',
+          koreanText: input.koreanText,
+          isMine: true,
+        },
+      ],
+    });
+    const intent = analysis.intents[0]?.intent ?? '자신의 상황이나 요청을 전달함';
+
+    await (this.prisma as any).savedSentence.update({
+      where: { id: savedSentenceId },
+      data: {
+        relationship,
+        situation,
+        tone,
+        analysisSummary: analysis.summary,
+        analysisIntent: intent,
+        analysisUpdatedAt: new Date(),
+      },
+    } as any);
+
+    return {
+      summary: analysis.summary,
+      intent,
+    };
   }
 
   async generateTts(userId: string, expressionId: string) {
@@ -392,11 +640,33 @@ export class ExpressionsService {
   }
 
   async list(userId: string) {
-    const expressions = await this.prisma.expression.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } });
+    const expressions = await this.prisma.expression.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        utterance: {
+          include: {
+            recording: true,
+          },
+        },
+        savedSentence: true,
+      },
+    } as any);
 
     return Promise.all(
-      expressions.map(async (expression) => ({
+      (expressions as any[]).map(async (expression) => ({
         ...expression,
+        sourceAnalysisIntent: expression.utterance?.analysisIntent ?? expression.savedSentence?.analysisIntent ?? null,
+        sourceAnalysisSummary:
+          expression.utterance?.recording?.analysisSummary ?? expression.savedSentence?.analysisSummary ?? null,
+        sourceRelationship:
+          expression.utterance?.recording?.analysisRelationship ?? expression.savedSentence?.relationship ?? null,
+        sourceSituation:
+          expression.utterance?.recording?.analysisSituation ?? expression.savedSentence?.situation ?? null,
+        sourceTone:
+          expression.utterance?.recording?.analysisTone ?? expression.savedSentence?.tone ?? null,
+        sourceContextNote:
+          expression.utterance?.contextNote ?? expression.savedSentence?.contextNote ?? null,
         ttsUrl: expression.ttsKey ? await this.storage.createPresignedDownload(expression.ttsKey, 3600, 'audio/mpeg') : null,
       })),
     );

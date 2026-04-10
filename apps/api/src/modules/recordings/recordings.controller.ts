@@ -4,6 +4,10 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AnalyzeRecordingDto } from './dto/analyze-recording.dto';
 import { CreatePresignDto } from './dto/create-presign.dto';
 import { ProcessRecordingDto } from './dto/process-recording.dto';
+import { UpdateRecordingParticipantsDto } from './dto/update-recording-participants.dto';
+import { RemoveUtteranceDto } from './dto/remove-utterance.dto';
+import { UpdateRecordingAnalysisStatusDto } from './dto/update-recording-analysis-status.dto';
+import { UpdateRecordingSpeakerProfileDto } from './dto/update-recording-speaker-profile.dto';
 import { UpdateRecordingSpeakerLabelDto } from './dto/update-recording-speaker-label.dto';
 import { UpdateRecordingSpeakerDto } from './dto/update-recording-speaker.dto';
 import { UpdateUtteranceDto } from './dto/update-utterance.dto';
@@ -45,12 +49,16 @@ export class RecordingsController {
     @Param('utteranceId') utteranceId: string,
     @Body() dto: UpdateUtteranceDto,
   ) {
-    return this.recordingsService.updateUtterance(userId, utteranceId, dto.koreanText);
+    return this.recordingsService.updateUtterance(userId, utteranceId, dto);
   }
 
   @Delete('utterances/:utteranceId')
-  removeUtterance(@CurrentUser('userId') userId: string, @Param('utteranceId') utteranceId: string) {
-    return this.recordingsService.removeUtterance(userId, utteranceId);
+  removeUtterance(
+    @CurrentUser('userId') userId: string,
+    @Param('utteranceId') utteranceId: string,
+    @Body() dto: RemoveUtteranceDto,
+  ) {
+    return this.recordingsService.removeUtterance(userId, utteranceId, dto.markAnalysisReview ?? true);
   }
 
   @Patch(':id/mine-speaker')
@@ -69,6 +77,33 @@ export class RecordingsController {
     @Body() dto: UpdateRecordingSpeakerLabelDto,
   ) {
     return this.recordingsService.updateSpeakerLabel(userId, id, dto.speakerLabel, dto.nextSpeakerLabel);
+  }
+
+  @Patch(':id/analysis-status')
+  updateAnalysisStatus(
+    @CurrentUser('userId') userId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateRecordingAnalysisStatusDto,
+  ) {
+    return this.recordingsService.updateAnalysisStatus(userId, id, dto.status, dto.reason);
+  }
+
+  @Patch(':id/participants')
+  updateParticipants(
+    @CurrentUser('userId') userId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateRecordingParticipantsDto,
+  ) {
+    return this.recordingsService.updateParticipants(userId, id, dto.personProfileIds ?? []);
+  }
+
+  @Patch(':id/speaker-profile')
+  updateSpeakerProfile(
+    @CurrentUser('userId') userId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateRecordingSpeakerProfileDto,
+  ) {
+    return this.recordingsService.updateSpeakerProfile(userId, id, dto.speakerLabel, dto.personProfileId);
   }
 
   @Delete(':id')

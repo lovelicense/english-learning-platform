@@ -31,6 +31,35 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPE
 let shuttingDown = false;
 let running = false;
 
+function splitTranscriptChunks(text: string) {
+  return text
+    .split(/[\n?.!]+/g)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
+}
+
+function normalizeTranscriptChunk(text: string) {
+  return text.replace(/\s+/g, ' ').replace(/[^\p{L}\p{N} ]/gu, '').trim();
+}
+
+function scoreTranscriptText(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return Number.NEGATIVE_INFINITY;
+
+  const chunks = splitTranscriptChunks(trimmed);
+  const normalizedChunks = chunks.map(normalizeTranscriptChunk).filter(Boolean);
+  const counts = normalizedChunks.reduce<Map<string, number>>((acc, chunk) => {
+    acc.set(chunk, (acc.get(chunk) ?? 0) + 1);
+    return acc;
+  }, new Map());
+
+  const duplicatePenalty = Array.from(counts.values()).reduce((sum, count) => sum + Math.max(0, count - 1) * 60, 0);
+  const uniqueChunkBonus = counts.size * 18;
+  const chunkCountBonus = normalizedChunks.length * 8;
+
+  return trimmed.length + uniqueChunkBonus + chunkCountBonus - duplicatePenalty;
+}
+
 async function getObjectBuffer(key: string) {
   const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   const chunks: Buffer[] = [];
@@ -51,15 +80,29 @@ async function transcribeAudio(buffer: Buffer, fileName: string, diarization = t
 
   const file = await toFile(buffer, fileName);
   try {
+    const nonDiarizationModels = Array.from(
+      new Set([
+        process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
+        process.env.OPENAI_STT_FALLBACK_MODEL ?? 'gpt-4o-transcribe',
+        'whisper-1',
+      ]),
+    );
     const createTranscription = async (useDiarization: boolean) =>
       openai.audio.transcriptions.create({
         file,
         model: useDiarization
           ? process.env.OPENAI_STT_DIARIZE_MODEL ?? 'gpt-4o-transcribe-diarize'
-          : process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
+          : nonDiarizationModels[0],
         language: 'ko',
         response_format: useDiarization ? 'diarized_json' : 'json',
         ...(useDiarization ? { chunking_strategy: 'auto' } : {}),
+      } as any);
+    const createPlainTranscription = async (model: string) =>
+      openai.audio.transcriptions.create({
+        file,
+        model,
+        language: 'ko',
+        response_format: 'json',
       } as any);
 
     let result = await createTranscription(diarization);
@@ -82,15 +125,36 @@ async function transcribeAudio(buffer: Buffer, fileName: string, diarization = t
         }));
 
       if (utterances.length === 0) {
-        result = await createTranscription(false);
-        const fallbackText = ((result as any).text ?? '').trim();
-        if (fallbackText) {
+        const candidates: Array<{ model: string; text: string; score: number }> = [];
+
+        for (const model of nonDiarizationModels) {
+          const fallbackResult = await createPlainTranscription(model);
+          const text = ((fallbackResult as any).text ?? '').trim();
+          candidates.push({
+            model,
+            text,
+            score: scoreTranscriptText(text),
+          });
+        }
+
+        const bestCandidate = candidates.sort((left, right) => right.score - left.score)[0];
+        console.info(
+          `[STT fallback] file=${fileName} candidates=${JSON.stringify(
+            candidates.map((candidate) => ({
+              model: candidate.model,
+              score: candidate.score,
+              preview: candidate.text.slice(0, 80),
+            })),
+          )}`,
+        );
+
+        if (bestCandidate?.text) {
           utterances = [
             {
               speakerLabel: 'speaker_1',
               startMs: 0,
               endMs: 2000,
-              koreanText: fallbackText,
+              koreanText: bestCandidate.text,
             },
           ];
         }

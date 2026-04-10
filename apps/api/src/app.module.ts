@@ -5,6 +5,7 @@ import { DbModule } from './modules/db/db.module';
 import { ExpressionsModule } from './modules/expressions/expressions.module';
 import { HealthModule } from './modules/health/health.module';
 import { OpenAiModule } from './modules/openai/openai.module';
+import { PersonProfilesModule } from './modules/person-profiles/person-profiles.module';
 import { PracticeModule } from './modules/practice/practice.module';
 import { RecordingSessionsModule } from './modules/recording-sessions/recording-sessions.module';
 import { RecordingsModule } from './modules/recordings/recordings.module';
@@ -18,6 +19,7 @@ import { UsersModule } from './modules/users/users.module';
     DbModule,
     StorageModule,
     OpenAiModule,
+    PersonProfilesModule,
     UsersModule,
     AuthModule,
     HealthModule,

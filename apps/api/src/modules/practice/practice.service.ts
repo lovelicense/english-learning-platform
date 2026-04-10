@@ -4,6 +4,49 @@ import { PrismaService } from '../db/prisma.service';
 import { OpenAiService } from '../openai/openai.service';
 import { StorageService } from '../storage/storage.service';
 
+function buildParticipantContext(
+  participants: Array<{
+    personProfile: {
+      name: string;
+      roleLabel?: string | null;
+      relationshipToMe?: string | null;
+      aliases?: string | null;
+      notes?: string | null;
+      isMe?: boolean;
+    };
+  }> = [],
+  speakerProfiles: Array<{
+    speakerLabel: string;
+    personProfile: {
+      name: string;
+      roleLabel?: string | null;
+    };
+  }> = [],
+) {
+  const profileLines = participants.map(({ personProfile }) => {
+    const bits = [
+      personProfile.name,
+      personProfile.isMe ? '사용자 본인' : null,
+      personProfile.roleLabel ? `역할: ${personProfile.roleLabel}` : null,
+      personProfile.relationshipToMe ? `사용자와의 관계: ${personProfile.relationshipToMe}` : null,
+      personProfile.aliases ? `별칭: ${personProfile.aliases}` : null,
+      personProfile.notes ? `메모: ${personProfile.notes}` : null,
+    ].filter(Boolean);
+    return `- ${bits.join(' / ')}`;
+  });
+  const speakerLines = speakerProfiles.map(
+    ({ speakerLabel, personProfile }) =>
+      `- ${speakerLabel} = ${personProfile.name}${personProfile.roleLabel ? ` (${personProfile.roleLabel})` : ''}`,
+  );
+
+  return [
+    profileLines.length ? `등장 인물 정보:\n${profileLines.join('\n')}` : null,
+    speakerLines.length ? `화자 매핑:\n${speakerLines.join('\n')}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 @Injectable()
 export class PracticeService {
   constructor(
@@ -43,18 +86,39 @@ export class PracticeService {
       include: {
         utterance: {
           include: {
-            recording: true,
+            recording: {
+              include: {
+                participants: {
+                  include: { personProfile: true },
+                },
+                speakerProfiles: {
+                  include: { personProfile: true },
+                },
+              },
+            },
+          },
+        },
+        savedSentence: {
+          include: {
+            participants: {
+              include: { personProfile: true },
+            },
           },
         },
       },
-    });
+    } as any) as any;
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
 
     const evaluation = await this.openai.evaluatePracticeAnswer({
       koreanPrompt: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
-      conversationSummary: expression.utterance?.recording?.analysisSummary ?? undefined,
-      currentIntent: expression.utterance?.analysisIntent ?? undefined,
+      participantContext: buildParticipantContext(
+        (expression.utterance?.recording as any)?.participants ?? (expression.savedSentence as any)?.participants ?? [],
+        (expression.utterance?.recording as any)?.speakerProfiles ?? [],
+      ),
+      sourceContextNote: expression.utterance?.contextNote ?? expression.savedSentence?.contextNote ?? undefined,
+      conversationSummary: expression.utterance?.recording?.analysisSummary ?? expression.savedSentence?.analysisSummary ?? undefined,
+      currentIntent: expression.utterance?.analysisIntent ?? expression.savedSentence?.analysisIntent ?? undefined,
       targetEnglish: expression.englishBase,
       userAnswer: answer.trim(),
       mode: 'text',
@@ -115,11 +179,27 @@ export class PracticeService {
       include: {
         utterance: {
           include: {
-            recording: true,
+            recording: {
+              include: {
+                participants: {
+                  include: { personProfile: true },
+                },
+                speakerProfiles: {
+                  include: { personProfile: true },
+                },
+              },
+            },
+          },
+        },
+        savedSentence: {
+          include: {
+            participants: {
+              include: { personProfile: true },
+            },
           },
         },
       },
-    });
+    } as any) as any;
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
 
     const buffer = await this.storage.getObjectBuffer(audioKey);
@@ -135,8 +215,13 @@ export class PracticeService {
     const evaluation = await this.openai.evaluatePracticeAnswer({
       koreanPrompt: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
-      conversationSummary: expression.utterance?.recording?.analysisSummary ?? undefined,
-      currentIntent: expression.utterance?.analysisIntent ?? undefined,
+      participantContext: buildParticipantContext(
+        (expression.utterance?.recording as any)?.participants ?? (expression.savedSentence as any)?.participants ?? [],
+        (expression.utterance?.recording as any)?.speakerProfiles ?? [],
+      ),
+      sourceContextNote: expression.utterance?.contextNote ?? expression.savedSentence?.contextNote ?? undefined,
+      conversationSummary: expression.utterance?.recording?.analysisSummary ?? expression.savedSentence?.analysisSummary ?? undefined,
+      currentIntent: expression.utterance?.analysisIntent ?? expression.savedSentence?.analysisIntent ?? undefined,
       targetEnglish: expression.englishBase,
       userAnswer: answer,
       mode: 'voice',

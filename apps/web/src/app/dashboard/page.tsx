@@ -21,7 +21,7 @@ import {
   saveRecordingAnalysisMode,
   type RecordingAnalysisMode,
 } from "../../lib/recording-analysis-preference";
-import { startChunkedRecordedAudioSession, startRecordedAudioSession, type RecordingSession } from "../../lib/recorder";
+import { startRecordedAudioSession, type RecordingSession } from "../../lib/recorder";
 
 type MeResponse = { userId: string; email: string };
 type PresignResponse = { key: string; uploadUrl: string; recordingId: string };
@@ -29,10 +29,20 @@ type RecordingUtterance = {
   id: string;
   speakerLabel: string;
   koreanText: string;
+  contextNote?: string | null;
   startMs: number;
   endMs: number;
   isMine: boolean;
   analysisIntent?: string | null;
+};
+type PersonProfile = {
+  id: string;
+  name: string;
+  roleLabel?: string | null;
+  relationshipToMe?: string | null;
+  aliases?: string | null;
+  notes?: string | null;
+  isMe?: boolean;
 };
 type RecordingResponse = {
   id: string;
@@ -44,7 +54,11 @@ type RecordingResponse = {
   analysisRelationship?: string | null;
   analysisSituation?: string | null;
   analysisTone?: string | null;
+  analysisStatus?: "NOT_ANALYZED" | "OK" | "NEEDS_REVIEW" | null;
+  analysisStatusReason?: string | null;
   analysisUpdatedAt?: string | null;
+  participants: Array<{ personProfile: PersonProfile }>;
+  speakerProfiles: Array<{ speakerLabel: string; personProfileId: string; personProfile: PersonProfile }>;
   utterances: RecordingUtterance[];
 };
 type RecordingSummary = {
@@ -54,11 +68,14 @@ type RecordingSummary = {
   diarization: boolean;
   createdAt: string;
   updatedAt: string;
+  analysisStatus?: "NOT_ANALYZED" | "OK" | "NEEDS_REVIEW" | null;
+  analysisStatusReason?: string | null;
   _count: { utterances: number };
 };
 type Expression = {
   id: string;
   utteranceId?: string | null;
+  savedSentenceId?: string | null;
   koreanText: string;
   englishBase: string;
   englishEasy: string;
@@ -67,6 +84,12 @@ type Expression = {
   userMemo?: string | null;
   ttsKey?: string | null;
   ttsUrl?: string | null;
+  sourceAnalysisIntent?: string | null;
+  sourceAnalysisSummary?: string | null;
+  sourceRelationship?: string | null;
+  sourceSituation?: string | null;
+  sourceTone?: string | null;
+  sourceContextNote?: string | null;
 };
 type TtsResponse = { expressionId: string; ttsKey: string; ttsUrl: string; expression: string };
 type BulkExpressionResponse = {
@@ -182,6 +205,52 @@ type FlowStep = {
   progress: number;
 };
 
+function normalizeProfileKeyword(value?: string | null) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function inferRelationshipFromProfiles(profiles: PersonProfile[]) {
+  if (profiles.length === 0) return "";
+
+  const hasMe = profiles.some((profile) => profile.isMe);
+  const keywordSet = new Set(
+    profiles.flatMap((profile) => [
+      normalizeProfileKeyword(profile.roleLabel),
+      normalizeProfileKeyword(profile.relationshipToMe),
+    ]),
+  );
+
+  const hasAnyKeyword = (keywords: string[]) =>
+    Array.from(keywordSet).some((value) => value && keywords.some((keyword) => value.includes(keyword)));
+
+  if (hasAnyKeyword(["선생님", "teacher"]) && hasAnyKeyword(["학생", "student"])) {
+    return "선생님 - 학생";
+  }
+  if (hasAnyKeyword(["손님", "고객", "customer", "guest"]) && hasAnyKeyword(["직원", "staff", "employee", "점원"])) {
+    return "손님 - 직원";
+  }
+  if (hasMe && hasAnyKeyword(["배우자", "남편", "아내", "wife", "husband", "spouse"])) {
+    return "부부";
+  }
+  if (
+    hasMe &&
+    hasAnyKeyword(["딸", "아들", "자녀", "아이", "아기", "daughter", "son", "child", "kid", "baby"])
+  ) {
+    return "부모 - 자녀";
+  }
+  if (
+    hasMe &&
+    hasAnyKeyword(["엄마", "아빠", "부모", "어머니", "아버지", "mother", "father", "parent"])
+  ) {
+    return "부모 - 자녀";
+  }
+  if (hasAnyKeyword(["친구", "friend"])) {
+    return "친구";
+  }
+
+  return "";
+}
+
 const RECORDING_OPTIONS = [
   { label: "5초", value: 5000 },
   { label: "10초", value: 10000 },
@@ -202,6 +271,8 @@ const AUTO_FLOW_STEPS: FlowStep[] = [
   { id: "reviews", label: "복습 목록 갱신", description: "표현장과 오늘 복습 목록을 새로고침합니다.", progress: 96 },
   { id: "complete", label: "완료", description: "테스트 영역으로 이동해 바로 연습합니다.", progress: 100 },
 ];
+
+const DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG = false;
 
 const STEP_TIMEOUTS: Record<string, number> = {
   "record-start": 10000,
@@ -286,6 +357,15 @@ const RELATIONSHIP_TEMPLATES = [
 const SITUATION_TEMPLATES = ["집", "이동 중", "식사 중", "가족 식사", "병원", "학교", "가게", "통화 중"];
 const TONE_TEMPLATES = ["자연스럽게", "부드럽게", "단호하게", "친근하게", "공손하게"];
 
+function isBrowserRecordedFile(file: File) {
+  const normalizedType = (file.type || "").toLowerCase();
+  const normalizedName = file.name.toLowerCase();
+  return (
+    normalizedName.startsWith("recording-") &&
+    (normalizedType.includes("webm") || normalizedType.includes("mp4") || normalizedType.includes("m4a"))
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
@@ -298,9 +378,22 @@ export default function DashboardPage() {
   const [recordingContext, setRecordingContext] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
   const [recordingContextDraft, setRecordingContextDraft] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
   const [recordingAnalysis, setRecordingAnalysis] = useState<RecordingAnalysis | null>(null);
-  const [analysisNeedsRefresh, setAnalysisNeedsRefresh] = useState(false);
   const [recordings, setRecordings] = useState<RecordingSummary[]>([]);
+  const [personProfiles, setPersonProfiles] = useState<PersonProfile[]>([]);
+  const [personProfileDraft, setPersonProfileDraft] = useState({
+    id: "",
+    name: "",
+    roleLabel: "",
+    relationshipToMe: "",
+    aliases: "",
+    notes: "",
+    isMe: false,
+  });
   const [utteranceDrafts, setUtteranceDrafts] = useState<Record<string, string>>({});
+  const [utteranceContextDrafts, setUtteranceContextDrafts] = useState<Record<string, string>>({});
+  const [utteranceAnalysisReviewFlags, setUtteranceAnalysisReviewFlags] = useState<Record<string, boolean>>({});
+  const [recordingParticipantDraftIds, setRecordingParticipantDraftIds] = useState<string[]>([]);
+  const [speakerProfileDrafts, setSpeakerProfileDrafts] = useState<Record<string, string>>({});
   const [expressions, setExpressions] = useState<Expression[]>([]);
   const [selectedExpressionId, setSelectedExpressionId] = useState("");
   const [expressionMemoDraft, setExpressionMemoDraft] = useState("");
@@ -334,6 +427,7 @@ export default function DashboardPage() {
   const [showManualGenerateContext, setShowManualGenerateContext] = useState(false);
   const [manualGenerateText, setManualGenerateText] = useState("");
   const [recentManualContext, setRecentManualContext] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
+  const [manualGenerateParticipantIds, setManualGenerateParticipantIds] = useState<string[]>([]);
   const [recordingAnalysisMode, setRecordingAnalysisMode] = useState<RecordingAnalysisMode>(DEFAULT_RECORDING_ANALYSIS_MODE);
   const [manualRecordingLimitMs, setManualRecordingLimitMs] = useState(MANUAL_RECORDING_MAX_MS);
   const [ttsLibraryRepeatCount, setTtsLibraryRepeatCount] = useState<1 | 2 | 3>(1);
@@ -388,9 +482,32 @@ export default function DashboardPage() {
     () => expressions.find((item) => item.id === selectedExpressionId) ?? expressions[0] ?? null,
     [expressions, selectedExpressionId],
   );
-  const utteranceExpressionIds = useMemo(
-    () => new Set(expressions.map((item) => item.utteranceId).filter((value): value is string => Boolean(value))),
+  const recordingUtteranceIds = useMemo(
+    () => new Set(recording?.utterances.map((utterance) => utterance.id) ?? []),
+    [recording],
+  );
+  const recordingExpressions = useMemo(
+    () =>
+      expressions.filter(
+        (expression) => expression.utteranceId && recordingUtteranceIds.has(expression.utteranceId),
+      ),
+    [expressions, recordingUtteranceIds],
+  );
+  const savedSentenceExpressions = useMemo(
+    () => expressions.filter((expression) => expression.savedSentenceId && !expression.utteranceId),
     [expressions],
+  );
+  const sectionExpressions = useMemo(
+    () => (recording ? recordingExpressions : savedSentenceExpressions),
+    [recording, recordingExpressions, savedSentenceExpressions],
+  );
+  const selectedSectionExpression = useMemo(
+    () => sectionExpressions.find((item) => item.id === selectedExpressionId) ?? null,
+    [sectionExpressions, selectedExpressionId],
+  );
+  const utteranceExpressionIds = useMemo(
+    () => new Set(recordingExpressions.map((item) => item.utteranceId).filter((value): value is string => Boolean(value))),
+    [recordingExpressions],
   );
   const pendingMineExpressionCount = useMemo(
     () =>
@@ -406,12 +523,13 @@ export default function DashboardPage() {
       ).length,
     [recording, utteranceExpressionIds],
   );
-  const pendingRecordingTtsCount = useMemo(
-    () =>
-      recording
-        ? expressions.filter((expression) => expression.utteranceId && recording.utterances.some((utterance) => utterance.id === expression.utteranceId) && !expression.ttsKey).length
-        : 0,
-    [expressions, recording],
+  const pendingSectionTtsCount = useMemo(
+    () => sectionExpressions.filter((expression) => !expression.ttsKey).length,
+    [sectionExpressions],
+  );
+  const completedSectionTtsExpressions = useMemo(
+    () => sectionExpressions.filter((expression) => Boolean(expression.ttsKey && expression.ttsUrl)),
+    [sectionExpressions],
   );
   const completedTtsExpressions = useMemo(
     () => expressions.filter((expression) => Boolean(expression.ttsKey && expression.ttsUrl)),
@@ -426,8 +544,8 @@ export default function DashboardPage() {
     [recording, visibleCounts.utterances],
   );
   const visibleExpressions = useMemo(
-    () => expressions.slice(0, visibleCounts.expressions),
-    [expressions, visibleCounts.expressions],
+    () => sectionExpressions.slice(0, visibleCounts.expressions),
+    [sectionExpressions, visibleCounts.expressions],
   );
   const visibleReviews = useMemo(
     () => reviews.slice(0, visibleCounts.reviews),
@@ -446,25 +564,23 @@ export default function DashboardPage() {
     });
   }, [recording]);
   const intentByUtteranceId = useMemo(
-    () =>
-      new Map(
-        ((recordingAnalysis?.intents?.length
-          ? recordingAnalysis.intents
-          : (recording?.utterances ?? []).map((utterance) => ({
-              utteranceId: utterance.id,
-              intent: utterance.analysisIntent ?? "",
-            }))) as Array<{ utteranceId?: string; intent: string }>)
-          .filter((item) => item.utteranceId)
-          .map((item) => [item.utteranceId as string, item.intent]),
-      ),
+    () => buildIntentByUtteranceId(recording, recordingAnalysis),
     [recordingAnalysis, recording],
   );
   const selectedExpressionIntent = selectedExpression?.utteranceId
     ? intentByUtteranceId.get(selectedExpression.utteranceId) ?? ""
     : "";
+  const selectedSectionExpressionIntent =
+    selectedSectionExpression?.utteranceId
+      ? intentByUtteranceId.get(selectedSectionExpression.utteranceId) ?? ""
+      : selectedSectionExpression?.sourceAnalysisIntent ?? "";
   const visibleRecordingSummary = recordingAnalysis?.summary ?? recording?.analysisSummary ?? "";
   const hasUnsavedContextChanges = !contextsEqual(recordingContextDraft, recordingContext);
+  const hasUnsavedParticipantChanges =
+    recordingParticipantDraftIds.slice().sort().join(",") !==
+    (recording?.participants.map((item) => item.personProfile.id) ?? []).slice().sort().join(",");
   const hasAnyAnalysis = Boolean(visibleRecordingSummary) || (recording?.utterances ?? []).some((item) => Boolean(item.analysisIntent));
+  const analysisStatus = recording?.analysisStatus ?? (hasAnyAnalysis ? "OK" : "NOT_ANALYZED");
   const isReviewAnswerHidden =
     Boolean(activeReviewExpressionId) && selectedExpression?.id === activeReviewExpressionId && !score;
 
@@ -536,7 +652,8 @@ export default function DashboardPage() {
     if (!recording?.id) {
       setRecordingContext(EMPTY_RECORDING_CONTEXT);
       setRecordingContextDraft(EMPTY_RECORDING_CONTEXT);
-      setAnalysisNeedsRefresh(false);
+      setRecordingParticipantDraftIds([]);
+      setSpeakerProfileDrafts({});
       return;
     }
     const fallbackContext = buildRecordingContextFromAnalysis(recording);
@@ -544,9 +661,10 @@ export default function DashboardPage() {
     const nextContext = contextsEqual(storedContext, EMPTY_RECORDING_CONTEXT) ? fallbackContext : storedContext;
     setRecordingContext(nextContext);
     setRecordingContextDraft(nextContext);
-    const analysisContext = buildRecordingContextFromAnalysis(recording);
-    const hasAnalysisContent = Boolean(recording.analysisSummary) || recording.utterances.some((item) => Boolean(item.analysisIntent));
-    setAnalysisNeedsRefresh(hasAnalysisContent && !contextsEqual(nextContext, analysisContext));
+    setRecordingParticipantDraftIds(recording.participants.map((item) => item.personProfile.id));
+    setSpeakerProfileDrafts(
+      Object.fromEntries(recording.speakerProfiles.map((item) => [item.speakerLabel, item.personProfileId])),
+    );
   }, [recording?.id]);
 
   useEffect(() => {
@@ -581,13 +699,17 @@ export default function DashboardPage() {
       apiFetch<Expression[]>("/expressions").catch(() => []),
       apiFetch<ReviewItem[]>("/reviews/today").catch(() => []),
       apiFetch<RecordingSummary[]>("/recordings").catch(() => []),
+      apiFetch<PersonProfile[]>("/person-profiles").catch(() => []),
     ])
-      .then(([me, expressionList, reviewList, recordingList]) => {
+      .then(([me, expressionList, reviewList, recordingList, personProfileList]) => {
         setUser(me);
         setExpressions(expressionList);
-        if (expressionList[0]) setSelectedExpressionId(expressionList[0].id);
+        if (expressionList[0]) {
+          setSelectedExpressionId(pickExpressionIdForRecording(expressionList, null));
+        }
         setReviews(reviewList);
         setRecordings(recordingList);
+        setPersonProfiles(personProfileList);
       })
       .catch((err) => {
         setAuthError(err instanceof Error ? err.message : "세션 확인에 실패했습니다.");
@@ -640,6 +762,64 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     situation: recording?.analysisSituation ?? "",
     tone: recording?.analysisTone ?? "",
   };
+}
+
+function formatAnalysisStatusReason(reason?: string | null) {
+  switch (reason) {
+    case "CONTEXT_UPDATED":
+      return "대화 맥락 힌트가 수정됨";
+    case "UTTERANCE_UPDATED":
+      return "문장 또는 문장별 맥락 메모가 수정됨";
+    case "UTTERANCE_DELETED":
+      return "문장이 삭제됨";
+    case "SPEAKER_CHANGED":
+      return "내 화자 지정이 변경됨";
+    case "SPEAKER_LABEL_CHANGED":
+      return "화자 이름이 변경됨";
+    default:
+      return reason ?? "";
+  }
+}
+
+function buildIntentByUtteranceId(
+  recording: RecordingResponse | null,
+  analysis: RecordingAnalysis | null,
+) {
+  const intentMap = new Map<string, string>();
+
+  for (const utterance of recording?.utterances ?? []) {
+    if (!utterance.id) continue;
+    intentMap.set(utterance.id, utterance.analysisIntent ?? "");
+  }
+
+  for (const item of analysis?.intents ?? []) {
+    if (!item.utteranceId) continue;
+    intentMap.set(item.utteranceId, item.intent);
+  }
+
+  return intentMap;
+}
+
+function pickExpressionIdForRecording(
+  expressions: Expression[],
+  recording: RecordingResponse | null,
+  preferredExpressionId?: string,
+) {
+  if (preferredExpressionId && expressions.some((expression) => expression.id === preferredExpressionId)) {
+    return preferredExpressionId;
+  }
+
+  if (recording) {
+    const recordingUtteranceIds = new Set(recording.utterances.map((utterance) => utterance.id));
+    const firstRecordingExpression = expressions.find(
+      (expression) => expression.utteranceId && recordingUtteranceIds.has(expression.utteranceId),
+    );
+    if (firstRecordingExpression) {
+      return firstRecordingExpression.id;
+    }
+  }
+
+  return expressions[0]?.id ?? "";
 }
 
   function seekRawAudio(timeSeconds: number, autoPlay = false) {
@@ -754,7 +934,7 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     ]);
     setExpressions(expressionList);
     setReviews(reviewList);
-    const nextId = preferredExpressionId ?? expressionList[0]?.id ?? "";
+    const nextId = pickExpressionIdForRecording(expressionList, recording, preferredExpressionId);
     setSelectedExpressionId(nextId);
   }
 
@@ -763,13 +943,28 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     setRecordings(recordingList);
   }
 
+  async function refreshPersonProfiles() {
+    const profileList = await apiFetch<PersonProfile[]>("/person-profiles").catch(() => []);
+    setPersonProfiles(profileList);
+  }
+
   function syncUtteranceDrafts(nextRecording: RecordingResponse | null) {
     if (!nextRecording) {
       setUtteranceDrafts({});
+      setUtteranceContextDrafts({});
+      setUtteranceAnalysisReviewFlags({});
       return;
     }
     setUtteranceDrafts(
       Object.fromEntries(nextRecording.utterances.map((utterance) => [utterance.id, utterance.koreanText])),
+    );
+    setUtteranceContextDrafts(
+      Object.fromEntries(nextRecording.utterances.map((utterance) => [utterance.id, utterance.contextNote ?? ""])),
+    );
+    setUtteranceAnalysisReviewFlags(
+      Object.fromEntries(
+        nextRecording.utterances.map((utterance) => [utterance.id, DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG]),
+      ),
     );
   }
 
@@ -898,6 +1093,33 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     setRecordingAnalysis(null);
   }
 
+  function updateRecordingAnalysisStatusLocal(
+    status: "NOT_ANALYZED" | "OK" | "NEEDS_REVIEW",
+    reason?: string | null,
+  ) {
+    setRecording((current) =>
+      current
+        ? {
+            ...current,
+            analysisStatus: status,
+            analysisStatusReason: status === "OK" || status === "NOT_ANALYZED" ? null : reason ?? null,
+          }
+        : current,
+    );
+  }
+
+  async function persistRecordingAnalysisStatus(
+    status: "OK" | "NEEDS_REVIEW",
+    reason?: string,
+  ) {
+    if (!recording?.id) return;
+    await apiFetch(`/recordings/${recording.id}/analysis-status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, reason }),
+    });
+    updateRecordingAnalysisStatusLocal(status, status === "OK" ? null : reason ?? null);
+  }
+
   async function runRecordingAnalysis(
     recordingId: string,
     successMessage?: string,
@@ -911,7 +1133,6 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     setRecording((current) => (current?.id === recordingId ? refreshedRecording : current));
     syncUtteranceDrafts(refreshedRecording);
     setRecordingAnalysis(result);
-    setAnalysisNeedsRefresh(false);
     if (successMessage) {
       setMessage(successMessage);
     }
@@ -1050,17 +1271,53 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     await playTtsLibraryPlanStep(plan);
   }
 
-  function markAnalysisAsOutdated() {
-    setAnalysisNeedsRefresh(true);
-  }
-
   function updateRecordingContextField(field: keyof RecordingGenerationContext, value: string) {
     setRecordingContextDraft((current) => ({ ...current, [field]: value }));
   }
 
+  function applySuggestedRelationshipToManualContext(nextParticipantIds: string[]) {
+    setRecordingContext((current) => {
+      if (current.relationship.trim()) return current;
+      const suggested = inferRelationshipFromProfiles(
+        personProfiles.filter((profile) => nextParticipantIds.includes(profile.id)),
+      );
+      return suggested ? { ...current, relationship: suggested } : current;
+    });
+  }
+
+  function applySuggestedRelationshipToRecordingContext(nextParticipantIds: string[]) {
+    setRecordingContextDraft((current) => {
+      if (current.relationship.trim()) return current;
+      const suggested = inferRelationshipFromProfiles(
+        personProfiles.filter((profile) => nextParticipantIds.includes(profile.id)),
+      );
+      return suggested ? { ...current, relationship: suggested } : current;
+    });
+  }
+
+  function toggleManualGenerateParticipant(profileId: string) {
+    setManualGenerateParticipantIds((current) => {
+      const next = current.includes(profileId)
+        ? current.filter((item) => item !== profileId)
+        : [...current, profileId];
+      applySuggestedRelationshipToManualContext(next);
+      return next;
+    });
+  }
+
+  function toggleRecordingParticipant(profileId: string) {
+    setRecordingParticipantDraftIds((current) => {
+      const next = current.includes(profileId)
+        ? current.filter((item) => item !== profileId)
+        : [...current, profileId];
+      applySuggestedRelationshipToRecordingContext(next);
+      return next;
+    });
+  }
+
   async function handleSaveRecordingContext() {
     if (!recording?.id) return;
-    if (!hasUnsavedContextChanges) {
+    if (!hasUnsavedContextChanges && !hasUnsavedParticipantChanges) {
       setMessage("저장할 맥락 변경사항이 없습니다.");
       return;
     }
@@ -1070,12 +1327,21 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     setMessage("");
     setLoading("save-recording-context");
     try {
+      if (hasUnsavedParticipantChanges) {
+        const updated = await apiFetch<RecordingResponse>(`/recordings/${recording.id}/participants`, {
+          method: "PATCH",
+          body: JSON.stringify({ personProfileIds: recordingParticipantDraftIds }),
+        });
+        setRecordingWithDrafts(updated);
+      }
       saveRecordingContext(recording.id, nextContext);
+      saveRecentGenerationContext(nextContext);
+      setRecentManualContext(nextContext);
       setRecordingContext(nextContext);
       if (recordingAnalysisMode === "auto") {
         await runRecordingAnalysis(recording.id, "맥락 힌트를 저장하고 대화 분석을 자동으로 갱신했습니다.", nextContext);
       } else {
-        markAnalysisAsOutdated();
+        await persistRecordingAnalysisStatus("NEEDS_REVIEW", "CONTEXT_UPDATED");
         setMessage("대화 맥락 힌트를 저장했습니다. 분석을 다시 실행하면 최신 맥락이 반영됩니다.");
       }
     } catch (err) {
@@ -1085,30 +1351,59 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     }
   }
 
-  function updateLocalUtterance(utteranceId: string, koreanText: string) {
+  function updateLocalUtterance(utteranceId: string, patch: { koreanText?: string; contextNote?: string | null }) {
     setRecording((current) => {
       if (!current) return current;
       return {
         ...current,
         utterances: current.utterances.map((utterance) =>
-          utterance.id === utteranceId ? { ...utterance, koreanText } : utterance,
+          utterance.id === utteranceId
+            ? {
+                ...utterance,
+                ...(typeof patch.koreanText === "string" ? { koreanText: patch.koreanText } : {}),
+                ...(typeof patch.contextNote === "string" || patch.contextNote === null
+                  ? { contextNote: patch.contextNote }
+                  : {}),
+              }
+            : utterance,
         ),
       };
     });
-    setUtteranceDrafts((current) => ({ ...current, [utteranceId]: koreanText }));
+    if (typeof patch.koreanText === "string") {
+      setUtteranceDrafts((current) => ({ ...current, [utteranceId]: patch.koreanText as string }));
+    }
+    if (typeof patch.contextNote === "string" || patch.contextNote === null) {
+      setUtteranceContextDrafts((current) => ({ ...current, [utteranceId]: patch.contextNote ?? "" }));
+    }
   }
 
-  async function saveUtteranceText(utteranceId: string) {
-    const draft = utteranceDrafts[utteranceId]?.trim();
-    if (!draft) {
+  async function saveUtteranceDraft(
+    utteranceId: string,
+    options: { requireText?: boolean; markAnalysisReview?: boolean } = {},
+  ) {
+    const requireText = options.requireText ?? true;
+    const markAnalysisReview = options.markAnalysisReview ?? false;
+    const currentUtterance = recording?.utterances.find((utterance) => utterance.id === utteranceId);
+    const textDraft = utteranceDrafts[utteranceId] ?? currentUtterance?.koreanText ?? "";
+    const trimmedText = textDraft.trim();
+    if (requireText && !trimmedText) {
       throw new Error("수정할 문장을 입력해 주세요.");
     }
-
+    const contextNote = (utteranceContextDrafts[utteranceId] ?? currentUtterance?.contextNote ?? "").trim();
     const updated = await apiFetch<RecordingUtterance>(`/recordings/utterances/${utteranceId}`, {
       method: "PATCH",
-      body: JSON.stringify({ koreanText: draft }),
+      body: JSON.stringify({
+        ...(trimmedText ? { koreanText: trimmedText } : {}),
+        contextNote,
+      }),
     });
-    updateLocalUtterance(utteranceId, updated.koreanText);
+    updateLocalUtterance(utteranceId, {
+      koreanText: updated.koreanText,
+      contextNote: updated.contextNote ?? "",
+    });
+    if (markAnalysisReview) {
+      updateRecordingAnalysisStatusLocal("NEEDS_REVIEW", "UTTERANCE_UPDATED");
+    }
     return updated;
   }
 
@@ -1142,7 +1437,11 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
   }
 
   async function uploadAndProcessFile(file: File) {
-    return uploadAndProcessFileInternal(file, { trackFlow: true, selectProcessedRecording: true, normalizeAudio: true });
+    return uploadAndProcessFileInternal(file, {
+      trackFlow: true,
+      selectProcessedRecording: true,
+      normalizeAudio: !isBrowserRecordedFile(file),
+    });
   }
 
   async function uploadAndProcessFileInternal(
@@ -1231,8 +1530,13 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     return created;
   }
 
-  async function uploadSessionPart(sessionId: string, partNumber: number, file: File) {
-    const uploadFile = await normalizeAudioFileForUpload(file);
+  async function uploadSessionPart(
+    sessionId: string,
+    partNumber: number,
+    file: File,
+    options: { normalizeAudio?: boolean } = {},
+  ) {
+    const uploadFile = options.normalizeAudio === false ? file : await normalizeAudioFileForUpload(file);
     const presign = await apiFetch<RecordingSessionPartPresignResponse>(`/recording-sessions/${sessionId}/parts/presign`, {
       method: "POST",
       body: JSON.stringify({
@@ -1267,13 +1571,14 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
   async function uploadPreparedSessionParts(
     sessionId: string,
     preparedChunks: Array<{ file: File; durationMs: number; partNumber: number }>,
+    options: { normalizeAudio?: boolean } = {},
   ) {
     let uploadedCount = 0;
     for (const chunk of preparedChunks) {
       setMessage(
         `분할 파일 ${chunk.partNumber}/${preparedChunks.length} 업로드 중입니다. ${Math.round(chunk.durationMs / 1000)}초 길이의 파일을 처리합니다.`,
       );
-      await uploadSessionPart(sessionId, chunk.partNumber, chunk.file);
+      await uploadSessionPart(sessionId, chunk.partNumber, chunk.file, options);
       uploadedCount += 1;
       updateManualRecordingStats({
         chunkCount: preparedChunks.length,
@@ -1352,13 +1657,18 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     void poll();
   }
 
-  async function uploadManualChunkWithRetry(sessionId: string, file: File, chunkIndex: number) {
+  async function uploadManualChunkWithRetry(
+    sessionId: string,
+    file: File,
+    chunkIndex: number,
+    options: { normalizeAudio?: boolean } = {},
+  ) {
     for (let attempt = 0; attempt < MANUAL_RECORDING_RETRY_DELAYS.length; attempt += 1) {
       try {
         setMessage(
           `분할 파일 ${chunkIndex} 업로드와 텍스트 변환을 진행 중입니다. 녹음은 계속 이어집니다.`,
         );
-        await uploadSessionPart(sessionId, chunkIndex, file);
+        await uploadSessionPart(sessionId, chunkIndex, file, options);
         await enqueueRecordingSessionProcessing(sessionId);
         setFailedManualChunks((current) => current.filter((item) => item.chunkIndex !== chunkIndex));
         return true;
@@ -1478,7 +1788,7 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
           `긴 음성 파일을 ${prepared.chunks.length}개로 자동 분할했습니다. 각 파일을 순차 업로드한 뒤 worker가 비동기 처리합니다.`,
         );
       }
-      await uploadPreparedSessionParts(session.sessionId, prepared.chunks);
+      await uploadPreparedSessionParts(session.sessionId, prepared.chunks, { normalizeAudio: true });
       await finalizeRecordingSession(session.sessionId, prepared.chunks.length, prepared.durationMs);
       await enqueueRecordingSessionProcessing(session.sessionId);
       beginRecordingSessionPolling(session.sessionId);
@@ -1507,6 +1817,8 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     setRetryMode("");
     setUploadPercent(0);
     setFailedManualChunks([]);
+    setActiveRecordingSessionId("");
+    setActiveRecordingSessionStatus("");
     setManualRecordingStats({
       effectiveMaxMs: manualRecordingLimitMs,
       chunkCount: 0,
@@ -1516,41 +1828,26 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
       isActive: true,
     });
     try {
-      const sessionRecord = await createRecordingSession("WEB", "브라우저 장시간 녹음");
-      beginRecordingSessionPolling(sessionRecord.sessionId);
-      let successCount = 0;
-      let failedCount = 0;
-      const session = startChunkedRecordedAudioSession({
-        chunkDurationMs: MANUAL_RECORDING_CHUNK_MS,
-        maxDurationMs: manualRecordingLimitMs,
-        onLevel: pushWaveLevel,
-        onTick: (remaining, elapsed) => {
-          setRecordingRemainingMs(remaining);
-          setRecordingElapsedMs(elapsed);
-        },
-        onChunk: async (file, chunkIndex) => {
-          updateManualRecordingStats({ chunkCount: chunkIndex, currentChunkIndex: chunkIndex });
-          const uploaded = await uploadManualChunkWithRetry(sessionRecord.sessionId, file, chunkIndex);
-          if (uploaded) {
-            successCount += 1;
-            updateManualRecordingStats({ successCount });
-          } else {
-            failedCount += 1;
-            updateManualRecordingStats({ failedCount });
-          }
-        },
+      const file = await startMicRecording(manualRecordingLimitMs);
+      setSelectedFile(file);
+      updateManualRecordingStats({
+        chunkCount: 1,
+        successCount: 0,
+        failedCount: 0,
+        currentChunkIndex: 1,
       });
-      recordingSessionRef.current = session;
-      setIsMicRecording(true);
-      const result = await session.completion;
-      await finalizeRecordingSession(sessionRecord.sessionId, result.chunkCount, result.elapsedMs);
-      if (failedCount > 0) {
-        setMessage(
-          `브라우저 녹음이 종료되었습니다. ${result.chunkCount}개 파일 중 ${successCount}개 처리 완료, ${failedCount}개는 다시 업로드가 필요합니다.`,
-        );
-      } else {
-        setMessage(`브라우저 녹음이 종료되었습니다. ${result.chunkCount}개 파일이 업로드되고 텍스트 변환까지 완료되었습니다.`);
-      }
+      await uploadAndProcessFileInternal(file, {
+        trackFlow: false,
+        selectProcessedRecording: true,
+        normalizeAudio: false,
+      });
+      updateManualRecordingStats({
+        chunkCount: 1,
+        successCount: 1,
+        failedCount: 0,
+        currentChunkIndex: 1,
+      });
+      setMessage("브라우저 녹음이 종료되었습니다. 1개 파일 업로드와 텍스트 변환이 완료되었습니다.");
     } catch (err) {
       if (isAbortError(err) || userCancelledRef.current) {
         setMessage("브라우저 녹음을 취소했습니다.");
@@ -1663,7 +1960,9 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     setError("");
     setLoading(`retry-manual-chunk-${chunk.id}`);
     try {
-      const uploaded = await uploadManualChunkWithRetry(activeRecordingSessionId, chunk.file, chunk.chunkIndex);
+      const uploaded = await uploadManualChunkWithRetry(activeRecordingSessionId, chunk.file, chunk.chunkIndex, {
+        normalizeAudio: false,
+      });
       if (uploaded) {
         setManualRecordingStats((current) => ({
           ...current,
@@ -1683,13 +1982,25 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     setMessage("");
     setLoading(`expr-${utteranceId}`);
     try {
+      const shouldReviewAnalysis = utteranceAnalysisReviewFlags[utteranceId] ?? DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG;
       const currentUtterance = recording?.utterances.find((item) => item.id === utteranceId);
       const draft = utteranceDrafts[utteranceId]?.trim() ?? "";
       if (!draft) {
         throw new Error("표현 생성 전에 문장을 입력해 주세요.");
       }
-      if (currentUtterance && currentUtterance.koreanText !== draft) {
-        await saveUtteranceText(utteranceId);
+      const draftContextNote = (utteranceContextDrafts[utteranceId] ?? currentUtterance?.contextNote ?? "").trim();
+      if (
+        currentUtterance &&
+        (currentUtterance.koreanText !== draft || (currentUtterance.contextNote ?? "") !== draftContextNote)
+      ) {
+        await saveUtteranceDraft(utteranceId, { markAnalysisReview: shouldReviewAnalysis });
+      }
+      if (shouldReviewAnalysis && recording?.id) {
+        if (recordingAnalysisMode === "auto") {
+          await runAutoRecordingAnalysis(recording.id, "문장 수정 내용을 반영해 대화 분석을 자동으로 갱신했습니다.");
+        } else {
+          await persistRecordingAnalysisStatus("NEEDS_REVIEW", "UTTERANCE_UPDATED");
+        }
       }
       const expression = await runWithTimeout("expressions", (signal) => apiFetch<Expression>("/expressions/generate", {
         method: "POST",
@@ -1701,6 +2012,10 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
         setRecordingWithDrafts(loaded);
       }
       await refreshLists(expression.id);
+      setUtteranceAnalysisReviewFlags((current) => ({
+        ...current,
+        [utteranceId]: DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG,
+      }));
       setMessage("영어 표현을 생성했습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "표현 생성에 실패했습니다.");
@@ -1756,18 +2071,49 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     setMessage("");
     setLoading(`save-${utteranceId}`);
     try {
-      await saveUtteranceText(utteranceId);
-      if (recording?.id) {
+      const shouldReviewAnalysis = utteranceAnalysisReviewFlags[utteranceId] ?? DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG;
+      await saveUtteranceDraft(utteranceId, { markAnalysisReview: shouldReviewAnalysis });
+      if (shouldReviewAnalysis && recording?.id) {
         await runAutoRecordingAnalysis(recording.id, "문장을 저장하고 대화 분석을 자동으로 갱신했습니다.");
       } else {
         setMessage("변환된 문장을 수정해 저장했습니다.");
       }
-      if (recordingAnalysisMode !== "auto") {
-        markAnalysisAsOutdated();
+      if (shouldReviewAnalysis && recordingAnalysisMode !== "auto") {
+        await persistRecordingAnalysisStatus("NEEDS_REVIEW", "UTTERANCE_UPDATED");
         setMessage("변환된 문장을 수정해 저장했습니다.");
       }
+      setUtteranceAnalysisReviewFlags((current) => ({
+        ...current,
+        [utteranceId]: DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG,
+      }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "문장 저장에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleSaveUtteranceContextNote(utteranceId: string) {
+    setError("");
+    setMessage("");
+    setLoading(`save-context-${utteranceId}`);
+    try {
+      const shouldReviewAnalysis = utteranceAnalysisReviewFlags[utteranceId] ?? DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG;
+      await saveUtteranceDraft(utteranceId, { requireText: false, markAnalysisReview: shouldReviewAnalysis });
+      if (shouldReviewAnalysis && recording?.id) {
+        await runAutoRecordingAnalysis(recording.id, "문장별 맥락 메모를 저장하고 대화 분석을 자동으로 갱신했습니다.");
+      } else {
+        setMessage("문장별 맥락 메모를 저장했습니다.");
+      }
+      if (shouldReviewAnalysis && recordingAnalysisMode !== "auto") {
+        setMessage("문장별 맥락 메모를 저장했습니다.");
+      }
+      setUtteranceAnalysisReviewFlags((current) => ({
+        ...current,
+        [utteranceId]: DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG,
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "문장별 맥락 메모 저장에 실패했습니다.");
     } finally {
       setLoading("");
     }
@@ -1787,18 +2133,28 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     setMessage("");
     setLoading(`delete-utterance-${utteranceId}`);
     try {
+      const shouldReviewAnalysis = utteranceAnalysisReviewFlags[utteranceId] ?? DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG;
       const response = await apiFetch<DeleteUtteranceResponse>(`/recordings/utterances/${utteranceId}`, {
         method: "DELETE",
+        body: JSON.stringify({ markAnalysisReview: shouldReviewAnalysis }),
       });
       if (recording) {
         const loaded = await apiFetch<RecordingResponse>(`/recordings/${recording.id}`);
         setRecordingWithDrafts(loaded);
-        await runAutoRecordingAnalysis(loaded.id, "문장을 삭제하고 대화 분석을 자동으로 갱신했습니다.");
+        if (shouldReviewAnalysis) {
+          await runAutoRecordingAnalysis(loaded.id, "문장을 삭제하고 대화 분석을 자동으로 갱신했습니다.");
+        }
       }
       await refreshLists();
       await refreshRecordings();
-      if (recordingAnalysisMode !== "auto") {
-        markAnalysisAsOutdated();
+      if (shouldReviewAnalysis && recordingAnalysisMode !== "auto") {
+        await persistRecordingAnalysisStatus("NEEDS_REVIEW", "UTTERANCE_DELETED");
+        setMessage(
+          response.deletedExpressionCount > 0
+            ? `문장과 연결된 영어 표현 ${response.deletedExpressionCount}개를 함께 삭제했습니다.`
+            : "문장을 삭제했습니다.",
+        );
+      } else {
         setMessage(
           response.deletedExpressionCount > 0
             ? `문장과 연결된 영어 표현 ${response.deletedExpressionCount}개를 함께 삭제했습니다.`
@@ -1824,14 +2180,20 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     try {
       const expression = await runWithTimeout("expressions", (signal) => apiFetch<Expression>("/expressions/generate", {
         method: "POST",
-        body: JSON.stringify({ koreanText: text.trim(), ...buildRecordingContextPayload(recordingContext) }),
+        body: JSON.stringify({
+          koreanText: text.trim(),
+          personProfileIds: manualGenerateParticipantIds,
+          ...buildRecordingContextPayload(recordingContext),
+        }),
         signal,
       }));
       saveRecentGenerationContext(recordingContext);
       setRecentManualContext(recordingContext);
+      setRecordingWithDrafts(null);
       await refreshLists(expression.id);
       scrollToDashboardSection("expressions");
       setManualGenerateText("");
+      setManualGenerateParticipantIds([]);
       setShowManualGenerateComposer(false);
       setShowManualGenerateContext(false);
       setMessage("직접 입력한 문장으로 표현을 생성했습니다.");
@@ -2207,6 +2569,102 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
     }
   }
 
+  async function handleSavePersonProfile() {
+    if (!personProfileDraft.name.trim()) {
+      setError("인물 이름을 입력해 주세요.");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    setLoading("save-person-profile");
+    try {
+      const payload = {
+        name: personProfileDraft.name.trim(),
+        roleLabel: personProfileDraft.roleLabel.trim(),
+        relationshipToMe: personProfileDraft.relationshipToMe.trim(),
+        aliases: personProfileDraft.aliases.trim(),
+        notes: personProfileDraft.notes.trim(),
+        isMe: personProfileDraft.isMe,
+      };
+      if (personProfileDraft.id) {
+        await apiFetch(`/person-profiles/${personProfileDraft.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
+        setMessage("인물 프로필을 수정했습니다.");
+      } else {
+        await apiFetch("/person-profiles", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setMessage("인물 프로필을 추가했습니다.");
+      }
+      await refreshPersonProfiles();
+      setPersonProfileDraft({ id: "", name: "", roleLabel: "", relationshipToMe: "", aliases: "", notes: "", isMe: false });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "인물 프로필 저장에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleDeletePersonProfile(id: string) {
+    const confirmed = window.confirm("이 인물 프로필을 삭제할까요?");
+    if (!confirmed) return;
+
+    setError("");
+    setMessage("");
+    setLoading(`delete-person-profile-${id}`);
+    try {
+      await apiFetch(`/person-profiles/${id}`, { method: "DELETE" });
+      await refreshPersonProfiles();
+      setPersonProfileDraft((current) => (current.id === id ? { id: "", name: "", roleLabel: "", relationshipToMe: "", aliases: "", notes: "", isMe: false } : current));
+      setMessage("인물 프로필을 삭제했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "인물 프로필 삭제에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleSaveRecordingParticipants() {
+    if (!recording?.id) return;
+    setError("");
+    setMessage("");
+    setLoading("save-recording-participants");
+    try {
+      const updated = await apiFetch<RecordingResponse>(`/recordings/${recording.id}/participants`, {
+        method: "PATCH",
+        body: JSON.stringify({ personProfileIds: recordingParticipantDraftIds }),
+      });
+      setRecordingWithDrafts(updated);
+      setMessage("관련 인물을 저장했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "관련 인물 저장에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleUpdateSpeakerProfile(recordingId: string, speakerLabel: string, personProfileId: string) {
+    setError("");
+    setMessage("");
+    setLoading(`speaker-profile-${recordingId}-${speakerLabel}`);
+    try {
+      const updated = await apiFetch<RecordingResponse>(`/recordings/${recordingId}/speaker-profile`, {
+        method: "PATCH",
+        body: JSON.stringify({ speakerLabel, personProfileId: personProfileId || undefined }),
+      });
+      setRecordingWithDrafts(updated);
+      setMessage(personProfileId ? `${speakerLabel}에 인물 프로필을 연결했습니다.` : `${speakerLabel} 인물 연결을 해제했습니다.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "화자 인물 연결 저장에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
   async function handleSelectMineSpeaker(recordingId: string, speakerLabel: string) {
     setError("");
     setMessage("");
@@ -2219,7 +2677,7 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
       setRecordingWithDrafts(updated);
       await runAutoRecordingAnalysis(updated.id, "내 화자 설정을 반영해 대화 분석을 자동으로 갱신했습니다.");
       if (recordingAnalysisMode !== "auto") {
-        markAnalysisAsOutdated();
+        await persistRecordingAnalysisStatus("NEEDS_REVIEW", "SPEAKER_CHANGED");
         setMessage(`${speakerLabel}를 내 화자로 지정했습니다. 이후 문장 추출과 표현 생성이 이 선택을 기준으로 동작합니다.`);
       }
     } catch (err) {
@@ -2244,7 +2702,7 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
       setRecordingWithDrafts(updated);
       await runAutoRecordingAnalysis(updated.id, "화자 이름 변경을 반영해 대화 분석을 자동으로 갱신했습니다.");
       if (recordingAnalysisMode !== "auto") {
-        markAnalysisAsOutdated();
+        await persistRecordingAnalysisStatus("NEEDS_REVIEW", "SPEAKER_LABEL_CHANGED");
         setMessage(`${speakerLabel} 이름을 "${nextSpeakerLabel.trim()}"로 저장했습니다.`);
       }
     } catch (err) {
@@ -2386,6 +2844,25 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
               {showManualGenerateContext && (
                 <div className="grid" style={{ gap: 12 }}>
                   <div>
+                    <div className="muted" style={{ marginBottom: 8 }}>관련 인물 선택</div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      {personProfiles.map((profile) => (
+                        <button
+                          key={`manual-${profile.id}`}
+                          type="button"
+                          className={`chip ${manualGenerateParticipantIds.includes(profile.id) ? "selected" : ""}`}
+                          onClick={() => toggleManualGenerateParticipant(profile.id)}
+                          disabled={!!loading}
+                        >
+                          {profile.name}{profile.roleLabel ? ` (${profile.roleLabel})` : ""}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      이번 문장 해석에 필요한 인물만 골라두면 이름과 관계 정보를 함께 참고합니다.
+                    </div>
+                  </div>
+                  <div>
                     <div className="muted" style={{ marginBottom: 8 }}>관계 템플릿</div>
                     <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                       {RELATIONSHIP_TEMPLATES.map((item) => (
@@ -2460,11 +2937,12 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
               </button>
               <button
                 className="button ghost"
-                onClick={() => {
-                  setShowManualGenerateComposer(false);
-                  setManualGenerateText("");
-                  setShowManualGenerateContext(false);
-                }}
+                  onClick={() => {
+                    setShowManualGenerateComposer(false);
+                    setManualGenerateText("");
+                    setManualGenerateParticipantIds([]);
+                    setShowManualGenerateContext(false);
+                  }}
                 disabled={!!loading}
               >
                 닫기
@@ -2472,6 +2950,70 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
             </div>
           </div>
         )}
+      </section>
+
+      <section className="card panel-lg">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <h2 className="h2" style={{ marginBottom: 8 }}>개인 인물 사전</h2>
+            <div className="muted">
+              나와 가족, 자주 등장하는 사람을 등록해두면 녹음 맥락 입력과 화자 선택을 훨씬 빠르게 할 수 있습니다.
+            </div>
+          </div>
+        </div>
+        <div className="grid grid-2" style={{ marginTop: 16 }}>
+          <div className="mini-card">
+            <strong>{personProfileDraft.id ? "인물 프로필 수정" : "인물 프로필 추가"}</strong>
+            <div className="grid" style={{ marginTop: 12 }}>
+              <input className="input" value={personProfileDraft.name} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, name: event.target.value }))} placeholder="이름 예: 박소연" />
+              <input className="input" value={personProfileDraft.roleLabel} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, roleLabel: event.target.value }))} placeholder="역할 예: 첫째딸, 배우자" />
+              <input className="input" value={personProfileDraft.relationshipToMe} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, relationshipToMe: event.target.value }))} placeholder="나와의 관계 예: 딸, 배우자, 본인" />
+              <input className="input" value={personProfileDraft.aliases} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, aliases: event.target.value }))} placeholder="별칭 예: 소연이, 언니" />
+              <textarea className="textarea" style={{ minHeight: 92 }} value={personProfileDraft.notes} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="메모 예: 초등학생, 투정 부릴 때가 있음" />
+              <label className="muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input type="checkbox" checked={personProfileDraft.isMe} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, isMe: event.target.checked }))} />
+                이 인물은 나
+              </label>
+            </div>
+            <div className="row" style={{ marginTop: 12 }}>
+              <button className="button" onClick={handleSavePersonProfile} disabled={!!loading || !personProfileDraft.name.trim()}>
+                {loading === "save-person-profile" ? "저장 중..." : personProfileDraft.id ? "수정 저장" : "인물 추가"}
+              </button>
+              {personProfileDraft.id && (
+                <button className="button ghost" onClick={() => setPersonProfileDraft({ id: "", name: "", roleLabel: "", relationshipToMe: "", aliases: "", notes: "", isMe: false })} disabled={!!loading}>
+                  입력 초기화
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="mini-card">
+            <strong>등록된 인물</strong>
+            <div className="grid" style={{ marginTop: 12 }}>
+              {personProfiles.length === 0 && <div className="muted">아직 등록된 인물이 없습니다.</div>}
+              {personProfiles.map((profile) => (
+                <div key={profile.id} className="mini-card">
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                    <strong>{profile.name}</strong>
+                    {profile.isMe && <span className="tag tag-primary">나</span>}
+                  </div>
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    {[profile.roleLabel, profile.relationshipToMe].filter(Boolean).join(" · ") || "역할 정보 없음"}
+                  </div>
+                  {profile.aliases && <div className="muted" style={{ marginTop: 6 }}>별칭: {profile.aliases}</div>}
+                  {profile.notes && <div className="muted" style={{ marginTop: 6 }}>{profile.notes}</div>}
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <button className="button ghost" onClick={() => setPersonProfileDraft({ id: profile.id, name: profile.name, roleLabel: profile.roleLabel ?? "", relationshipToMe: profile.relationshipToMe ?? "", aliases: profile.aliases ?? "", notes: profile.notes ?? "", isMe: Boolean(profile.isMe) })} disabled={!!loading}>
+                      수정
+                    </button>
+                    <button className="button danger" onClick={() => handleDeletePersonProfile(profile.id)} disabled={!!loading}>
+                      {loading === `delete-person-profile-${profile.id}` ? "삭제 중..." : "삭제"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </section>
 
       <section ref={autoFlowSectionRef} className="card panel-lg">
@@ -2889,37 +3431,140 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                   관계, 상황, 원하는 톤을 적어두면 표현 생성이 대화 맥락을 더 잘 반영합니다.
                 </div>
                 <div className="grid" style={{ marginTop: 12 }}>
-                  <input
-                    className="input"
-                    value={recordingContextDraft.relationship}
-                    onChange={(event) => updateRecordingContextField("relationship", event.target.value)}
-                    placeholder="예: 엄마 - 아이"
-                  />
-                  <textarea
-                    className="input"
-                    style={{ minHeight: 96, resize: "vertical" }}
-                    value={recordingContextDraft.situation}
-                    onChange={(event) => updateRecordingContextField("situation", event.target.value)}
-                    placeholder="예: 아이가 혼자 집에 있겠다고 하고, 엄마가 위험해서 안 된다고 설명하는 상황"
-                  />
-                  <input
-                    className="input"
-                    value={recordingContextDraft.tone}
-                    onChange={(event) => updateRecordingContextField("tone", event.target.value)}
-                    placeholder="예: 자연스럽고 부드럽지만 단호한 미국식 일상 회화"
-                  />
+                  <div>
+                    <div className="muted" style={{ marginBottom: 8 }}>관련 인물 선택</div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      {personProfiles.map((profile) => (
+                        <button
+                          key={profile.id}
+                          type="button"
+                          className={`chip ${recordingParticipantDraftIds.includes(profile.id) ? "selected" : ""}`}
+                          onClick={() => toggleRecordingParticipant(profile.id)}
+                          disabled={!!loading}
+                        >
+                          {profile.name}{profile.roleLabel ? ` (${profile.roleLabel})` : ""}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      관련 인물을 선택해 두면 이름만 상황 설명에 적어도 관계 정보를 함께 참고합니다.
+                    </div>
+                  </div>
+                  <div className="row" style={{ gap: 10 }}>
+                    <button
+                      className="button ghost"
+                      onClick={() => setRecordingContextDraft(recentManualContext)}
+                      disabled={
+                        !!loading ||
+                        (!recentManualContext.relationship && !recentManualContext.situation && !recentManualContext.tone)
+                      }
+                    >
+                      최근 맥락 다시 사용
+                    </button>
+                  </div>
+                  <div>
+                    <div className="muted" style={{ marginBottom: 8 }}>관계 템플릿</div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      {RELATIONSHIP_TEMPLATES.map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          className={`chip ${recordingContextDraft.relationship === item ? "selected" : ""}`}
+                          onClick={() => updateRecordingContextField("relationship", item)}
+                          disabled={!!loading}
+                        >
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      className="input"
+                      style={{ marginTop: 10 }}
+                      value={recordingContextDraft.relationship}
+                      onChange={(event) => updateRecordingContextField("relationship", event.target.value)}
+                      placeholder="예: 엄마 - 아이"
+                    />
+                  </div>
+                  <div>
+                    <div className="muted" style={{ marginBottom: 8 }}>상황 템플릿</div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      {SITUATION_TEMPLATES.map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          className={`chip ${recordingContextDraft.situation === item ? "selected" : ""}`}
+                          onClick={() => updateRecordingContextField("situation", item)}
+                          disabled={!!loading}
+                        >
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      className="input"
+                      style={{ marginTop: 10, minHeight: 96, resize: "vertical" }}
+                      value={recordingContextDraft.situation}
+                      onChange={(event) => updateRecordingContextField("situation", event.target.value)}
+                      placeholder="예: 아이가 혼자 집에 있겠다고 하고, 엄마가 위험해서 안 된다고 설명하는 상황"
+                    />
+                  </div>
+                  <div>
+                    <div className="muted" style={{ marginBottom: 8 }}>톤 템플릿</div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      {TONE_TEMPLATES.map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          className={`chip ${recordingContextDraft.tone === item ? "selected" : ""}`}
+                          onClick={() => updateRecordingContextField("tone", item)}
+                          disabled={!!loading}
+                        >
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      className="input"
+                      style={{ marginTop: 10 }}
+                      value={recordingContextDraft.tone}
+                      onChange={(event) => updateRecordingContextField("tone", event.target.value)}
+                      placeholder="예: 자연스럽고 부드럽지만 단호한 미국식 일상 회화"
+                    />
+                  </div>
                 </div>
                 <div className="mini-card" style={{ marginTop: 12 }}>
                   <strong>분석 상태</strong>
                   <div className="muted" style={{ marginTop: 8 }}>
                     {hasUnsavedContextChanges
                       ? "맥락 힌트에 저장되지 않은 변경사항이 있습니다."
-                      : analysisNeedsRefresh
-                      ? "대화 또는 맥락이 바뀌어 분석을 다시 실행해야 합니다."
+                      : analysisStatus === "NEEDS_REVIEW"
+                      ? "사람 확인 기준으로 대화 분석 재검토가 필요한 상태입니다."
                       : hasAnyAnalysis
                       ? "현재 보이는 대화 요약과 문장의도는 최신 분석입니다."
                       : "아직 대화 요약/의도 분석을 실행하지 않았습니다."}
                   </div>
+                  {recording?.analysisStatusReason && analysisStatus === "NEEDS_REVIEW" && (
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      변경 사유: {formatAnalysisStatusReason(recording.analysisStatusReason)}
+                    </div>
+                  )}
+                  {analysisStatus === "NEEDS_REVIEW" && (
+                    <div className="row" style={{ marginTop: 10 }}>
+                      <button
+                        className="button ghost"
+                        onClick={() => {
+                          void persistRecordingAnalysisStatus("OK")
+                            .then(() => setMessage("분석 상태를 이상없음으로 표시했습니다."))
+                            .catch((err) =>
+                              setError(err instanceof Error ? err.message : "분석 상태 저장에 실패했습니다."),
+                            );
+                        }}
+                        disabled={!!loading}
+                      >
+                        이상없음으로 표시
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="mini-card" style={{ marginTop: 12 }}>
                   <strong>분석 실행 방식</strong>
@@ -3017,6 +3662,31 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                       </button>
                     ))}
                   </div>
+                  <div className="grid" style={{ marginTop: 12 }}>
+                    {speakerOptions.map((speaker) => (
+                      <div key={`${speaker.speakerLabel}-profile`} className="mini-card">
+                        <strong>{speaker.speakerLabel} 인물 연결</strong>
+                        <select
+                          className="input"
+                          style={{ marginTop: 10 }}
+                          value={speakerProfileDrafts[speaker.speakerLabel] ?? ""}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setSpeakerProfileDrafts((current) => ({ ...current, [speaker.speakerLabel]: nextValue }));
+                            void handleUpdateSpeakerProfile(recording.id, speaker.speakerLabel, nextValue);
+                          }}
+                          disabled={!!loading}
+                        >
+                          <option value="">직접 연결 안 함</option>
+                          {personProfiles.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {profile.name}{profile.roleLabel ? ` (${profile.roleLabel})` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
               {recording.audioUrl && (
@@ -3077,6 +3747,41 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                     placeholder="STT 결과를 확인하고 필요하면 수정해 주세요."
                     disabled={!!loading}
                   />
+                  <textarea
+                    className="textarea"
+                    style={{ marginTop: 10, minHeight: 88, resize: "vertical" }}
+                    value={utteranceContextDrafts[utterance.id] ?? ""}
+                    onChange={(event) =>
+                      setUtteranceContextDrafts((current) => ({ ...current, [utterance.id]: event.target.value }))
+                    }
+                    placeholder="예: '일원독서실'의 일원은 지역명이 아니라 독서실 이름. '뭐가 그렇게 맛있어?'는 맛있게 먹는 모습을 보고 감탄하는 말."
+                    disabled={!!loading}
+                  />
+                  <div className="row" style={{ alignItems: "center", gap: 8, marginTop: 10 }}>
+                    <label className="muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={utteranceAnalysisReviewFlags[utterance.id] ?? DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG}
+                        onChange={(event) =>
+                          setUtteranceAnalysisReviewFlags((current) => ({
+                            ...current,
+                            [utterance.id]: event.target.checked,
+                          }))
+                        }
+                        disabled={!!loading}
+                      />
+                      이 수정은 의미에 영향 있음
+                    </label>
+                    <button
+                      type="button"
+                      className="help-icon-button"
+                      title="오타, 띄어쓰기 같은 가벼운 수정이면 체크를 해제하세요."
+                      aria-label="체크박스 도움말"
+                      disabled={!!loading}
+                    >
+                      ?
+                    </button>
+                  </div>
                   <div className="row" style={{ marginTop: 12 }}>
                     <button
                       className="button"
@@ -3091,6 +3796,13 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                       onClick={() => handleSaveUtterance(utterance.id)}
                     >
                       {loading === `save-${utterance.id}` ? "저장 중..." : "문장 저장"}
+                    </button>
+                    <button
+                      className="button ghost"
+                      disabled={!!loading}
+                      onClick={() => handleSaveUtteranceContextNote(utterance.id)}
+                    >
+                      {loading === `save-context-${utterance.id}` ? "메모 저장 중..." : "맥락 메모 저장"}
                     </button>
                     <button
                       className="button secondary"
@@ -3127,13 +3839,13 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
             "expressions",
             "2. 영어 표현 생성 / 영어 음성 생성",
             "생성된 표현을 선택하고 영어 음성을 만들어 듣고 활용합니다.",
-            `표현 ${expressions.length}개 · TTS 완료 ${completedTtsExpressions.length}개`,
+            `표현 ${sectionExpressions.length}개 · TTS 완료 ${completedSectionTtsExpressions.length}개`,
           )}
           {expandedSections.expressions && (
             <>
           <div className="row" style={{ marginTop: 12 }}>
-            <button className="button secondary" onClick={handleGenerateTtsBulk} disabled={!!loading || pendingRecordingTtsCount === 0}>
-              {loading === "tts-bulk" ? "일괄 생성 중..." : `남은 TTS 일괄 생성 (${pendingRecordingTtsCount})`}
+            <button className="button secondary" onClick={handleGenerateTtsBulk} disabled={!!loading || !recording || pendingSectionTtsCount === 0}>
+              {loading === "tts-bulk" ? "일괄 생성 중..." : `남은 TTS 일괄 생성 (${pendingSectionTtsCount})`}
             </button>
           </div>
           {!isReviewAnswerHidden && (
@@ -3144,10 +3856,14 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                     <div className="expression-section-eyebrow">Expression List</div>
                     <strong>생성된 표현</strong>
                   </div>
-                  <span className="tag tag-muted">{expressions.length}개</span>
+                  <span className="tag tag-muted">{sectionExpressions.length}개</span>
                 </div>
                 <div className="grid" style={{ marginTop: 12 }}>
-                  {expressions.length === 0 && <div className="mini-card muted">아직 생성된 표현이 없습니다.</div>}
+                  {sectionExpressions.length === 0 && (
+                    <div className="mini-card muted">
+                      {recording ? "이 녹음에서 아직 생성된 표현이 없습니다." : "빠른 저장 문장에서 아직 생성된 표현이 없습니다."}
+                    </div>
+                  )}
                   {visibleExpressions.map((expression, index) => (
                     <button
                       key={expression.id}
@@ -3168,10 +3884,10 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                     </button>
                   ))}
                 </div>
-                {renderListControls("expressions", expressions.length)}
+                {renderListControls("expressions", sectionExpressions.length)}
               </div>
 
-              {selectedExpression && (
+              {selectedSectionExpression && (
                 <div ref={expressionDetailRef} className="expression-detail-panel" tabIndex={-1}>
                   <div className="expression-section-head">
                     <div>
@@ -3183,19 +3899,19 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                   <div className="grid" style={{ marginTop: 12 }}>
                     <div className="mini-card">
                       <strong>기본형</strong>
-                      <div style={{ marginTop: 8 }}>{selectedExpression.englishBase}</div>
+                      <div style={{ marginTop: 8 }}>{selectedSectionExpression.englishBase}</div>
                     </div>
                     <div className="mini-card">
                       <strong>쉬운형</strong>
-                      <div style={{ marginTop: 8 }}>{selectedExpression.englishEasy}</div>
+                      <div style={{ marginTop: 8 }}>{selectedSectionExpression.englishEasy}</div>
                     </div>
                     <div className="mini-card">
                       <strong>자연형</strong>
-                      <div style={{ marginTop: 8 }}>{selectedExpression.englishNatural}</div>
+                      <div style={{ marginTop: 8 }}>{selectedSectionExpression.englishNatural}</div>
                     </div>
                     <div className="mini-card">
                       <strong>설명</strong>
-                      <div style={{ marginTop: 8 }}>{selectedExpression.note || "설명 없음"}</div>
+                      <div style={{ marginTop: 8 }}>{selectedSectionExpression.note || "설명 없음"}</div>
                     </div>
                     <div className="mini-card">
                       <strong>메모</strong>
@@ -3207,7 +3923,7 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                         placeholder="예: 이 표현은 아이를 타이르듯 말할 때 자주 씀"
                       />
                       <div className="row" style={{ marginTop: 10 }}>
-                        <button className="button secondary" onClick={handleSaveExpressionMemo} disabled={!!loading || !selectedExpression}>
+                        <button className="button secondary" onClick={handleSaveExpressionMemo} disabled={!!loading || !selectedSectionExpression}>
                           {loading === "save-expression-memo" ? "메모 저장 중..." : "메모 저장"}
                         </button>
                       </div>
@@ -3218,18 +3934,22 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                     </div>
                     <div className="mini-card">
                       <strong>발화 의도</strong>
-                      <div style={{ marginTop: 8 }}>{selectedExpressionIntent || "아직 분석된 발화 의도가 없습니다."}</div>
+                      <div style={{ marginTop: 8 }}>{selectedSectionExpressionIntent || "아직 분석된 발화 의도가 없습니다."}</div>
+                    </div>
+                    <div className="mini-card">
+                      <strong>문장별 맥락 메모</strong>
+                      <div style={{ marginTop: 8 }}>{selectedSectionExpression.sourceContextNote || "저장된 문장별 맥락 메모가 없습니다."}</div>
                     </div>
                     <div className="row">
                       <button className="button" onClick={handleGenerateTts} disabled={!!loading}>
                         {loading === "tts"
-                          ? (selectedExpression?.ttsKey ? "TTS 재생성 중..." : "TTS 생성 중...")
-                          : (selectedExpression?.ttsKey ? "TTS 재생성" : "TTS 생성")}
+                          ? (selectedSectionExpression?.ttsKey ? "TTS 재생성 중..." : "TTS 생성 중...")
+                          : (selectedSectionExpression?.ttsKey ? "TTS 재생성" : "TTS 생성")}
                       </button>
                       <button
                         className="button ghost"
                         onClick={handleCopyExpression}
-                        disabled={!!loading || !selectedExpression}
+                        disabled={!!loading || !selectedSectionExpression}
                       >
                         영어 표현 복사
                       </button>
@@ -3243,7 +3963,7 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                       <button
                         className="button danger"
                         onClick={handleDeleteExpression}
-                        disabled={!!loading || !selectedExpression}
+                        disabled={!!loading || !selectedSectionExpression}
                       >
                         {loading === "delete-expression" ? "삭제 중..." : "표현 삭제"}
                       </button>
@@ -3588,10 +4308,10 @@ function buildRecordingContextFromAnalysis(recording: RecordingResponse | null):
                     {completedTtsExpressions.length === 0 && (
                       <div className="mini-card muted">아직 TTS 생성이 완료된 표현이 없습니다.</div>
                     )}
-                    {visibleCompletedTtsExpressions.map((expression) => (
+                    {visibleCompletedTtsExpressions.map((expression, index) => (
                       <div key={`tts-library-${expression.id}`} className="mini-card">
                         <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                          <strong style={{ flex: 1 }}>{expression.englishBase}</strong>
+                          <strong style={{ flex: 1 }}>{index + 1}. {expression.englishBase}</strong>
                           <span className={`tag ${ttsLibraryCurrentExpressionId === expression.id ? "tag-primary" : "tag-done"}`}>
                             {ttsLibraryCurrentExpressionId === expression.id ? "재생 중" : "TTS 완료"}
                           </span>
