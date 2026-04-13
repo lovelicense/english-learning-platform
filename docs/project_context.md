@@ -223,11 +223,11 @@ git push origin main
 - 테스트 시 음성 테스트 하면 채점이 이상함 : 한국어로 STT가 이루어져 평가됨(예 : the bus is comming(O), 더버스이즈커밍(X))(완료)
 - 영어음성 생성되어 있으면 'TTS생성'을 'TTS재생성'으로 버튼명 변경(완료)
 - 브라우저 녹음 시 녹음 시간 표시(완료)
+
 # 현재 이슈
 
 
 # 다음 목표
-- TTS 완료 표현 모아보기에서 전체를 연속 재생, 한문장 3번 반복재생+전체 연속재생
 - 생성된 영어 문장에 대한 검증 기능 추가 : 영어를 한국어로 역으로 변역, 번역시 이 문장이 언제 사용하는지도 예시 등 표시하게해서 사용자가 영어가 정확한 표현인지 확인
 - 문장 패턴 추출 및 패턴형 문제 출제 기능 설계 완료 : 복습에도 적용
 - 개인 언어 데이터 export 기능 설계
@@ -245,7 +245,7 @@ git push origin main
 
 # 2026-04-09 모바일 앱 아키텍처/작업 메모
 
-## 오늘 결정한 모바일 아키텍처
+## 결정한 모바일 아키텍처
 - 프로젝트 분리 없이 기존 monorepo 안에 `apps/mobile` 추가
 - 모바일 기술 스택은 `React Native + Expo + Expo Router` 기준으로 진행
 - 기존 `apps/api`, `apps/worker`, `packages/*`를 최대 재사용
@@ -265,7 +265,7 @@ git push origin main
   - `pnpm dev:worker`
 - `dev:web`은 모바일 기능 확인에는 필수 아님
 
-## 오늘 모바일에서 작업한 내용
+## 모바일에서 작업한 내용
 - `docs/android_mobile_plan.md` 문서 추가
 - `apps/mobile` 스캐폴딩 추가
 - Expo Router 기반 기본 탭 구조 추가
@@ -289,7 +289,7 @@ git push origin main
 - 타입 체크 확인:
   - `pnpm --filter @elp/mobile exec tsc --noEmit` 통과
 
-## 오늘 웹/백엔드에서 같이 반영한 관련 내용
+## 웹/백엔드에서 같이 반영한 관련 내용
 - 분석 모드 기본값을 `수동`으로 변경
 - `대화요약`, `문장의도`는 값이 없어도 화면에 항상 보이도록 수정
 - 맥락 힌트 `저장` 버튼 및 분석 상태 표시 추가
@@ -301,7 +301,7 @@ git push origin main
 - 영어표현 생성 시 `base/easy/natural/note` 의미 일관성 강화
 - 말하기 테스트 채점 시 한국어 원문 우선, 대화 요약/발화 의도까지 참고하도록 개선
 
-## 내일 할 작업
+## 모바일 관련 할 작업
 - 모바일에서 실제 Expo 오디오 녹음 붙이기
 - 녹음 파일을 파트 단위로 `presign -> upload -> complete` 연결
 - 모바일에서 `finalize -> process -> polling`을 실제 업로드 결과와 연결

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RecordingStatus } from '@prisma/client';
 import { OpenAiService } from '../openai/openai.service';
 import { PrismaService } from '../db/prisma.service';
@@ -202,6 +202,7 @@ export class RecordingsService {
     utteranceId: string,
     input: {
       koreanText?: string;
+      speakerLabel?: string;
       contextNote?: string;
       markAnalysisReview?: boolean;
     },
@@ -212,15 +213,35 @@ export class RecordingsService {
     if (!utterance) throw new NotFoundException('발화 문장을 찾을 수 없습니다.');
 
     const nextKoreanText = input.koreanText?.trim();
+    const nextSpeakerLabel = input.speakerLabel?.trim();
     const nextContextNote = input.contextNote?.trim() ?? '';
-    if (!nextKoreanText && typeof input.contextNote !== 'string') {
+    if (!nextKoreanText && !nextSpeakerLabel && typeof input.contextNote !== 'string') {
       throw new NotFoundException('저장할 발화 정보가 없습니다.');
+    }
+
+    let nextIsMine = utterance.isMine;
+    if (nextSpeakerLabel) {
+      const recordingUtterances = await this.prisma.utterance.findMany({
+        where: { recordingId: utterance.recordingId },
+        select: { id: true, speakerLabel: true, isMine: true },
+      });
+      const hasSpeaker = recordingUtterances.some(
+        (recordingUtterance) =>
+          recordingUtterance.speakerLabel === nextSpeakerLabel || recordingUtterance.id === utteranceId,
+      );
+      if (!hasSpeaker) {
+        throw new BadRequestException('변경할 대상 화자를 찾을 수 없습니다.');
+      }
+      nextIsMine = recordingUtterances.some(
+        (recordingUtterance) => recordingUtterance.id !== utteranceId && recordingUtterance.speakerLabel === nextSpeakerLabel && recordingUtterance.isMine,
+      );
     }
 
     const updated = await this.prisma.utterance.update({
       where: { id: utteranceId },
       data: {
         ...(nextKoreanText ? { koreanText: nextKoreanText } : {}),
+        ...(nextSpeakerLabel ? { speakerLabel: nextSpeakerLabel, isMine: nextIsMine } : {}),
         ...(typeof input.contextNote === 'string' ? { contextNote: nextContextNote ? nextContextNote : null } : {}),
       },
     });
@@ -229,7 +250,7 @@ export class RecordingsService {
         where: { id: utterance.recordingId },
         data: {
           analysisStatus: 'NEEDS_REVIEW',
-          analysisStatusReason: 'UTTERANCE_UPDATED',
+          analysisStatusReason: nextSpeakerLabel ? 'UTTERANCE_SPEAKER_CHANGED' : 'UTTERANCE_UPDATED',
         } as any,
       } as any);
     }

@@ -94,6 +94,30 @@ export class ExpressionsService {
     private readonly storage: StorageService,
   ) {}
 
+  private async generateExpressionTtsAssets(expression: {
+    id: string;
+    englishBase: string;
+    koreanText: string;
+  }) {
+    const [englishAudio, koreanAudio] = await Promise.all([
+      this.openai.generateTts(expression.englishBase),
+      this.openai.generateTts(expression.koreanText),
+    ]);
+
+    const englishKey = `tts/${expression.id}.mp3`;
+    const koreanKey = `tts/${expression.id}.ko.mp3`;
+
+    await Promise.all([
+      this.storage.uploadBuffer(englishKey, englishAudio, 'audio/mpeg'),
+      this.storage.uploadBuffer(koreanKey, koreanAudio, 'audio/mpeg'),
+    ]);
+
+    return {
+      ttsKey: englishKey,
+      koreanTtsKey: koreanKey,
+    };
+  }
+
   async generate(userId: string, input: { utteranceId?: string; savedSentenceId?: string; koreanText?: string; sourceContextNote?: string; participantContext?: string; relationship?: string; situation?: string; tone?: string; personProfileIds?: string[] }) {
     let utteranceId = input.utteranceId;
     let savedSentenceId = input.savedSentenceId;
@@ -584,12 +608,24 @@ export class ExpressionsService {
     const expression = await this.prisma.expression.findFirst({ where: { id: expressionId, userId } });
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
 
-    const audio = await this.openai.generateTts(expression.englishBase);
-    const key = `tts/${expression.id}.mp3`;
-    await this.storage.uploadBuffer(key, audio, 'audio/mpeg');
-    const updated = await this.prisma.expression.update({ where: { id: expression.id }, data: { ttsKey: key } });
-    const ttsUrl = await this.storage.createPresignedDownload(key, 3600, 'audio/mpeg');
-    return { expressionId, ttsKey: key, ttsUrl, expression: updated.englishBase };
+    const assets = await this.generateExpressionTtsAssets(expression);
+    const updated = await this.prisma.expression.update({
+      where: { id: expression.id },
+      data: {
+        ttsKey: assets.ttsKey,
+        koreanTtsKey: assets.koreanTtsKey,
+      },
+    } as any);
+    const ttsUrl = await this.storage.createPresignedDownload(assets.ttsKey, 3600, 'audio/mpeg');
+    const koreanTtsUrl = await this.storage.createPresignedDownload(assets.koreanTtsKey, 3600, 'audio/mpeg');
+    return {
+      expressionId,
+      ttsKey: assets.ttsKey,
+      ttsUrl,
+      koreanTtsKey: assets.koreanTtsKey,
+      koreanTtsUrl,
+      expression: updated.englishBase,
+    };
   }
 
   async generateTtsForRecording(userId: string, recordingId: string, onlyMissing = true) {
@@ -609,23 +645,31 @@ export class ExpressionsService {
     if (!recording) throw new NotFoundException('녹음 파일을 찾을 수 없습니다.');
 
     const expressions = recording.utterances.flatMap((utterance) => utterance.expressions);
-    const targets = expressions.filter((expression) => (onlyMissing ? !expression.ttsKey : true));
+    const targets = expressions.filter((expression) => (onlyMissing ? !expression.ttsKey || !(expression as any).koreanTtsKey : true));
     const generated: Array<{
       expressionId: string;
       ttsKey: string;
       ttsUrl: string;
+      koreanTtsKey: string;
+      koreanTtsUrl: string;
       expression: string;
     }> = [];
 
     for (const expression of targets) {
-      const audio = await this.openai.generateTts(expression.englishBase);
-      const key = `tts/${expression.id}.mp3`;
-      await this.storage.uploadBuffer(key, audio, 'audio/mpeg');
-      const updated = await this.prisma.expression.update({ where: { id: expression.id }, data: { ttsKey: key } });
+      const assets = await this.generateExpressionTtsAssets(expression);
+      const updated = await this.prisma.expression.update({
+        where: { id: expression.id },
+        data: {
+          ttsKey: assets.ttsKey,
+          koreanTtsKey: assets.koreanTtsKey,
+        },
+      } as any);
       generated.push({
         expressionId: updated.id,
-        ttsKey: key,
-        ttsUrl: await this.storage.createPresignedDownload(key, 3600, 'audio/mpeg'),
+        ttsKey: assets.ttsKey,
+        ttsUrl: await this.storage.createPresignedDownload(assets.ttsKey, 3600, 'audio/mpeg'),
+        koreanTtsKey: assets.koreanTtsKey,
+        koreanTtsUrl: await this.storage.createPresignedDownload(assets.koreanTtsKey, 3600, 'audio/mpeg'),
         expression: updated.englishBase,
       });
     }
@@ -668,6 +712,9 @@ export class ExpressionsService {
         sourceContextNote:
           expression.utterance?.contextNote ?? expression.savedSentence?.contextNote ?? null,
         ttsUrl: expression.ttsKey ? await this.storage.createPresignedDownload(expression.ttsKey, 3600, 'audio/mpeg') : null,
+        koreanTtsUrl: expression.koreanTtsKey
+          ? await this.storage.createPresignedDownload(expression.koreanTtsKey, 3600, 'audio/mpeg')
+          : null,
       })),
     );
   }

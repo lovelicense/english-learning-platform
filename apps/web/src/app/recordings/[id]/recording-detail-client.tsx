@@ -73,10 +73,19 @@ type Expression = {
   userMemo?: string | null;
   ttsKey?: string | null;
   ttsUrl?: string | null;
+  koreanTtsKey?: string | null;
+  koreanTtsUrl?: string | null;
   sourceContextNote?: string | null;
 };
 
-type TtsResponse = { expressionId: string; ttsKey: string; ttsUrl: string; expression: string };
+type TtsResponse = {
+  expressionId: string;
+  ttsKey: string;
+  ttsUrl: string;
+  koreanTtsKey: string;
+  koreanTtsUrl: string;
+  expression: string;
+};
 type MeResponse = { userId: string; email: string };
 type BulkExpressionResponse = {
   recordingId: string;
@@ -198,6 +207,8 @@ function formatAnalysisStatusReason(reason?: string | null) {
       return "대화 맥락 힌트가 수정됨";
     case "UTTERANCE_UPDATED":
       return "문장 또는 문장별 맥락 메모가 수정됨";
+    case "UTTERANCE_SPEAKER_CHANGED":
+      return "발화의 화자가 변경됨";
     case "UTTERANCE_DELETED":
       return "문장이 삭제됨";
     case "SPEAKER_CHANGED":
@@ -226,6 +237,11 @@ function buildIntentByUtteranceId(
   }
 
   return intentMap;
+}
+
+function buildSpeakerLabelDrafts(recording: RecordingResponse | null) {
+  const uniqueLabels = Array.from(new Set((recording?.utterances ?? []).map((utterance) => utterance.speakerLabel)));
+  return Object.fromEntries(uniqueLabels.map((speakerLabel) => [speakerLabel, speakerLabel]));
 }
 
 const DETAIL_PREVIEW_COUNTS = {
@@ -257,11 +273,14 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
   const [selectedExpressionId, setSelectedExpressionId] = useState("");
   const [expressionMemoDraft, setExpressionMemoDraft] = useState("");
   const [utteranceDrafts, setUtteranceDrafts] = useState<Record<string, string>>({});
+  const [utteranceSpeakerDrafts, setUtteranceSpeakerDrafts] = useState<Record<string, string>>({});
   const [utteranceContextDrafts, setUtteranceContextDrafts] = useState<Record<string, string>>({});
   const [utteranceAnalysisReviewFlags, setUtteranceAnalysisReviewFlags] = useState<Record<string, boolean>>({});
   const [recordingContext, setRecordingContext] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
   const [recordingContextDraft, setRecordingContextDraft] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
   const [recordingParticipantDraftIds, setRecordingParticipantDraftIds] = useState<string[]>([]);
+  const [speakerLabelDrafts, setSpeakerLabelDrafts] = useState<Record<string, string>>({});
+  const [activeSpeakerRenameLabel, setActiveSpeakerRenameLabel] = useState("");
   const [speakerProfileDrafts, setSpeakerProfileDrafts] = useState<Record<string, string>>({});
   const [recentManualContext, setRecentManualContext] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
   const [recordingAnalysisMode, setRecordingAnalysisMode] = useState<RecordingAnalysisMode>(DEFAULT_RECORDING_ANALYSIS_MODE);
@@ -319,7 +338,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
     [expressionIdsByUtterance, recording],
   );
   const pendingRecordingTtsCount = useMemo(
-    () => expressions.filter((expression) => !expression.ttsKey).length,
+    () => expressions.filter((expression) => !expression.ttsKey || !expression.koreanTtsKey).length,
     [expressions],
   );
   const speakerOptions = useMemo(() => {
@@ -362,6 +381,9 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
         setUtteranceDrafts(
           Object.fromEntries(recordingDetail.utterances.map((utterance) => [utterance.id, utterance.koreanText])),
         );
+        setUtteranceSpeakerDrafts(
+          Object.fromEntries(recordingDetail.utterances.map((utterance) => [utterance.id, utterance.speakerLabel])),
+        );
         setUtteranceContextDrafts(
           Object.fromEntries(recordingDetail.utterances.map((utterance) => [utterance.id, utterance.contextNote ?? ""])),
         );
@@ -371,6 +393,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
           ),
         );
         setRecordingParticipantDraftIds(recordingDetail.participants.map((item) => item.personProfile.id));
+        setSpeakerLabelDrafts(buildSpeakerLabelDrafts(recordingDetail));
         setSpeakerProfileDrafts(
           Object.fromEntries(recordingDetail.speakerProfiles.map((item) => [item.speakerLabel, item.personProfileId])),
         );
@@ -649,6 +672,9 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
     const nextRecording = await apiFetch<RecordingResponse>(`/recordings/${recordingId}`);
     setRecording(nextRecording);
     setUtteranceDrafts(Object.fromEntries(nextRecording.utterances.map((utterance) => [utterance.id, utterance.koreanText])));
+    setUtteranceSpeakerDrafts(
+      Object.fromEntries(nextRecording.utterances.map((utterance) => [utterance.id, utterance.speakerLabel])),
+    );
     setUtteranceContextDrafts(Object.fromEntries(nextRecording.utterances.map((utterance) => [utterance.id, utterance.contextNote ?? ""])));
     setUtteranceAnalysisReviewFlags(
       Object.fromEntries(
@@ -656,6 +682,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
       ),
     );
     setRecordingParticipantDraftIds(nextRecording.participants.map((item) => item.personProfile.id));
+    setSpeakerLabelDrafts(buildSpeakerLabelDrafts(nextRecording));
     setSpeakerProfileDrafts(
       Object.fromEntries(nextRecording.speakerProfiles.map((item) => [item.speakerLabel, item.personProfileId])),
     );
@@ -690,6 +717,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
     const markAnalysisReview = options.markAnalysisReview ?? false;
     const currentUtterance = recording?.utterances.find((utterance) => utterance.id === utteranceId);
     const draft = utteranceDrafts[utteranceId] ?? currentUtterance?.koreanText ?? "";
+    const speakerLabel = utteranceSpeakerDrafts[utteranceId] ?? currentUtterance?.speakerLabel ?? "";
     const trimmedDraft = draft.trim();
     if (requireText && !trimmedDraft) {
       throw new Error("저장할 문장을 입력해 주세요.");
@@ -700,6 +728,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
       method: "PATCH",
       body: JSON.stringify({
         ...(trimmedDraft ? { koreanText: trimmedDraft } : {}),
+        ...(speakerLabel ? { speakerLabel } : {}),
         contextNote,
       }),
     });
@@ -709,16 +738,26 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
             ...current,
             utterances: current.utterances.map((item) =>
               item.id === utteranceId
-                ? { ...item, koreanText: updated.koreanText, contextNote: updated.contextNote ?? "" }
+                ? {
+                    ...item,
+                    koreanText: updated.koreanText,
+                    speakerLabel: updated.speakerLabel,
+                    isMine: updated.isMine,
+                    contextNote: updated.contextNote ?? "",
+                  }
                 : item,
             ),
           }
         : current,
     );
     setUtteranceDrafts((current) => ({ ...current, [utteranceId]: updated.koreanText }));
+    setUtteranceSpeakerDrafts((current) => ({ ...current, [utteranceId]: updated.speakerLabel }));
     setUtteranceContextDrafts((current) => ({ ...current, [utteranceId]: updated.contextNote ?? "" }));
     if (markAnalysisReview) {
-      updateRecordingAnalysisStatusLocal("NEEDS_REVIEW", "UTTERANCE_UPDATED");
+      updateRecordingAnalysisStatusLocal(
+        "NEEDS_REVIEW",
+        speakerLabel !== currentUtterance?.speakerLabel ? "UTTERANCE_SPEAKER_CHANGED" : "UTTERANCE_UPDATED",
+      );
     }
     return updated;
   }
@@ -728,15 +767,24 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
     setError("");
     setMessage("");
     try {
-      const shouldReviewAnalysis = utteranceAnalysisReviewFlags[utteranceId] ?? DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG;
-      await saveUtteranceDraft(utteranceId, { markAnalysisReview: shouldReviewAnalysis });
+      const currentUtterance = recording?.utterances.find((utterance) => utterance.id === utteranceId);
+      const speakerChanged = (utteranceSpeakerDrafts[utteranceId] ?? currentUtterance?.speakerLabel ?? "") !== (currentUtterance?.speakerLabel ?? "");
+      const shouldReviewAnalysis =
+        speakerChanged || (utteranceAnalysisReviewFlags[utteranceId] ?? DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG);
+      await saveUtteranceDraft(utteranceId, {
+        requireText: !speakerChanged,
+        markAnalysisReview: shouldReviewAnalysis,
+      });
       if (shouldReviewAnalysis) {
         await runAutoRecordingAnalysis("문장을 저장하고 대화 분석을 자동으로 갱신했습니다.");
       } else {
         setMessage("문장을 수정해 저장했습니다.");
       }
       if (shouldReviewAnalysis && recordingAnalysisMode !== "auto") {
-        await persistRecordingAnalysisStatus("NEEDS_REVIEW", "UTTERANCE_UPDATED");
+        await persistRecordingAnalysisStatus(
+          "NEEDS_REVIEW",
+          speakerChanged ? "UTTERANCE_SPEAKER_CHANGED" : "UTTERANCE_UPDATED",
+        );
         setMessage("문장을 수정해 저장했습니다.");
       }
       setUtteranceAnalysisReviewFlags((current) => ({
@@ -876,14 +924,48 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
       setMessage("TTS를 생성했습니다. 바로 재생해 확인할 수 있습니다.");
       window.setTimeout(() => {
         audioRef.current?.load();
-        audioRef.current?.play().catch(() => undefined);
       }, 50);
-      void response;
+      await playSelectedExpressionTtsSequence({
+        koreanTtsUrl: response.koreanTtsUrl,
+        ttsUrl: response.ttsUrl,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "TTS 생성에 실패했습니다.");
     } finally {
       setLoading("");
     }
+  }
+
+  async function playSelectedExpressionTtsSequence(expression?: {
+    koreanTtsUrl?: string | null;
+    ttsUrl?: string | null;
+  }) {
+    const target = expression ?? selectedExpression;
+    if (!target?.ttsUrl) {
+      setError("영어 TTS 재생 URL이 없습니다.");
+      return;
+    }
+
+    const playEnglish = async () => {
+      const player = audioRef.current;
+      if (!player) return;
+      player.src = target.ttsUrl!;
+      player.load();
+      await player.play();
+    };
+
+    if (!target.koreanTtsUrl) {
+      await playEnglish();
+      return;
+    }
+
+    const koreanAudio = new Audio(target.koreanTtsUrl);
+    await new Promise<void>((resolve, reject) => {
+      koreanAudio.onended = () => resolve();
+      koreanAudio.onerror = () => reject(new Error("한국어 TTS 음성 파일을 재생하지 못했습니다."));
+      koreanAudio.play().catch((err) => reject(err instanceof Error ? err : new Error("한국어 TTS 재생에 실패했습니다.")));
+    });
+    await playEnglish();
   }
 
   async function handleGenerateExpressionsBulk(speakerScope: "mine" | "others") {
@@ -1079,6 +1161,9 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
       });
       setRecording(updated);
       setUtteranceDrafts(Object.fromEntries(updated.utterances.map((utterance) => [utterance.id, utterance.koreanText])));
+      setUtteranceSpeakerDrafts(
+        Object.fromEntries(updated.utterances.map((utterance) => [utterance.id, utterance.speakerLabel])),
+      );
       setUtteranceContextDrafts(Object.fromEntries(updated.utterances.map((utterance) => [utterance.id, utterance.contextNote ?? ""])));
       await runAutoRecordingAnalysis("내 화자 설정을 반영해 대화 분석을 자동으로 갱신했습니다.");
       if (recordingAnalysisMode !== "auto") {
@@ -1092,8 +1177,15 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
   }
 
   async function handleUpdateSpeakerLabel(speakerLabel: string) {
-    const nextSpeakerLabel = window.prompt(`${speakerLabel}의 이름을 입력하세요. 예: 나, 엄마, 아이, 친구`, speakerLabel);
-    if (!nextSpeakerLabel?.trim()) return;
+    const nextSpeakerLabel = speakerLabelDrafts[speakerLabel]?.trim();
+    if (!nextSpeakerLabel) {
+      setError("화자 이름을 입력해 주세요.");
+      return;
+    }
+    if (nextSpeakerLabel === speakerLabel) {
+      setMessage("변경된 화자 이름이 없어 저장하지 않았습니다.");
+      return;
+    }
 
     setLoading(`speaker-label-${speakerLabel}`);
     setError("");
@@ -1101,20 +1193,37 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
     try {
       const updated = await apiFetch<RecordingResponse>(`/recordings/${recordingId}/speaker-label`, {
         method: "PATCH",
-        body: JSON.stringify({ speakerLabel, nextSpeakerLabel: nextSpeakerLabel.trim() }),
+        body: JSON.stringify({ speakerLabel, nextSpeakerLabel }),
       });
       setRecording(updated);
       setUtteranceDrafts(Object.fromEntries(updated.utterances.map((utterance) => [utterance.id, utterance.koreanText])));
+      setUtteranceSpeakerDrafts(
+        Object.fromEntries(updated.utterances.map((utterance) => [utterance.id, utterance.speakerLabel])),
+      );
       setUtteranceContextDrafts(Object.fromEntries(updated.utterances.map((utterance) => [utterance.id, utterance.contextNote ?? ""])));
+      setSpeakerLabelDrafts(buildSpeakerLabelDrafts(updated));
+      setActiveSpeakerRenameLabel("");
       await runAutoRecordingAnalysis("화자 이름 변경을 반영해 대화 분석을 자동으로 갱신했습니다.");
       if (recordingAnalysisMode !== "auto") {
-        setMessage(`${speakerLabel} 이름을 "${nextSpeakerLabel.trim()}"로 저장했습니다.`);
+        setMessage(`${speakerLabel} 이름을 "${nextSpeakerLabel}"로 저장했습니다.`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "화자 이름 저장에 실패했습니다.");
     } finally {
       setLoading("");
     }
+  }
+
+  function openSpeakerRenameDialog(speakerLabel: string) {
+    setSpeakerLabelDrafts((current) => ({
+      ...current,
+      [speakerLabel]: current[speakerLabel] ?? speakerLabel,
+    }));
+    setActiveSpeakerRenameLabel(speakerLabel);
+  }
+
+  function closeSpeakerRenameDialog() {
+    setActiveSpeakerRenameLabel("");
   }
 
   if (!ready) {
@@ -1455,12 +1564,10 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
                   <button
                     key={`${speaker.speakerLabel}-label`}
                     className="button ghost"
-                    onClick={() => handleUpdateSpeakerLabel(speaker.speakerLabel)}
+                    onClick={() => openSpeakerRenameDialog(speaker.speakerLabel)}
                     disabled={!!loading}
                   >
-                    {loading === `speaker-label-${speaker.speakerLabel}`
-                      ? `${speaker.speakerLabel} 저장 중...`
-                      : `${speaker.speakerLabel} 이름 변경`}
+                    {speaker.speakerLabel} 이름 변경
                   </button>
                 ))}
               </div>
@@ -1488,6 +1595,56 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
                     </select>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {activeSpeakerRenameLabel && (
+            <div className="modal-backdrop" onClick={closeSpeakerRenameDialog}>
+              <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+                <strong>{activeSpeakerRenameLabel} 이름 변경</strong>
+                <div className="muted" style={{ marginTop: 8 }}>
+                  예: 나, 엄마, 아이, 친구
+                </div>
+                <input
+                  className="input"
+                  style={{ marginTop: 12 }}
+                  value={speakerLabelDrafts[activeSpeakerRenameLabel] ?? activeSpeakerRenameLabel}
+                  onChange={(event) =>
+                    setSpeakerLabelDrafts((current) => ({
+                      ...current,
+                      [activeSpeakerRenameLabel]: event.target.value,
+                    }))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void handleUpdateSpeakerLabel(activeSpeakerRenameLabel);
+                    }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      closeSpeakerRenameDialog();
+                    }
+                  }}
+                  placeholder="예: 나, 엄마, 아이, 친구"
+                  disabled={!!loading}
+                  autoFocus
+                />
+                <div className="modal-actions">
+                  <button className="button ghost" onClick={closeSpeakerRenameDialog} disabled={!!loading}>
+                    취소
+                  </button>
+                  <button
+                    className="button"
+                    onClick={() => handleUpdateSpeakerLabel(activeSpeakerRenameLabel)}
+                    disabled={
+                      !!loading ||
+                      !(speakerLabelDrafts[activeSpeakerRenameLabel] ?? "").trim() ||
+                      speakerLabelDrafts[activeSpeakerRenameLabel]?.trim() === activeSpeakerRenameLabel
+                    }
+                  >
+                    {loading === `speaker-label-${activeSpeakerRenameLabel}` ? "저장 중..." : "이름 저장"}
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -1522,6 +1679,23 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
                   placeholder="STT 결과를 확인하고 자연스럽게 수정해 주세요."
                   disabled={!!loading}
                 />
+                <div style={{ marginTop: 10 }}>
+                  <label className="muted" style={{ display: "block", marginBottom: 6 }}>이 발화의 화자</label>
+                  <select
+                    className="input"
+                    value={utteranceSpeakerDrafts[utterance.id] ?? utterance.speakerLabel}
+                    onChange={(event) =>
+                      setUtteranceSpeakerDrafts((current) => ({ ...current, [utterance.id]: event.target.value }))
+                    }
+                    disabled={!!loading}
+                  >
+                    {speakerOptions.map((speaker) => (
+                      <option key={`${utterance.id}-${speaker.speakerLabel}`} value={speaker.speakerLabel}>
+                        {speaker.speakerLabel}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <textarea
                   className="textarea"
                   style={{ marginTop: 10, minHeight: 88, resize: "vertical" }}
@@ -1568,7 +1742,13 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
                   <button
                     className="button ghost"
                     onClick={() => handleSaveUtterance(utterance.id)}
-                    disabled={!!loading || !(utteranceDrafts[utterance.id]?.trim())}
+                    disabled={
+                      !!loading ||
+                      (
+                        !(utteranceDrafts[utterance.id]?.trim()) &&
+                        (utteranceSpeakerDrafts[utterance.id] ?? utterance.speakerLabel) === utterance.speakerLabel
+                      )
+                    }
                   >
                     {loading === `save-${utterance.id}` ? "저장 중..." : "문장 저장"}
                   </button>
@@ -1724,7 +1904,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
                       ? (selectedExpression?.ttsKey ? "TTS 재생성 중..." : "TTS 생성 중...")
                       : (selectedExpression?.ttsKey ? "TTS 재생성" : "TTS 생성")}
                   </button>
-                  <button className="button secondary" onClick={() => audioRef.current?.play()} disabled={!selectedExpression.ttsUrl}>
+                  <button className="button secondary" onClick={() => void playSelectedExpressionTtsSequence()} disabled={!selectedExpression.ttsUrl}>
                     TTS 재생
                   </button>
                   <button className="button danger" onClick={handleDeleteExpression} disabled={!!loading}>

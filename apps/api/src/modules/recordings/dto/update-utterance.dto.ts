@@ -8,6 +8,11 @@ export class UpdateUtteranceDto {
 
   @IsOptional()
   @IsString()
+  @MinLength(1)
+  speakerLabel?: string;
+
+  @IsOptional()
+  @IsString()
   contextNote?: string;
 
   @IsOptional()

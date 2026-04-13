@@ -84,6 +84,8 @@ type Expression = {
   userMemo?: string | null;
   ttsKey?: string | null;
   ttsUrl?: string | null;
+  koreanTtsKey?: string | null;
+  koreanTtsUrl?: string | null;
   sourceAnalysisIntent?: string | null;
   sourceAnalysisSummary?: string | null;
   sourceRelationship?: string | null;
@@ -91,7 +93,14 @@ type Expression = {
   sourceTone?: string | null;
   sourceContextNote?: string | null;
 };
-type TtsResponse = { expressionId: string; ttsKey: string; ttsUrl: string; expression: string };
+type TtsResponse = {
+  expressionId: string;
+  ttsKey: string;
+  ttsUrl: string;
+  koreanTtsKey: string;
+  koreanTtsUrl: string;
+  expression: string;
+};
 type BulkExpressionResponse = {
   recordingId: string;
   createdCount: number;
@@ -292,6 +301,7 @@ const STEP_TIMEOUTS: Record<string, number> = {
 const stepMap = Object.fromEntries(AUTO_FLOW_STEPS.map((step) => [step.id, step]));
 const WAVE_BAR_COUNT = 28;
 const BROWSER_RECORDING_MAX_MS = 5 * 60 * 1000;
+const MOBILE_BROWSER_RECORDING_MAX_MS = 3 * 60 * 1000;
 const MANUAL_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 const MANUAL_UPLOAD_ALLOWED_EXTENSIONS = [".wav", ".m4a", ".mp3", ".mp4", ".aac"];
 const DEFAULT_PREVIEW_COUNTS = {
@@ -310,7 +320,8 @@ const MANUAL_RECORDING_RETRY_DELAYS = [2000, 5000, 10000];
 const MANUAL_UPLOAD_STT_CHUNK_MS = 10 * 60 * 1000;
 const DASHBOARD_SECTION_TABS = [
   { id: "autoFlow", label: "원클릭" },
-  { id: "recordings", label: "녹음" },
+  { id: "recordings", label: "녹음 목록" },
+  { id: "recordingDetail", label: "녹음 상세" },
   { id: "expressions", label: "표현" },
   { id: "practice", label: "테스트" },
   { id: "reviews", label: "복습" },
@@ -333,12 +344,15 @@ type FailedManualChunk = {
   reason: string;
 };
 
+type TtsLibraryPlaybackTrack = {
+  expressionId: string;
+  language: "english" | "korean";
+};
+
 type TtsLibraryPlaybackPlan = {
-  expressionIds: string[];
-  repeatCount: 1 | 2 | 3;
+  tracks: TtsLibraryPlaybackTrack[];
   gapMs: number;
-  expressionIndex: number;
-  repeatIndex: number;
+  trackIndex: number;
   sessionId: number;
 };
 
@@ -390,9 +404,12 @@ export default function DashboardPage() {
     isMe: false,
   });
   const [utteranceDrafts, setUtteranceDrafts] = useState<Record<string, string>>({});
+  const [utteranceSpeakerDrafts, setUtteranceSpeakerDrafts] = useState<Record<string, string>>({});
   const [utteranceContextDrafts, setUtteranceContextDrafts] = useState<Record<string, string>>({});
   const [utteranceAnalysisReviewFlags, setUtteranceAnalysisReviewFlags] = useState<Record<string, boolean>>({});
   const [recordingParticipantDraftIds, setRecordingParticipantDraftIds] = useState<string[]>([]);
+  const [speakerLabelDrafts, setSpeakerLabelDrafts] = useState<Record<string, string>>({});
+  const [activeSpeakerRenameLabel, setActiveSpeakerRenameLabel] = useState("");
   const [speakerProfileDrafts, setSpeakerProfileDrafts] = useState<Record<string, string>>({});
   const [expressions, setExpressions] = useState<Expression[]>([]);
   const [selectedExpressionId, setSelectedExpressionId] = useState("");
@@ -432,11 +449,13 @@ export default function DashboardPage() {
   const [manualRecordingLimitMs, setManualRecordingLimitMs] = useState(MANUAL_RECORDING_MAX_MS);
   const [ttsLibraryRepeatCount, setTtsLibraryRepeatCount] = useState<1 | 2 | 3>(1);
   const [ttsLibraryGapMs, setTtsLibraryGapMs] = useState(0);
+  const [ttsLibraryIncludeKorean, setTtsLibraryIncludeKorean] = useState(false);
   const [isTtsLibraryPlaying, setIsTtsLibraryPlaying] = useState(false);
   const [isTtsLibraryPreparing, setIsTtsLibraryPreparing] = useState(false);
   const [ttsLibraryCurrentExpressionId, setTtsLibraryCurrentExpressionId] = useState("");
   const [activeRecordingSessionId, setActiveRecordingSessionId] = useState("");
   const [activeRecordingSessionStatus, setActiveRecordingSessionStatus] = useState("");
+  const [activeSectionId, setActiveSectionId] = useState<(typeof DASHBOARD_SECTION_TABS)[number]["id"]>("autoFlow");
   const [manualRecordingStats, setManualRecordingStats] = useState<ManualRecordingStats>({
     effectiveMaxMs: MANUAL_RECORDING_MAX_MS,
     chunkCount: 0,
@@ -524,7 +543,7 @@ export default function DashboardPage() {
     [recording, utteranceExpressionIds],
   );
   const pendingSectionTtsCount = useMemo(
-    () => sectionExpressions.filter((expression) => !expression.ttsKey).length,
+    () => sectionExpressions.filter((expression) => !expression.ttsKey || !expression.koreanTtsKey).length,
     [sectionExpressions],
   );
   const completedSectionTtsExpressions = useMemo(
@@ -653,6 +672,7 @@ export default function DashboardPage() {
       setRecordingContext(EMPTY_RECORDING_CONTEXT);
       setRecordingContextDraft(EMPTY_RECORDING_CONTEXT);
       setRecordingParticipantDraftIds([]);
+      setSpeakerLabelDrafts({});
       setSpeakerProfileDrafts({});
       return;
     }
@@ -662,6 +682,7 @@ export default function DashboardPage() {
     setRecordingContext(nextContext);
     setRecordingContextDraft(nextContext);
     setRecordingParticipantDraftIds(recording.participants.map((item) => item.personProfile.id));
+    setSpeakerLabelDrafts(buildSpeakerLabelDrafts(recording));
     setSpeakerProfileDrafts(
       Object.fromEntries(recording.speakerProfiles.map((item) => [item.speakerLabel, item.personProfileId])),
     );
@@ -727,8 +748,14 @@ export default function DashboardPage() {
     if (typeof navigator === "undefined") return;
     const userAgent = navigator.userAgent;
     const isIOS = /iPhone|iPad|iPod/.test(userAgent);
+    const isAndroid = /Android/.test(userAgent);
+    const isMobileBrowser = isIOS || isAndroid;
     const isSafari = /Safari/.test(userAgent) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(userAgent);
-    setManualRecordingLimitMs(isIOS && isSafari ? MANUAL_RECORDING_IOS_SAFARI_MAX_MS : MANUAL_RECORDING_MAX_MS);
+    if (isIOS && isSafari) {
+      setManualRecordingLimitMs(MANUAL_RECORDING_IOS_SAFARI_MAX_MS);
+      return;
+    }
+    setManualRecordingLimitMs(isMobileBrowser ? MOBILE_BROWSER_RECORDING_MAX_MS : MANUAL_RECORDING_MAX_MS);
   }, []);
 
   function resetWaveform() {
@@ -742,6 +769,13 @@ function formatAudioTime(seconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const remain = totalSeconds % 60;
   return `${minutes}:${remain.toString().padStart(2, "0")}`;
+}
+
+function formatUtteranceTime(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
 }
 
 function formatRecordingSeconds(ms: number) {
@@ -770,6 +804,8 @@ function formatAnalysisStatusReason(reason?: string | null) {
       return "대화 맥락 힌트가 수정됨";
     case "UTTERANCE_UPDATED":
       return "문장 또는 문장별 맥락 메모가 수정됨";
+    case "UTTERANCE_SPEAKER_CHANGED":
+      return "발화의 화자가 변경됨";
     case "UTTERANCE_DELETED":
       return "문장이 삭제됨";
     case "SPEAKER_CHANGED":
@@ -798,6 +834,11 @@ function buildIntentByUtteranceId(
   }
 
   return intentMap;
+}
+
+function buildSpeakerLabelDrafts(recording: RecordingResponse | null) {
+  const uniqueLabels = Array.from(new Set((recording?.utterances ?? []).map((utterance) => utterance.speakerLabel)));
+  return Object.fromEntries(uniqueLabels.map((speakerLabel) => [speakerLabel, speakerLabel]));
 }
 
 function pickExpressionIdForRecording(
@@ -951,12 +992,17 @@ function pickExpressionIdForRecording(
   function syncUtteranceDrafts(nextRecording: RecordingResponse | null) {
     if (!nextRecording) {
       setUtteranceDrafts({});
+      setUtteranceSpeakerDrafts({});
       setUtteranceContextDrafts({});
       setUtteranceAnalysisReviewFlags({});
+      setSpeakerLabelDrafts({});
       return;
     }
     setUtteranceDrafts(
       Object.fromEntries(nextRecording.utterances.map((utterance) => [utterance.id, utterance.koreanText])),
+    );
+    setUtteranceSpeakerDrafts(
+      Object.fromEntries(nextRecording.utterances.map((utterance) => [utterance.id, utterance.speakerLabel])),
     );
     setUtteranceContextDrafts(
       Object.fromEntries(nextRecording.utterances.map((utterance) => [utterance.id, utterance.contextNote ?? ""])),
@@ -966,6 +1012,7 @@ function pickExpressionIdForRecording(
         nextRecording.utterances.map((utterance) => [utterance.id, DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG]),
       ),
     );
+    setSpeakerLabelDrafts(buildSpeakerLabelDrafts(nextRecording));
   }
 
   function toggleSection(section: keyof typeof expandedSections) {
@@ -976,6 +1023,7 @@ function pickExpressionIdForRecording(
     const refs = {
       autoFlow: autoFlowSectionRef,
       recordings: recordingsSectionRef,
+      recordingDetail: recordingDetailRef,
       expressions: expressionsSectionRef,
       practice: testSectionRef,
       reviews: reviewsSectionRef,
@@ -990,6 +1038,47 @@ function pickExpressionIdForRecording(
       refs[section].current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const sections = [
+      { id: "autoFlow", ref: autoFlowSectionRef },
+      { id: "recordings", ref: recordingsSectionRef },
+      { id: "recordingDetail", ref: recordingDetailRef },
+      { id: "expressions", ref: expressionsSectionRef },
+      { id: "practice", ref: testSectionRef },
+      { id: "reviews", ref: reviewsSectionRef },
+      { id: "ttsLibrary", ref: ttsLibrarySectionRef },
+    ] as const;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visibleEntries = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((left, right) => right.intersectionRatio - left.intersectionRatio);
+        const nextId = visibleEntries[0]?.target.getAttribute("data-section-id") as
+          | (typeof DASHBOARD_SECTION_TABS)[number]["id"]
+          | null;
+        if (nextId) {
+          setActiveSectionId(nextId);
+        }
+      },
+      {
+        rootMargin: "-20% 0px -55% 0px",
+        threshold: [0.1, 0.25, 0.4, 0.6],
+      },
+    );
+
+    for (const section of sections) {
+      const node = section.ref.current;
+      if (!node) continue;
+      node.setAttribute("data-section-id", section.id);
+      observer.observe(node);
+    }
+
+    return () => observer.disconnect();
+  }, []);
 
   function selectExpressionForPractice(expression: Expression) {
     setSelectedExpressionId(expression.id);
@@ -1168,26 +1257,28 @@ function pickExpressionIdForRecording(
     setTtsLibraryCurrentExpressionId("");
   }
 
-  async function getCachedTtsLibrarySrc(expression: Expression) {
-    const cached = ttsLibraryAudioCacheRef.current.get(expression.id);
+  async function getCachedTtsLibrarySrc(expression: Expression, language: "english" | "korean" = "english") {
+    const cacheKey = `${expression.id}:${language}`;
+    const cached = ttsLibraryAudioCacheRef.current.get(cacheKey);
     if (cached) return cached;
-    if (!expression.ttsUrl) {
+    const targetUrl = language === "korean" ? expression.koreanTtsUrl : expression.ttsUrl;
+    if (!targetUrl) {
       throw new Error("TTS 재생 URL이 없습니다.");
     }
 
-    const response = await fetch(expression.ttsUrl);
+    const response = await fetch(targetUrl);
     if (!response.ok) {
       throw new Error("TTS 음성 파일을 불러오지 못했습니다.");
     }
     const blob = await response.blob();
     const objectUrl = URL.createObjectURL(blob);
-    ttsLibraryAudioCacheRef.current.set(expression.id, objectUrl);
+    ttsLibraryAudioCacheRef.current.set(cacheKey, objectUrl);
     return objectUrl;
   }
 
   async function playTtsLibraryPlanStep(plan: TtsLibraryPlaybackPlan) {
-    const expressionId = plan.expressionIds[plan.expressionIndex];
-    const expression = completedTtsExpressions.find((item) => item.id === expressionId);
+    const track = plan.tracks[plan.trackIndex];
+    const expression = completedTtsExpressions.find((item) => item.id === track?.expressionId);
     if (!expression) {
       stopTtsLibraryPlayback();
       return;
@@ -1197,7 +1288,7 @@ function pickExpressionIdForRecording(
     setIsTtsLibraryPreparing(true);
     setTtsLibraryCurrentExpressionId(expression.id);
     try {
-      const src = await getCachedTtsLibrarySrc(expression);
+      const src = await getCachedTtsLibrarySrc(expression, track.language);
       if (ttsLibraryPlaybackSessionIdRef.current !== activeSessionId) return;
       const player = ttsLibraryAudioRef.current;
       if (!player) return;
@@ -1218,25 +1309,18 @@ function pickExpressionIdForRecording(
     const plan = ttsLibraryPlaybackPlanRef.current;
     if (!plan) return;
 
-    const isLastRepeat = plan.repeatIndex + 1 >= plan.repeatCount;
-    const isLastExpression = plan.expressionIndex + 1 >= plan.expressionIds.length;
+    const isLastTrack = plan.trackIndex + 1 >= plan.tracks.length;
 
-    if (isLastRepeat && isLastExpression) {
+    if (isLastTrack) {
       stopTtsLibraryPlayback();
       setMessage("TTS 전체 재생이 끝났습니다.");
       return;
     }
 
-    const nextPlan: TtsLibraryPlaybackPlan = isLastRepeat
-      ? {
-          ...plan,
-          expressionIndex: plan.expressionIndex + 1,
-          repeatIndex: 0,
-        }
-      : {
-          ...plan,
-          repeatIndex: plan.repeatIndex + 1,
-        };
+    const nextPlan: TtsLibraryPlaybackPlan = {
+      ...plan,
+      trackIndex: plan.trackIndex + 1,
+    };
     ttsLibraryPlaybackPlanRef.current = nextPlan;
     const delayMs = nextPlan.gapMs;
     if (delayMs > 0) {
@@ -1257,17 +1341,34 @@ function pickExpressionIdForRecording(
     stopTtsLibraryPlayback();
     setError("");
     setMessage("");
+    const playbackExpressions = ttsLibraryIncludeKorean
+      ? completedTtsExpressions.filter((item) => item.koreanTtsUrl)
+      : completedTtsExpressions;
+    if (playbackExpressions.length === 0) {
+      setError("한국어 포함 재생에 필요한 한국어 TTS가 아직 없습니다. TTS를 다시 생성해 주세요.");
+      return;
+    }
     const nextSessionId = ttsLibraryPlaybackSessionIdRef.current + 1;
     ttsLibraryPlaybackSessionIdRef.current = nextSessionId;
+    const tracks = playbackExpressions.flatMap((expression) => {
+      const englishTracks: TtsLibraryPlaybackTrack[] = Array.from(
+        { length: ttsLibraryRepeatCount },
+        () => ({ expressionId: expression.id, language: "english" as const }),
+      );
+      return ttsLibraryIncludeKorean
+        ? [{ expressionId: expression.id, language: "korean" as const }, ...englishTracks]
+        : englishTracks;
+    });
     const plan: TtsLibraryPlaybackPlan = {
-      expressionIds: completedTtsExpressions.map((item) => item.id),
-      repeatCount: ttsLibraryRepeatCount,
+      tracks,
       gapMs: ttsLibraryGapMs,
-      expressionIndex: 0,
-      repeatIndex: 0,
+      trackIndex: 0,
       sessionId: nextSessionId,
     };
     ttsLibraryPlaybackPlanRef.current = plan;
+    if (ttsLibraryIncludeKorean && playbackExpressions.length < completedTtsExpressions.length) {
+      setMessage(`한국어 TTS가 없는 표현 ${completedTtsExpressions.length - playbackExpressions.length}개는 제외하고 재생합니다.`);
+    }
     await playTtsLibraryPlanStep(plan);
   }
 
@@ -1351,7 +1452,10 @@ function pickExpressionIdForRecording(
     }
   }
 
-  function updateLocalUtterance(utteranceId: string, patch: { koreanText?: string; contextNote?: string | null }) {
+  function updateLocalUtterance(
+    utteranceId: string,
+    patch: { koreanText?: string; speakerLabel?: string; isMine?: boolean; contextNote?: string | null },
+  ) {
     setRecording((current) => {
       if (!current) return current;
       return {
@@ -1361,6 +1465,8 @@ function pickExpressionIdForRecording(
             ? {
                 ...utterance,
                 ...(typeof patch.koreanText === "string" ? { koreanText: patch.koreanText } : {}),
+                ...(typeof patch.speakerLabel === "string" ? { speakerLabel: patch.speakerLabel } : {}),
+                ...(typeof patch.isMine === "boolean" ? { isMine: patch.isMine } : {}),
                 ...(typeof patch.contextNote === "string" || patch.contextNote === null
                   ? { contextNote: patch.contextNote }
                   : {}),
@@ -1371,6 +1477,9 @@ function pickExpressionIdForRecording(
     });
     if (typeof patch.koreanText === "string") {
       setUtteranceDrafts((current) => ({ ...current, [utteranceId]: patch.koreanText as string }));
+    }
+    if (typeof patch.speakerLabel === "string") {
+      setUtteranceSpeakerDrafts((current) => ({ ...current, [utteranceId]: patch.speakerLabel as string }));
     }
     if (typeof patch.contextNote === "string" || patch.contextNote === null) {
       setUtteranceContextDrafts((current) => ({ ...current, [utteranceId]: patch.contextNote ?? "" }));
@@ -1385,6 +1494,7 @@ function pickExpressionIdForRecording(
     const markAnalysisReview = options.markAnalysisReview ?? false;
     const currentUtterance = recording?.utterances.find((utterance) => utterance.id === utteranceId);
     const textDraft = utteranceDrafts[utteranceId] ?? currentUtterance?.koreanText ?? "";
+    const speakerLabel = utteranceSpeakerDrafts[utteranceId] ?? currentUtterance?.speakerLabel ?? "";
     const trimmedText = textDraft.trim();
     if (requireText && !trimmedText) {
       throw new Error("수정할 문장을 입력해 주세요.");
@@ -1394,15 +1504,21 @@ function pickExpressionIdForRecording(
       method: "PATCH",
       body: JSON.stringify({
         ...(trimmedText ? { koreanText: trimmedText } : {}),
+        ...(speakerLabel ? { speakerLabel } : {}),
         contextNote,
       }),
     });
     updateLocalUtterance(utteranceId, {
       koreanText: updated.koreanText,
+      speakerLabel: updated.speakerLabel,
+      isMine: updated.isMine,
       contextNote: updated.contextNote ?? "",
     });
     if (markAnalysisReview) {
-      updateRecordingAnalysisStatusLocal("NEEDS_REVIEW", "UTTERANCE_UPDATED");
+      updateRecordingAnalysisStatusLocal(
+        "NEEDS_REVIEW",
+        speakerLabel !== currentUtterance?.speakerLabel ? "UTTERANCE_SPEAKER_CHANGED" : "UTTERANCE_UPDATED",
+      );
     }
     return updated;
   }
@@ -2071,15 +2187,26 @@ function pickExpressionIdForRecording(
     setMessage("");
     setLoading(`save-${utteranceId}`);
     try {
-      const shouldReviewAnalysis = utteranceAnalysisReviewFlags[utteranceId] ?? DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG;
-      await saveUtteranceDraft(utteranceId, { markAnalysisReview: shouldReviewAnalysis });
+      const currentUtterance = recording?.utterances.find((utterance) => utterance.id === utteranceId);
+      const speakerChanged =
+        (utteranceSpeakerDrafts[utteranceId] ?? currentUtterance?.speakerLabel ?? "") !==
+        (currentUtterance?.speakerLabel ?? "");
+      const shouldReviewAnalysis =
+        speakerChanged || (utteranceAnalysisReviewFlags[utteranceId] ?? DEFAULT_UTTERANCE_ANALYSIS_REVIEW_FLAG);
+      await saveUtteranceDraft(utteranceId, {
+        requireText: !speakerChanged,
+        markAnalysisReview: shouldReviewAnalysis,
+      });
       if (shouldReviewAnalysis && recording?.id) {
         await runAutoRecordingAnalysis(recording.id, "문장을 저장하고 대화 분석을 자동으로 갱신했습니다.");
       } else {
         setMessage("변환된 문장을 수정해 저장했습니다.");
       }
       if (shouldReviewAnalysis && recordingAnalysisMode !== "auto") {
-        await persistRecordingAnalysisStatus("NEEDS_REVIEW", "UTTERANCE_UPDATED");
+        await persistRecordingAnalysisStatus(
+          "NEEDS_REVIEW",
+          speakerChanged ? "UTTERANCE_SPEAKER_CHANGED" : "UTTERANCE_UPDATED",
+        );
         setMessage("변환된 문장을 수정해 저장했습니다.");
       }
       setUtteranceAnalysisReviewFlags((current) => ({
@@ -2221,11 +2348,47 @@ function pickExpressionIdForRecording(
       setMessage("TTS가 생성되었습니다. 재생 버튼을 눌러 확인하세요.");
       window.setTimeout(() => audioRef.current?.load(), 50);
       await refreshLists(selectedExpression.id);
+      await playSelectedExpressionTtsSequence({
+        koreanTtsUrl: response.koreanTtsUrl,
+        ttsUrl: response.ttsUrl,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "TTS 생성에 실패했습니다.");
     } finally {
       setLoading("");
     }
+  }
+
+  async function playSelectedExpressionTtsSequence(expression?: {
+    koreanTtsUrl?: string | null;
+    ttsUrl?: string | null;
+  }) {
+    const target = expression ?? selectedSectionExpression ?? selectedExpression;
+    if (!target?.ttsUrl) {
+      setError("영어 TTS 재생 URL이 없습니다.");
+      return;
+    }
+
+    const playEnglish = async () => {
+      const player = audioRef.current;
+      if (!player) return;
+      player.src = target.ttsUrl!;
+      player.load();
+      await player.play();
+    };
+
+    if (!target.koreanTtsUrl) {
+      await playEnglish();
+      return;
+    }
+
+    const koreanAudio = new Audio(target.koreanTtsUrl);
+    await new Promise<void>((resolve, reject) => {
+      koreanAudio.onended = () => resolve();
+      koreanAudio.onerror = () => reject(new Error("한국어 TTS 음성 파일을 재생하지 못했습니다."));
+      koreanAudio.play().catch((err) => reject(err instanceof Error ? err : new Error("한국어 TTS 재생에 실패했습니다.")));
+    });
+    await playEnglish();
   }
 
   async function handleGenerateTtsBulk() {
@@ -2688,8 +2851,15 @@ function pickExpressionIdForRecording(
   }
 
   async function handleUpdateSpeakerLabel(recordingId: string, speakerLabel: string) {
-    const nextSpeakerLabel = window.prompt(`${speakerLabel}의 이름을 입력하세요. 예: 나, 엄마, 아이, 남편`, speakerLabel);
-    if (!nextSpeakerLabel?.trim()) return;
+    const nextSpeakerLabel = speakerLabelDrafts[speakerLabel]?.trim();
+    if (!nextSpeakerLabel) {
+      setError("화자 이름을 입력해 주세요.");
+      return;
+    }
+    if (nextSpeakerLabel === speakerLabel) {
+      setMessage("변경된 화자 이름이 없어 저장하지 않았습니다.");
+      return;
+    }
 
     setError("");
     setMessage("");
@@ -2697,19 +2867,32 @@ function pickExpressionIdForRecording(
     try {
       const updated = await apiFetch<RecordingResponse>(`/recordings/${recordingId}/speaker-label`, {
         method: "PATCH",
-        body: JSON.stringify({ speakerLabel, nextSpeakerLabel: nextSpeakerLabel.trim() }),
+        body: JSON.stringify({ speakerLabel, nextSpeakerLabel }),
       });
       setRecordingWithDrafts(updated);
+      setActiveSpeakerRenameLabel("");
       await runAutoRecordingAnalysis(updated.id, "화자 이름 변경을 반영해 대화 분석을 자동으로 갱신했습니다.");
       if (recordingAnalysisMode !== "auto") {
         await persistRecordingAnalysisStatus("NEEDS_REVIEW", "SPEAKER_LABEL_CHANGED");
-        setMessage(`${speakerLabel} 이름을 "${nextSpeakerLabel.trim()}"로 저장했습니다.`);
+        setMessage(`${speakerLabel} 이름을 "${nextSpeakerLabel}"로 저장했습니다.`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "화자 이름 저장에 실패했습니다.");
     } finally {
       setLoading("");
     }
+  }
+
+  function openSpeakerRenameDialog(speakerLabel: string) {
+    setSpeakerLabelDrafts((current) => ({
+      ...current,
+      [speakerLabel]: current[speakerLabel] ?? speakerLabel,
+    }));
+    setActiveSpeakerRenameLabel(speakerLabel);
+  }
+
+  function closeSpeakerRenameDialog() {
+    setActiveSpeakerRenameLabel("");
   }
 
   async function handleDeleteRecording(recordingId: string) {
@@ -3216,7 +3399,7 @@ function pickExpressionIdForRecording(
             <button className="button ghost" onClick={handleRecordDemo} disabled={!!loading}>
               {loading === "record" && isMicRecording
                 ? `녹음 중... ${formatRecordingSeconds(recordingElapsedMs)}`
-                : "브라우저 녹음 (최대 5분)"}
+                : `브라우저 녹음 (최대 ${Math.round(manualRecordingLimitMs / 60000)}분)`}
             </button>
             {loading === "record" && isMicRecording && (
               <button className="button secondary" onClick={handleStopRecording}>
@@ -3239,7 +3422,7 @@ function pickExpressionIdForRecording(
             선택 파일: {selectedFile ? `${selectedFile.name} (${Math.round(selectedFile.size / 1024)} KB)` : "없음"}
           </div>
           <div className="muted" style={{ marginTop: 8 }}>
-            브라우저 녹음은 최대 5분까지 지원합니다. 녹음 종료 시 1개 파일로 저장한 뒤 업로드와 텍스트 변환을 진행합니다.
+            브라우저 녹음은 현재 기기에서 최대 {Math.round(manualRecordingLimitMs / 60000)}분까지 지원합니다. 녹음 종료 시 1개 파일로 저장한 뒤 업로드와 텍스트 변환을 진행합니다.
           </div>
           <div className="muted" style={{ marginTop: 8 }}>
             수동 업로드는 WAV, M4A, MP3, MP4, AAC 형식을 지원하며 최대 {Math.round(MANUAL_UPLOAD_MAX_BYTES / 1024 / 1024)}MB까지 업로드할 수 있습니다.
@@ -3381,7 +3564,7 @@ function pickExpressionIdForRecording(
           )}
 
           {recording && (
-            <div ref={recordingDetailRef} className="recording-detail-panel" tabIndex={-1}>
+            <div ref={recordingDetailRef} className="recording-detail-panel" tabIndex={-1} data-section-id="recordingDetail">
               <div className="recording-section-head">
                 <div>
                   <div className="recording-section-eyebrow">Selected Recording</div>
@@ -3653,12 +3836,10 @@ function pickExpressionIdForRecording(
                       <button
                         key={`${speaker.speakerLabel}-label`}
                         className="button ghost"
-                        onClick={() => handleUpdateSpeakerLabel(recording.id, speaker.speakerLabel)}
+                        onClick={() => openSpeakerRenameDialog(speaker.speakerLabel)}
                         disabled={!!loading}
                       >
-                        {loading === `speaker-label-${recording.id}-${speaker.speakerLabel}`
-                          ? `${speaker.speakerLabel} 저장 중...`
-                          : `${speaker.speakerLabel} 이름 변경`}
+                        {speaker.speakerLabel} 이름 변경
                       </button>
                     ))}
                   </div>
@@ -3687,6 +3868,56 @@ function pickExpressionIdForRecording(
                       </div>
                     ))}
                   </div>
+
+                  {activeSpeakerRenameLabel && (
+                    <div className="modal-backdrop" onClick={closeSpeakerRenameDialog}>
+                      <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+                        <strong>{activeSpeakerRenameLabel} 이름 변경</strong>
+                        <div className="muted" style={{ marginTop: 8 }}>
+                          예: 나, 엄마, 아이, 남편
+                        </div>
+                        <input
+                          className="input"
+                          style={{ marginTop: 12 }}
+                          value={speakerLabelDrafts[activeSpeakerRenameLabel] ?? activeSpeakerRenameLabel}
+                          onChange={(event) =>
+                            setSpeakerLabelDrafts((current) => ({
+                              ...current,
+                              [activeSpeakerRenameLabel]: event.target.value,
+                            }))}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              void handleUpdateSpeakerLabel(recording.id, activeSpeakerRenameLabel);
+                            }
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              closeSpeakerRenameDialog();
+                            }
+                          }}
+                          placeholder="예: 나, 엄마, 아이, 남편"
+                          disabled={!!loading}
+                          autoFocus
+                        />
+                        <div className="modal-actions">
+                          <button className="button ghost" onClick={closeSpeakerRenameDialog} disabled={!!loading}>
+                            취소
+                          </button>
+                          <button
+                            className="button"
+                            onClick={() => handleUpdateSpeakerLabel(recording.id, activeSpeakerRenameLabel)}
+                            disabled={
+                              !!loading ||
+                              !(speakerLabelDrafts[activeSpeakerRenameLabel] ?? "").trim() ||
+                              speakerLabelDrafts[activeSpeakerRenameLabel]?.trim() === activeSpeakerRenameLabel
+                            }
+                          >
+                            {loading === `speaker-label-${recording.id}-${activeSpeakerRenameLabel}` ? "저장 중..." : "이름 저장"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               {recording.audioUrl && (
@@ -3728,7 +3959,9 @@ function pickExpressionIdForRecording(
                   <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
                     <div>
                       <strong>{index + 1}. {utterance.speakerLabel}</strong>
-                      <span className="muted" style={{ marginLeft: 8 }}>{utterance.startMs}ms ~ {utterance.endMs}ms</span>
+                      <span className="muted" style={{ marginLeft: 8 }}>
+                        {formatUtteranceTime(utterance.startMs)} - {formatUtteranceTime(utterance.endMs)}
+                      </span>
                     </div>
                     <div className="row" style={{ gap: 8 }}>
                       <span className={`tag ${utteranceExpressionIds.has(utterance.id) ? "tag-done" : "tag-muted"}`}>
@@ -3747,6 +3980,23 @@ function pickExpressionIdForRecording(
                     placeholder="STT 결과를 확인하고 필요하면 수정해 주세요."
                     disabled={!!loading}
                   />
+                  <div style={{ marginTop: 10 }}>
+                    <label className="muted" style={{ display: "block", marginBottom: 6 }}>이 발화의 화자</label>
+                    <select
+                      className="input"
+                      value={utteranceSpeakerDrafts[utterance.id] ?? utterance.speakerLabel}
+                      onChange={(event) =>
+                        setUtteranceSpeakerDrafts((current) => ({ ...current, [utterance.id]: event.target.value }))
+                      }
+                      disabled={!!loading}
+                    >
+                      {speakerOptions.map((speaker) => (
+                        <option key={`${utterance.id}-${speaker.speakerLabel}`} value={speaker.speakerLabel}>
+                          {speaker.speakerLabel}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <textarea
                     className="textarea"
                     style={{ marginTop: 10, minHeight: 88, resize: "vertical" }}
@@ -3792,7 +4042,13 @@ function pickExpressionIdForRecording(
                     </button>
                     <button
                       className="button ghost"
-                      disabled={!!loading || !(utteranceDrafts[utterance.id]?.trim())}
+                      disabled={
+                        !!loading ||
+                        (
+                          !(utteranceDrafts[utterance.id]?.trim()) &&
+                          (utteranceSpeakerDrafts[utterance.id] ?? utterance.speakerLabel) === utterance.speakerLabel
+                        )
+                      }
                       onClick={() => handleSaveUtterance(utterance.id)}
                     >
                       {loading === `save-${utterance.id}` ? "저장 중..." : "문장 저장"}
@@ -3955,7 +4211,7 @@ function pickExpressionIdForRecording(
                       </button>
                       <button
                         className="button ghost"
-                        onClick={() => audioRef.current?.play()}
+                        onClick={() => void playSelectedExpressionTtsSequence()}
                         disabled={!ttsUrl}
                       >
                         TTS 재생
@@ -4226,12 +4482,6 @@ function pickExpressionIdForRecording(
           )}
           {expandedSections.ttsLibrary && (
             <>
-              {isReviewAnswerHidden ? (
-                <div className="mini-card muted" style={{ marginTop: 14 }}>
-                  복습 테스트 중에는 정답 노출을 막기 위해 이 목록도 숨겨집니다.
-                </div>
-              ) : (
-                <>
                   <div className="mini-card" style={{ marginTop: 14 }}>
                     <strong>전체 재생 옵션</strong>
                     <div className="muted" style={{ marginTop: 8 }}>
@@ -4254,9 +4504,9 @@ function pickExpressionIdForRecording(
                           ))}
                         </div>
                       </div>
-                      <div>
-                        <div className="muted" style={{ marginBottom: 8 }}>반복 사이 텀</div>
-                        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                  <div>
+                    <div className="muted" style={{ marginBottom: 8 }}>반복 사이 텀</div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                           {[0, 1000, 2000, 3000].map((gapMs) => (
                             <button
                               key={`tts-gap-${gapMs}`}
@@ -4267,10 +4517,31 @@ function pickExpressionIdForRecording(
                             >
                               {formatGapLabel(gapMs)}
                             </button>
-                          ))}
-                        </div>
-                      </div>
+                      ))}
                     </div>
+                  </div>
+                  <div>
+                    <div className="muted" style={{ marginBottom: 8 }}>한국어 표현 포함</div>
+                    <div className="row" style={{ gap: 8 }}>
+                      <button
+                        type="button"
+                        className={`chip ${!ttsLibraryIncludeKorean ? "selected" : ""}`}
+                        onClick={() => setTtsLibraryIncludeKorean(false)}
+                        disabled={isTtsLibraryPlaying || isTtsLibraryPreparing}
+                      >
+                        영어만
+                      </button>
+                      <button
+                        type="button"
+                        className={`chip ${ttsLibraryIncludeKorean ? "selected" : ""}`}
+                        onClick={() => setTtsLibraryIncludeKorean(true)}
+                        disabled={isTtsLibraryPlaying || isTtsLibraryPreparing}
+                      >
+                        한국어 포함
+                      </button>
+                    </div>
+                  </div>
+                </div>
                     <div className="row" style={{ marginTop: 12 }}>
                       <button
                         className="button"
@@ -4294,7 +4565,7 @@ function pickExpressionIdForRecording(
                       </button>
                     </div>
                     <div className="muted" style={{ marginTop: 10 }}>
-                      현재 설정: 문장당 {ttsLibraryRepeatCount}회 · 반복 사이 텀 {formatGapLabel(ttsLibraryGapMs)}
+                      현재 설정: {ttsLibraryIncludeKorean ? "한국어 -> 영어" : "영어만"} · 문장당 {ttsLibraryRepeatCount}회 · 반복 사이 텀 {formatGapLabel(ttsLibraryGapMs)}
                     </div>
                     <div className="muted" style={{ marginTop: 6 }}>
                       {ttsLibraryCurrentExpressionId
@@ -4346,12 +4617,22 @@ function pickExpressionIdForRecording(
                     ))}
                     {renderListControls("ttsLibrary", completedTtsExpressions.length)}
                   </div>
-                </>
-              )}
             </>
           )}
         </section>
       </div>
+      <nav className="desktop-section-nav" aria-label="대시보드 섹션 이동">
+        {DASHBOARD_SECTION_TABS.map((tab) => (
+          <button
+            key={`desktop-${tab.id}`}
+            type="button"
+            className={`desktop-section-nav-button ${activeSectionId === tab.id ? "active" : ""}`}
+            onClick={() => scrollToDashboardSection(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
       <nav className="mobile-section-nav" aria-label="대시보드 섹션 이동">
         {DASHBOARD_SECTION_TABS.map((tab) => (
           <button
