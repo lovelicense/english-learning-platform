@@ -134,6 +134,9 @@ type PracticeScore = {
   target: string;
   answer: string;
   audioUrl?: string;
+  responseLatencyMs?: number | null;
+  responseTimedOut?: boolean;
+  responseLimitMs?: number;
 };
 type ReviewItem = {
   id: string;
@@ -147,6 +150,131 @@ type ReviewItem = {
   practiceAnswer?: string | null;
   practiceAudioUrl?: string | null;
 };
+type LearningAssetsProgress = {
+  overall: {
+    patternTemplateCount: number;
+    vocabularyItemCount: number;
+    collectedPatternCount: number;
+    automatedPatternCount: number;
+    collectedVocabularyCount: number;
+    usableVocabularyCount: number;
+    patternCollectionRate: number;
+    patternAutomationRate: number;
+    vocabularyCollectionRate: number;
+    vocabularyUsableRate: number;
+    responseWithin1sRate: number;
+    overallProgress: number;
+  };
+  levels: Array<{
+    level: "A1" | "A2";
+    patternTargetCount: number;
+    patternCollectedCount: number;
+    patternAutomatedCount: number;
+    vocabularyTargetCount: number;
+    vocabularyCollectedCount: number;
+    vocabularyUsableCount: number;
+    progress: number;
+  }>;
+  weakestCategories: Array<{
+    kind: "pattern" | "vocabulary";
+    level?: "A1" | "A2";
+    code: string;
+    nameKo: string;
+    targetCount: number;
+    collectedCount: number;
+    automatedCount: number;
+    gap: number;
+  }>;
+};
+type LearningAssetExpression = {
+  id: string;
+  koreanText: string;
+  englishBase: string;
+  englishEasy: string;
+  englishNatural: string;
+  utteranceId?: string | null;
+  savedSentenceId?: string | null;
+  createdAt: string;
+};
+type LearningPatternTemplate = {
+  id: string;
+  templateText: string;
+  meaningKo: string;
+  usageNote?: string | null;
+  difficulty?: number | null;
+  exampleEn?: string | null;
+  exampleKo?: string | null;
+  progress: {
+    status: "COLLECTED" | "RECOGNIZED" | "PRACTICING" | "USABLE_IN_SPEAKING" | "AUTOMATED";
+    successCount: number;
+    failCount: number;
+    responseWithin1sCount: number;
+    lastPracticedAt?: string | null;
+  } | null;
+  expressions: LearningAssetExpression[];
+  collected: boolean;
+  automated: boolean;
+};
+type LearningPatternCategory = {
+  id: string;
+  level: "A1" | "A2";
+  code: string;
+  nameKo: string;
+  nameEn: string;
+  description?: string | null;
+  targetCount: number;
+  sortOrder: number;
+  templates: LearningPatternTemplate[];
+};
+type LearningVocabularyItem = {
+  id: string;
+  level: "A1" | "A2";
+  lemma: string;
+  partOfSpeech: string;
+  meaningKo: string;
+  exampleEn?: string | null;
+  exampleKo?: string | null;
+  frequencyRank?: number | null;
+  isCore: boolean;
+  progress: {
+    status: "COLLECTED" | "RECOGNIZED" | "PRACTICING" | "USABLE_IN_SPEAKING" | "AUTOMATED";
+    successCount: number;
+    failCount: number;
+    responseWithin1sCount: number;
+    lastPracticedAt?: string | null;
+  } | null;
+  expressions: LearningAssetExpression[];
+  collected: boolean;
+  automated: boolean;
+};
+type LearningVocabularyCategory = {
+  id: string;
+  code: string;
+  nameKo: string;
+  nameEn: string;
+  description?: string | null;
+  sortOrder: number;
+  items: LearningVocabularyItem[];
+};
+type LearningAssetsCatalog = {
+  patternCategories: LearningPatternCategory[];
+  vocabularyCategories: LearningVocabularyCategory[];
+  unmatchedPatternExpressions: LearningAssetExpression[];
+  unmatchedVocabularyExpressions: LearningAssetExpression[];
+};
+
+function MetricHelpButton({ label, description }: { label: string; description: string }) {
+  return (
+    <button
+      type="button"
+      className="help-icon-button"
+      title={description}
+      aria-label={`${label} 도움말`}
+    >
+      ?
+    </button>
+  );
+}
 type PracticeVoicePresignResponse = { key: string; uploadUrl: string };
 type RecordingSessionCreateResponse = {
   sessionId: string;
@@ -319,7 +447,12 @@ const MANUAL_RECORDING_IOS_SAFARI_MAX_MS = BROWSER_RECORDING_MAX_MS;
 const MANUAL_RECORDING_RETRY_DELAYS = [2000, 5000, 10000];
 const MANUAL_UPLOAD_STT_CHUNK_MS = 10 * 60 * 1000;
 const DASHBOARD_SECTION_TABS = [
+  { id: "personDictionary", label: "인물 사전" },
   { id: "autoFlow", label: "원클릭" },
+  { id: "learningProgress", label: "진도" },
+  { id: "learningAssets", label: "DB 보기" },
+  { id: "patternAssets", label: "패턴 자산" },
+  { id: "vocabularyAssets", label: "단어 자산" },
   { id: "recordings", label: "녹음 목록" },
   { id: "recordingDetail", label: "녹음 상세" },
   { id: "expressions", label: "표현" },
@@ -415,14 +548,21 @@ export default function DashboardPage() {
   const [selectedExpressionId, setSelectedExpressionId] = useState("");
   const [expressionMemoDraft, setExpressionMemoDraft] = useState("");
   const [ttsUrl, setTtsUrl] = useState("");
-  const [testMode, setTestMode] = useState<"text" | "voice">("text");
+  const [testMode, setTestMode] = useState<"text" | "voice">("voice");
   const [practiceTestType, setPracticeTestType] = useState<"translation" | "situation" | "pattern">("translation");
   const [practicePrompt, setPracticePrompt] = useState<PracticePrompt | null>(null);
+  const [practicePromptReadyAtMs, setPracticePromptReadyAtMs] = useState<number | null>(null);
+  const [practiceResponseStartedAtMs, setPracticeResponseStartedAtMs] = useState<number | null>(null);
   const [activeReviewExpressionId, setActiveReviewExpressionId] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
   const [voiceAnswerFile, setVoiceAnswerFile] = useState<File | null>(null);
   const [score, setScore] = useState<PracticeScore | null>(null);
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
+  const [reviewAutoAdvance, setReviewAutoAdvance] = useState(true);
+  const [reviewReadQuestion, setReviewReadQuestion] = useState(true);
+  const [pendingAutoReview, setPendingAutoReview] = useState<ReviewItem | null>(null);
+  const [learningAssetsProgress, setLearningAssetsProgress] = useState<LearningAssetsProgress | null>(null);
+  const [learningAssetsCatalog, setLearningAssetsCatalog] = useState<LearningAssetsCatalog | null>(null);
   const [loading, setLoading] = useState<string>("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -472,14 +612,24 @@ export default function DashboardPage() {
     reviews: false,
     ttsLibrary: false,
   });
+  const [learningProgressOpen, setLearningProgressOpen] = useState(false);
+  const [personDictionaryOpen, setPersonDictionaryOpen] = useState(false);
+  const [assetSectionOpen, setAssetSectionOpen] = useState(false);
+  const [patternAssetOpen, setPatternAssetOpen] = useState(false);
+  const [vocabularyAssetOpen, setVocabularyAssetOpen] = useState(false);
   const [visibleCounts, setVisibleCounts] = useState<Record<keyof typeof DEFAULT_PREVIEW_COUNTS, number>>(DEFAULT_PREVIEW_COUNTS);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ttsLibraryAudioRef = useRef<HTMLAudioElement | null>(null);
   const expressionDetailRef = useRef<HTMLDivElement | null>(null);
   const recordingDetailRef = useRef<HTMLDivElement | null>(null);
   const rawAudioRef = useRef<HTMLAudioElement | null>(null);
+  const personDictionarySectionRef = useRef<HTMLElement | null>(null);
   const testSectionRef = useRef<HTMLElement | null>(null);
   const autoFlowSectionRef = useRef<HTMLElement | null>(null);
+  const learningProgressSectionRef = useRef<HTMLElement | null>(null);
+  const learningAssetsSectionRef = useRef<HTMLElement | null>(null);
+  const patternAssetsSectionRef = useRef<HTMLElement | null>(null);
+  const vocabularyAssetsSectionRef = useRef<HTMLElement | null>(null);
   const recordingsSectionRef = useRef<HTMLElement | null>(null);
   const expressionsSectionRef = useRef<HTMLElement | null>(null);
   const reviewsSectionRef = useRef<HTMLElement | null>(null);
@@ -487,6 +637,7 @@ export default function DashboardPage() {
   const answerRef = useRef<HTMLTextAreaElement | null>(null);
   const recordingSessionRef = useRef<{ stop: () => void; cancel: () => void } | null>(null);
   const practiceRecordingSessionRef = useRef<RecordingSession | null>(null);
+  const reviewQuestionSpeechRef = useRef<SpeechSynthesisUtterance | null>(null);
   const uploadTaskRef = useRef<ReturnType<typeof createPresignedUploadTask> | null>(null);
   const abortControllersRef = useRef<AbortController[]>([]);
   const userCancelledRef = useRef(false);
@@ -574,6 +725,17 @@ export default function DashboardPage() {
     () => completedTtsExpressions.slice(0, visibleCounts.ttsLibrary),
     [completedTtsExpressions, visibleCounts.ttsLibrary],
   );
+
+  useEffect(() => {
+    if (!pendingAutoReview) return;
+    if (loading) return;
+
+    setPendingAutoReview(null);
+    void handleStartReviewPractice(pendingAutoReview, "translation", { autoAdvance: true });
+    window.setTimeout(() => {
+      scrollToDashboardSection("practice");
+    }, 100);
+  }, [pendingAutoReview, loading]);
   const speakerOptions = useMemo(() => {
     const seen = new Set<string>();
     return (recording?.utterances ?? []).filter((utterance) => {
@@ -593,6 +755,7 @@ export default function DashboardPage() {
     selectedSectionExpression?.utteranceId
       ? intentByUtteranceId.get(selectedSectionExpression.utteranceId) ?? ""
       : selectedSectionExpression?.sourceAnalysisIntent ?? "";
+  const isPracticeQuestionPending = activeReviewExpressionId !== null && reviewReadQuestion && practicePromptReadyAtMs === null;
   const visibleRecordingSummary = recordingAnalysis?.summary ?? recording?.analysisSummary ?? "";
   const hasUnsavedContextChanges = !contextsEqual(recordingContextDraft, recordingContext);
   const hasUnsavedParticipantChanges =
@@ -702,6 +865,7 @@ export default function DashboardPage() {
       if (ttsLibraryPlaybackTimeoutRef.current) {
         window.clearTimeout(ttsLibraryPlaybackTimeoutRef.current);
       }
+      stopReviewQuestionSpeech();
       for (const objectUrl of ttsLibraryAudioCacheRef.current.values()) {
         URL.revokeObjectURL(objectUrl);
       }
@@ -721,8 +885,10 @@ export default function DashboardPage() {
       apiFetch<ReviewItem[]>("/reviews/today").catch(() => []),
       apiFetch<RecordingSummary[]>("/recordings").catch(() => []),
       apiFetch<PersonProfile[]>("/person-profiles").catch(() => []),
+      apiFetch<LearningAssetsProgress>("/learning-assets/progress").catch(() => null),
+      apiFetch<LearningAssetsCatalog>("/learning-assets/catalog").catch(() => null),
     ])
-      .then(([me, expressionList, reviewList, recordingList, personProfileList]) => {
+      .then(([me, expressionList, reviewList, recordingList, personProfileList, learningAssets, learningCatalog]) => {
         setUser(me);
         setExpressions(expressionList);
         if (expressionList[0]) {
@@ -731,6 +897,8 @@ export default function DashboardPage() {
         setReviews(reviewList);
         setRecordings(recordingList);
         setPersonProfiles(personProfileList);
+        setLearningAssetsProgress(learningAssets);
+        setLearningAssetsCatalog(learningCatalog);
       })
       .catch((err) => {
         setAuthError(err instanceof Error ? err.message : "세션 확인에 실패했습니다.");
@@ -863,6 +1031,31 @@ function pickExpressionIdForRecording(
   return expressions[0]?.id ?? "";
 }
 
+function stopReviewQuestionSpeech() {
+  if (typeof window === "undefined") return;
+  window.speechSynthesis.cancel();
+}
+
+function speakReviewQuestion(text: string, onEnd?: () => void) {
+  if (typeof window === "undefined" || !text.trim()) return;
+
+  stopReviewQuestionSpeech();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "ko-KR";
+  utterance.rate = 0.95;
+  utterance.pitch = 1;
+  const finalize = () => {
+    if (reviewQuestionSpeechRef.current === utterance) {
+      reviewQuestionSpeechRef.current = null;
+      onEnd?.();
+    }
+  };
+  utterance.onend = finalize;
+  utterance.onerror = finalize;
+  reviewQuestionSpeechRef.current = utterance;
+  window.speechSynthesis.speak(utterance);
+}
+
   function seekRawAudio(timeSeconds: number, autoPlay = false) {
     const player = rawAudioRef.current;
     if (!player) return;
@@ -901,6 +1094,7 @@ function pickExpressionIdForRecording(
     practiceRecordingSessionRef.current = null;
     uploadTaskRef.current?.cancel();
     uploadTaskRef.current = null;
+    stopReviewQuestionSpeech();
     abortControllersRef.current.forEach((controller) => controller.abort());
     abortControllersRef.current = [];
     setIsMicRecording(false);
@@ -969,12 +1163,16 @@ function pickExpressionIdForRecording(
   }
 
   async function refreshLists(preferredExpressionId?: string) {
-    const [expressionList, reviewList] = await Promise.all([
+    const [expressionList, reviewList, learningAssets, learningCatalog] = await Promise.all([
       apiFetch<Expression[]>("/expressions"),
       apiFetch<ReviewItem[]>("/reviews/today").catch(() => []),
+      apiFetch<LearningAssetsProgress>("/learning-assets/progress").catch(() => null),
+      apiFetch<LearningAssetsCatalog>("/learning-assets/catalog").catch(() => null),
     ]);
     setExpressions(expressionList);
     setReviews(reviewList);
+    setLearningAssetsProgress(learningAssets);
+    setLearningAssetsCatalog(learningCatalog);
     const nextId = pickExpressionIdForRecording(expressionList, recording, preferredExpressionId);
     setSelectedExpressionId(nextId);
   }
@@ -1021,7 +1219,12 @@ function pickExpressionIdForRecording(
 
   function scrollToDashboardSection(section: (typeof DASHBOARD_SECTION_TABS)[number]["id"]) {
     const refs = {
+      personDictionary: personDictionarySectionRef,
       autoFlow: autoFlowSectionRef,
+      learningProgress: learningProgressSectionRef,
+      learningAssets: learningAssetsSectionRef,
+      patternAssets: patternAssetsSectionRef,
+      vocabularyAssets: vocabularyAssetsSectionRef,
       recordings: recordingsSectionRef,
       recordingDetail: recordingDetailRef,
       expressions: expressionsSectionRef,
@@ -1033,17 +1236,39 @@ function pickExpressionIdForRecording(
     if (section in expandedSections && !expandedSections[section as keyof typeof expandedSections]) {
       setExpandedSections((current) => ({ ...current, [section]: true }));
     }
+    if (section === "personDictionary") {
+      setPersonDictionaryOpen(true);
+    }
+    if (section === "learningProgress") {
+      setLearningProgressOpen(true);
+    }
+    if (section === "learningAssets") {
+      setAssetSectionOpen(true);
+    }
+    if (section === "patternAssets") {
+      setAssetSectionOpen(true);
+      setPatternAssetOpen(true);
+    }
+    if (section === "vocabularyAssets") {
+      setAssetSectionOpen(true);
+      setVocabularyAssetOpen(true);
+    }
 
     window.setTimeout(() => {
       refs[section].current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 80);
+    }, 120);
   }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     const sections = [
+      { id: "personDictionary", ref: personDictionarySectionRef },
       { id: "autoFlow", ref: autoFlowSectionRef },
+      { id: "learningProgress", ref: learningProgressSectionRef },
+      { id: "learningAssets", ref: learningAssetsSectionRef },
+      { id: "patternAssets", ref: patternAssetsSectionRef },
+      { id: "vocabularyAssets", ref: vocabularyAssetsSectionRef },
       { id: "recordings", ref: recordingsSectionRef },
       { id: "recordingDetail", ref: recordingDetailRef },
       { id: "expressions", ref: expressionsSectionRef },
@@ -1082,6 +1307,8 @@ function pickExpressionIdForRecording(
 
   function selectExpressionForPractice(expression: Expression) {
     setSelectedExpressionId(expression.id);
+    setPracticePromptReadyAtMs(Date.now());
+    setPracticeResponseStartedAtMs(null);
     setScore(null);
     setTtsUrl(expression.ttsUrl ?? "");
     scrollToDashboardSection("practice");
@@ -2486,6 +2713,11 @@ function pickExpressionIdForRecording(
     }
   }
 
+  function resetPracticeResponseTiming() {
+    setPracticePromptReadyAtMs(null);
+    setPracticeResponseStartedAtMs(null);
+  }
+
   async function handleScore() {
     if (!selectedExpression) {
       setError("채점할 표현을 먼저 선택해 주세요.");
@@ -2499,6 +2731,8 @@ function pickExpressionIdForRecording(
     setMessage("");
     setLoading("score");
     try {
+      const promptReadyAtMs = practicePromptReadyAtMs ?? Date.now();
+      const responseStartedAtMs = practiceResponseStartedAtMs ?? promptReadyAtMs;
       const result = await runWithTimeout("score", (signal) => apiFetch<PracticeScore>("/practice/score", {
         method: "POST",
         body: JSON.stringify({
@@ -2507,6 +2741,8 @@ function pickExpressionIdForRecording(
           testType: practiceTestType,
           promptKorean: practicePrompt?.promptKorean,
           promptContext: practicePrompt?.promptContext,
+          promptReadyAtMs,
+          responseStartedAtMs,
         }),
         signal,
       }));
@@ -2525,11 +2761,17 @@ function pickExpressionIdForRecording(
 
   function handleStartVoicePractice() {
     if (isPracticeRecording || loading) return;
+    if (activeReviewExpressionId && reviewReadQuestion && practicePromptReadyAtMs === null) {
+      setError("문제를 모두 읽은 뒤에 녹음을 시작해 주세요.");
+      return;
+    }
     userCancelledRef.current = false;
+    stopReviewQuestionSpeech();
     setError("");
     setMessage("영어 말하기 테스트 녹음을 시작했습니다. 말이 끝나면 종료 버튼을 누르면 자동으로 채점합니다.");
     setVoiceAnswerFile(null);
     setScore(null);
+    setPracticeResponseStartedAtMs(Date.now());
 
     const session = startRecordedAudioSession({ durationMs: 15000 });
     practiceRecordingSessionRef.current = session;
@@ -2571,6 +2813,8 @@ function pickExpressionIdForRecording(
     setMessage("");
     setLoading("score-voice");
     try {
+      const promptReadyAtMs = practicePromptReadyAtMs ?? Date.now();
+      const responseStartedAtMs = practiceResponseStartedAtMs ?? promptReadyAtMs;
       const presign = await runWithTimeout("score-voice", (signal) =>
         apiFetch<PracticeVoicePresignResponse>("/practice/voice/presign", {
           method: "POST",
@@ -2605,18 +2849,32 @@ function pickExpressionIdForRecording(
             testType: practiceTestType,
             promptKorean: practicePrompt?.promptKorean,
             promptContext: practicePrompt?.promptContext,
+            promptReadyAtMs,
+            responseStartedAtMs,
           }),
           signal,
         }),
       );
 
+      const currentReviewId = activeReviewExpressionId;
+      const currentReviewIndex = currentReviewId ? reviews.findIndex((item) => item.id === currentReviewId) : -1;
+      const nextReview = reviewAutoAdvance && currentReviewIndex >= 0 ? reviews[currentReviewIndex + 1] ?? null : null;
+
       setScore(result);
-      if (selectedExpression?.id === activeReviewExpressionId) {
-        setActiveReviewExpressionId(selectedExpression.id);
-      }
       setAnswer(result.answer);
       await refreshLists(selectedExpression.id);
-      setMessage("음성 답변을 영어로 인식해 채점했습니다.");
+      if (currentReviewId && reviewAutoAdvance) {
+        if (nextReview) {
+          setMessage("음성 답변을 채점했습니다. 다음 복습 카드로 자동 이동합니다.");
+          setPendingAutoReview(nextReview);
+        } else {
+          setPendingAutoReview(null);
+          setActiveReviewExpressionId(null);
+          setMessage("음성 답변을 채점했습니다. 오늘의 복습이 모두 끝났습니다.");
+        }
+      } else {
+        setMessage("음성 답변을 영어로 인식해 채점했습니다.");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "음성 채점에 실패했습니다.");
     } finally {
@@ -2635,16 +2893,19 @@ function pickExpressionIdForRecording(
     setVoiceAnswerFile(null);
     setScore(null);
     setActiveReviewExpressionId(null);
+    resetPracticeResponseTiming();
     setError("");
     setMessage("");
 
     if (nextType === "translation") {
+      const readyAtMs = Date.now();
       setPracticePrompt({
         testType: "translation",
         promptKorean: selectedExpression.koreanText,
         target: selectedExpression.englishBase,
         tips: "핵심 의미를 살려 자연스럽게 영어로 말해보세요.",
       });
+      setPracticePromptReadyAtMs(readyAtMs);
       return;
     }
 
@@ -2655,6 +2916,7 @@ function pickExpressionIdForRecording(
         body: JSON.stringify({ expressionId: selectedExpression.id, testType: nextType }),
       });
       setPracticePrompt(prompt);
+      setPracticePromptReadyAtMs(Date.now());
       setMessage(nextType === "pattern" ? "패턴형 문제를 불러왔습니다." : "상황형 문제를 불러왔습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "상황형 문제 생성에 실패했습니다.");
@@ -2663,21 +2925,27 @@ function pickExpressionIdForRecording(
     }
   }
 
-  async function handleStartReviewPractice(review: ReviewItem, nextType?: "translation" | "situation") {
+  async function handleStartReviewPractice(
+    review: ReviewItem,
+    nextType?: "translation" | "situation",
+    options?: { autoAdvance?: boolean },
+  ) {
     const expression = expressions.find((item) => item.id === review.id);
-    const targetType = nextType ?? review.recommendedTestType ?? "translation";
+    const targetType = options?.autoAdvance ? "translation" : (nextType ?? review.recommendedTestType ?? "translation");
 
     if (!expression) {
       setError("복습을 시작할 표현을 찾지 못했습니다.");
       return;
     }
 
+    stopReviewQuestionSpeech();
     setSelectedExpressionId(expression.id);
     setActiveReviewExpressionId(expression.id);
-    setTestMode("text");
+    setTestMode("voice");
     setAnswer("");
     setVoiceAnswerFile(null);
     setScore(null);
+    resetPracticeResponseTiming();
     setError("");
     setMessage("");
 
@@ -2689,6 +2957,16 @@ function pickExpressionIdForRecording(
         target: expression.englishBase,
         tips: "핵심 의미를 살려 자연스럽게 영어로 말해보세요.",
       });
+      if (reviewReadQuestion) {
+        setMessage("문제를 읽어주는 중입니다.");
+        speakReviewQuestion(expression.koreanText, () => {
+          setPracticePromptReadyAtMs(Date.now());
+          setMessage("이제 답변해 주세요. 3초 안에 답변을 시작해야 합니다.");
+          window.setTimeout(() => answerRef.current?.focus(), 0);
+        });
+      } else {
+        setPracticePromptReadyAtMs(Date.now());
+      }
     } else {
       setLoading("practice-prompt");
       try {
@@ -2698,6 +2976,16 @@ function pickExpressionIdForRecording(
         });
         setPracticeTestType("situation");
         setPracticePrompt(prompt);
+        if (reviewReadQuestion) {
+          setMessage("문제를 읽어주는 중입니다.");
+          speakReviewQuestion(prompt.promptKorean, () => {
+            setPracticePromptReadyAtMs(Date.now());
+            setMessage("이제 답변해 주세요. 3초 안에 답변을 시작해야 합니다.");
+            window.setTimeout(() => answerRef.current?.focus(), 0);
+          });
+        } else {
+          setPracticePromptReadyAtMs(Date.now());
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "상황형 문제 생성에 실패했습니다.");
         setLoading("");
@@ -3135,68 +3423,73 @@ function pickExpressionIdForRecording(
         )}
       </section>
 
-      <section className="card panel-lg">
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+      <section ref={personDictionarySectionRef} className="card panel-lg">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
           <div>
             <h2 className="h2" style={{ marginBottom: 8 }}>개인 인물 사전</h2>
             <div className="muted">
               나와 가족, 자주 등장하는 사람을 등록해두면 녹음 맥락 입력과 화자 선택을 훨씬 빠르게 할 수 있습니다.
             </div>
           </div>
+          <button type="button" className="chip selected" onClick={() => setPersonDictionaryOpen((current) => !current)}>
+            {personDictionaryOpen ? "접기" : "펼치기"}
+          </button>
         </div>
-        <div className="grid grid-2" style={{ marginTop: 16 }}>
-          <div className="mini-card">
-            <strong>{personProfileDraft.id ? "인물 프로필 수정" : "인물 프로필 추가"}</strong>
-            <div className="grid" style={{ marginTop: 12 }}>
-              <input className="input" value={personProfileDraft.name} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, name: event.target.value }))} placeholder="이름 예: 박소연" />
-              <input className="input" value={personProfileDraft.roleLabel} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, roleLabel: event.target.value }))} placeholder="역할 예: 첫째딸, 배우자" />
-              <input className="input" value={personProfileDraft.relationshipToMe} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, relationshipToMe: event.target.value }))} placeholder="나와의 관계 예: 딸, 배우자, 본인" />
-              <input className="input" value={personProfileDraft.aliases} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, aliases: event.target.value }))} placeholder="별칭 예: 소연이, 언니" />
-              <textarea className="textarea" style={{ minHeight: 92 }} value={personProfileDraft.notes} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="메모 예: 초등학생, 투정 부릴 때가 있음" />
-              <label className="muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input type="checkbox" checked={personProfileDraft.isMe} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, isMe: event.target.checked }))} />
-                이 인물은 나
-              </label>
-            </div>
-            <div className="row" style={{ marginTop: 12 }}>
-              <button className="button" onClick={handleSavePersonProfile} disabled={!!loading || !personProfileDraft.name.trim()}>
-                {loading === "save-person-profile" ? "저장 중..." : personProfileDraft.id ? "수정 저장" : "인물 추가"}
-              </button>
-              {personProfileDraft.id && (
-                <button className="button ghost" onClick={() => setPersonProfileDraft({ id: "", name: "", roleLabel: "", relationshipToMe: "", aliases: "", notes: "", isMe: false })} disabled={!!loading}>
-                  입력 초기화
+        {personDictionaryOpen && (
+          <div className="grid grid-2" style={{ marginTop: 16 }}>
+            <div className="mini-card">
+              <strong>{personProfileDraft.id ? "인물 프로필 수정" : "인물 프로필 추가"}</strong>
+              <div className="grid" style={{ marginTop: 12 }}>
+                <input className="input" value={personProfileDraft.name} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, name: event.target.value }))} placeholder="이름 예: 박소연" />
+                <input className="input" value={personProfileDraft.roleLabel} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, roleLabel: event.target.value }))} placeholder="역할 예: 첫째딸, 배우자" />
+                <input className="input" value={personProfileDraft.relationshipToMe} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, relationshipToMe: event.target.value }))} placeholder="나와의 관계 예: 딸, 배우자, 본인" />
+                <input className="input" value={personProfileDraft.aliases} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, aliases: event.target.value }))} placeholder="별칭 예: 소연이, 언니" />
+                <textarea className="textarea" style={{ minHeight: 92 }} value={personProfileDraft.notes} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="메모 예: 초등학생, 투정 부릴 때가 있음" />
+                <label className="muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input type="checkbox" checked={personProfileDraft.isMe} onChange={(event) => setPersonProfileDraft((current) => ({ ...current, isMe: event.target.checked }))} />
+                  이 인물은 나
+                </label>
+              </div>
+              <div className="row" style={{ marginTop: 12 }}>
+                <button className="button" onClick={handleSavePersonProfile} disabled={!!loading || !personProfileDraft.name.trim()}>
+                  {loading === "save-person-profile" ? "저장 중..." : personProfileDraft.id ? "수정 저장" : "인물 추가"}
                 </button>
-              )}
+                {personProfileDraft.id && (
+                  <button className="button ghost" onClick={() => setPersonProfileDraft({ id: "", name: "", roleLabel: "", relationshipToMe: "", aliases: "", notes: "", isMe: false })} disabled={!!loading}>
+                    입력 초기화
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="mini-card">
+              <strong>등록된 인물</strong>
+              <div className="grid" style={{ marginTop: 12 }}>
+                {personProfiles.length === 0 && <div className="muted">아직 등록된 인물이 없습니다.</div>}
+                {personProfiles.map((profile) => (
+                  <div key={profile.id} className="mini-card">
+                    <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                      <strong>{profile.name}</strong>
+                      {profile.isMe && <span className="tag tag-primary">나</span>}
+                    </div>
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      {[profile.roleLabel, profile.relationshipToMe].filter(Boolean).join(" · ") || "역할 정보 없음"}
+                    </div>
+                    {profile.aliases && <div className="muted" style={{ marginTop: 6 }}>별칭: {profile.aliases}</div>}
+                    {profile.notes && <div className="muted" style={{ marginTop: 6 }}>{profile.notes}</div>}
+                    <div className="row" style={{ marginTop: 10 }}>
+                      <button className="button ghost" onClick={() => setPersonProfileDraft({ id: profile.id, name: profile.name, roleLabel: profile.roleLabel ?? "", relationshipToMe: profile.relationshipToMe ?? "", aliases: profile.aliases ?? "", notes: profile.notes ?? "", isMe: Boolean(profile.isMe) })} disabled={!!loading}>
+                        수정
+                      </button>
+                      <button className="button danger" onClick={() => handleDeletePersonProfile(profile.id)} disabled={!!loading}>
+                        {loading === `delete-person-profile-${profile.id}` ? "삭제 중..." : "삭제"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-          <div className="mini-card">
-            <strong>등록된 인물</strong>
-            <div className="grid" style={{ marginTop: 12 }}>
-              {personProfiles.length === 0 && <div className="muted">아직 등록된 인물이 없습니다.</div>}
-              {personProfiles.map((profile) => (
-                <div key={profile.id} className="mini-card">
-                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                    <strong>{profile.name}</strong>
-                    {profile.isMe && <span className="tag tag-primary">나</span>}
-                  </div>
-                  <div className="muted" style={{ marginTop: 8 }}>
-                    {[profile.roleLabel, profile.relationshipToMe].filter(Boolean).join(" · ") || "역할 정보 없음"}
-                  </div>
-                  {profile.aliases && <div className="muted" style={{ marginTop: 6 }}>별칭: {profile.aliases}</div>}
-                  {profile.notes && <div className="muted" style={{ marginTop: 6 }}>{profile.notes}</div>}
-                  <div className="row" style={{ marginTop: 10 }}>
-                    <button className="button ghost" onClick={() => setPersonProfileDraft({ id: profile.id, name: profile.name, roleLabel: profile.roleLabel ?? "", relationshipToMe: profile.relationshipToMe ?? "", aliases: profile.aliases ?? "", notes: profile.notes ?? "", isMe: Boolean(profile.isMe) })} disabled={!!loading}>
-                      수정
-                    </button>
-                    <button className="button danger" onClick={() => handleDeletePersonProfile(profile.id)} disabled={!!loading}>
-                      {loading === `delete-person-profile-${profile.id}` ? "삭제 중..." : "삭제"}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        )}
       </section>
 
       <section ref={autoFlowSectionRef} className="card panel-lg">
@@ -3359,6 +3652,368 @@ function pickExpressionIdForRecording(
                 <div key={`${item}-${index}`} className="flow-log-item">{item}</div>
               ))}
             </div>
+          </div>
+        )}
+      </section>
+
+      <section ref={learningProgressSectionRef} className="card panel-lg">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+          <div>
+            <h2 className="h2" style={{ marginBottom: 0 }}>패턴 / 단어 진도</h2>
+            <p className="muted" style={{ marginTop: 6 }}>
+              저장한 표현이 패턴과 단어 자산에 얼마나 쌓였는지, 그리고 실제로 얼마나 말할 수 있게 되었는지 보여줍니다.
+            </p>
+          </div>
+          <div className="row" style={{ gap: 8, alignItems: "center" }}>
+            <span className="tag tag-primary">
+              {learningAssetsProgress ? `전체 ${learningAssetsProgress.overall.overallProgress}%` : "불러오는 중"}
+            </span>
+            <button type="button" className="chip selected" onClick={() => setLearningProgressOpen((current) => !current)}>
+              {learningProgressOpen ? "접기" : "펼치기"}
+            </button>
+          </div>
+        </div>
+        {learningProgressOpen && learningAssetsProgress ? (
+          <>
+            <div className="grid" style={{ marginTop: 14, gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+              <div className="mini-card">
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <strong>패턴 자동화율</strong>
+                  <MetricHelpButton
+                    label="패턴 자동화율"
+                    description="현재 활성 표현과 연결된 패턴 중, 학습 상태가 AUTOMATED인 패턴의 비율입니다."
+                  />
+                </div>
+                <div className="kpi" style={{ marginTop: 8 }}>{learningAssetsProgress.overall.patternAutomationRate}%</div>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  자동화된 패턴 {learningAssetsProgress.overall.automatedPatternCount} / 활성 패턴 {learningAssetsProgress.overall.patternTemplateCount}
+                </div>
+              </div>
+              <div className="mini-card">
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <strong>패턴 수집률</strong>
+                  <MetricHelpButton
+                    label="패턴 수집률"
+                    description="현재 활성 표현이 패턴 템플릿과 얼마나 연결되어 있는지를 보여주는 비율입니다. 삭제된 표현은 수집율에 포함되지 않습니다."
+                  />
+                </div>
+                <div className="kpi" style={{ marginTop: 8 }}>{learningAssetsProgress.overall.patternCollectionRate}%</div>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  활성 표현 기준 {learningAssetsProgress.overall.collectedPatternCount} / {learningAssetsProgress.overall.patternTemplateCount}
+                </div>
+              </div>
+              <div className="mini-card">
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <strong>단어 사용 가능률</strong>
+                  <MetricHelpButton
+                    label="단어 사용 가능률"
+                    description="현재 활성 표현이 단어 자산과 얼마나 연결되어 있고, 그중 말하기에 사용할 수 있는 상태인지 보여줍니다."
+                  />
+                </div>
+                <div className="kpi" style={{ marginTop: 8 }}>{learningAssetsProgress.overall.vocabularyUsableRate}%</div>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  {learningAssetsProgress.overall.usableVocabularyCount} / {learningAssetsProgress.overall.vocabularyItemCount}
+                </div>
+              </div>
+              <div className="mini-card">
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <strong>1초 응답 통과율</strong>
+                  <MetricHelpButton
+                    label="1초 응답 통과율"
+                    description="최근 성공 기록 중, 1초 안에 반응한 성공 비율입니다. 말하기 자동화 속도를 보는 보조 지표입니다."
+                  />
+                </div>
+                <div className="kpi" style={{ marginTop: 8 }}>{learningAssetsProgress.overall.responseWithin1sRate}%</div>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  최근 성공 기록 기준
+                </div>
+              </div>
+            </div>
+            <div className="grid" style={{ marginTop: 14, gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+              {learningAssetsProgress.levels.map((level) => (
+                <div key={level.level} className="mini-card">
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                    <div className="row" style={{ alignItems: "center", gap: 8 }}>
+                      <strong>{level.level}</strong>
+                      <MetricHelpButton
+                        label={`${level.level} 진행률`}
+                        description={`${level.level} 레벨의 패턴 자동화와 단어 사용 가능률을 합쳐 계산한 진행률입니다.`}
+                      />
+                    </div>
+                    <span className="tag tag-muted">{level.progress}%</span>
+                  </div>
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    패턴 자동화 {level.patternAutomatedCount}/{level.patternTargetCount} · 단어 사용 가능 {level.vocabularyUsableCount}/{level.vocabularyTargetCount}
+                  </div>
+                  <div className="progress" style={{ marginTop: 10 }}><span style={{ width: `${level.progress}%` }} /></div>
+                </div>
+              ))}
+            </div>
+            <div className="mini-card" style={{ marginTop: 14 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <strong>가장 약한 유형</strong>
+                <MetricHelpButton
+                  label="가장 약한 유형"
+                  description="활성 표현 기준으로 아직 덜 모였거나 덜 연결된 패턴/단어 카테고리를 보여줍니다."
+                />
+              </div>
+              <div className="grid" style={{ marginTop: 12, gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                {learningAssetsProgress.weakestCategories.length === 0 && (
+                  <div className="muted">아직 약점 데이터가 충분하지 않습니다.</div>
+                )}
+                {learningAssetsProgress.weakestCategories.map((item) => (
+                  <div key={`${item.kind}-${item.code}`} className="mini-card">
+                    <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                      <strong>{item.nameKo}</strong>
+                      <span className="tag tag-muted">{item.kind === "pattern" ? "패턴" : "단어"}</span>
+                    </div>
+                    <div className="muted" style={{ marginTop: 6 }}>
+                      목표 {item.targetCount} · 확보 {item.collectedCount} · 자동화 {item.automatedCount}
+                    </div>
+                    <div className="progress" style={{ marginTop: 10 }}><span style={{ width: `${Math.max(0, 100 - Math.min(100, (item.gap / Math.max(1, item.targetCount)) * 100))}%` }} /></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        ) : !learningProgressOpen ? null : (
+          <div className="mini-card muted" style={{ marginTop: 14 }}>
+            패턴 / 단어 진도를 불러오는 중입니다.
+          </div>
+        )}
+      </section>
+
+      <section ref={learningAssetsSectionRef} className="card panel-lg">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+          <div>
+            <h2 className="h2" style={{ marginBottom: 0 }}>패턴 / 단어 DB 보기</h2>
+            <p className="muted" style={{ marginTop: 6 }}>
+              DB에 저장된 패턴과 단어를 직접 보고, 어떤 내 표현이 연결됐는지 확인할 수 있습니다.
+            </p>
+          </div>
+          <div className="row" style={{ gap: 8, alignItems: "center" }}>
+            <span className="tag tag-muted">
+              {learningAssetsCatalog
+                ? `${learningAssetsCatalog.patternCategories.length}개 패턴 카테고리 · ${learningAssetsCatalog.vocabularyCategories.length}개 단어 카테고리`
+                : "불러오는 중"}
+            </span>
+            <button
+              type="button"
+              className="chip selected"
+              onClick={() => setAssetSectionOpen((current) => !current)}
+            >
+              {assetSectionOpen ? "접기" : "펼치기"}
+            </button>
+          </div>
+        </div>
+        {assetSectionOpen && learningAssetsCatalog ? (
+          <>
+            <section ref={patternAssetsSectionRef} className="mini-card" style={{ marginTop: 14 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <strong>
+                  패턴 자산
+                  <span className="muted" style={{ marginLeft: 8 }}>
+                    {learningAssetsCatalog.patternCategories.reduce((sum, category) => sum + category.templates.length, 0)}개
+                  </span>
+                </strong>
+                <button
+                  type="button"
+                  className="chip selected"
+                  onClick={() => setPatternAssetOpen((current) => !current)}
+                >
+                  {patternAssetOpen ? "접기" : "펼치기"}
+                </button>
+              </div>
+              {patternAssetOpen && (
+                <div className="grid" style={{ marginTop: 12, gap: 12 }}>
+                  {learningAssetsCatalog.patternCategories.map((category) => (
+                    <details key={category.id} className="mini-card" open={category.level === "A1"}>
+                      <summary className="row" style={{ cursor: "pointer", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <strong>{category.level} {category.nameKo}</strong>
+                          <div className="muted" style={{ marginTop: 4 }}>
+                            {category.nameEn} · 목표 {category.targetCount}개 · {category.templates.length}개 템플릿 · 수집 {category.templates.filter((template) => template.collected).length}개 · 자동화 {category.templates.filter((template) => template.automated).length}개
+                          </div>
+                        </div>
+                        <span className="tag tag-primary">{category.code}</span>
+                      </summary>
+                      <div className="grid" style={{ marginTop: 12 }}>
+                        {category.templates.map((template) => (
+                          <div key={template.id} className="mini-card">
+                            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                              <strong>{template.templateText}</strong>
+                              <span className={`tag ${template.automated ? "tag-done" : template.collected ? "tag-primary" : "tag-muted"}`}>
+                                {template.automated ? "자동화" : template.collected ? "수집됨" : "미수집"}
+                              </span>
+                            </div>
+                            <div className="muted" style={{ marginTop: 8 }}>{template.meaningKo}</div>
+                            {template.usageNote && <div className="muted" style={{ marginTop: 6 }}>{template.usageNote}</div>}
+                            {template.exampleEn && (
+                              <div style={{ marginTop: 8 }}>
+                                <strong>예시</strong> {template.exampleEn}
+                                {template.exampleKo ? <span className="muted"> / {template.exampleKo}</span> : null}
+                              </div>
+                            )}
+                            <div className="muted" style={{ marginTop: 8 }}>
+                              내 표현 {template.expressions.length}개 · 성공 {template.progress?.successCount ?? 0} · 1초 통과 {template.progress?.responseWithin1sCount ?? 0}
+                            </div>
+                            <div className="grid" style={{ marginTop: 10 }}>
+                              {template.expressions.length === 0 ? (
+                                <div className="muted">아직 매핑된 내 표현이 없습니다.</div>
+                              ) : (
+                                template.expressions.map((expression) => (
+                                  <div key={expression.id} className="mini-card">
+                                    <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                                      <strong>{expression.englishBase}</strong>
+                                      <span className="tag tag-muted">{expression.koreanText}</span>
+                                    </div>
+                                    {expression.englishNatural !== expression.englishBase && (
+                                      <div className="muted" style={{ marginTop: 6 }}>
+                                        자연형: {expression.englishNatural}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section ref={vocabularyAssetsSectionRef} className="mini-card" style={{ marginTop: 14 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <strong>
+                  단어 자산
+                  <span className="muted" style={{ marginLeft: 8 }}>
+                    {learningAssetsCatalog.vocabularyCategories.reduce((sum, category) => sum + category.items.length, 0)}개
+                  </span>
+                </strong>
+                <button
+                  type="button"
+                  className="chip selected"
+                  onClick={() => setVocabularyAssetOpen((current) => !current)}
+                >
+                  {vocabularyAssetOpen ? "접기" : "펼치기"}
+                </button>
+              </div>
+              {vocabularyAssetOpen && (
+                <div className="grid" style={{ marginTop: 12, gap: 12 }}>
+                  {learningAssetsCatalog.vocabularyCategories.map((category) => (
+                    <details key={category.id} className="mini-card" open={category.code === "daily_life"}>
+                      <summary className="row" style={{ cursor: "pointer", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <strong>{category.nameKo}</strong>
+                          <div className="muted" style={{ marginTop: 4 }}>
+                            {category.nameEn} · {category.items.length}개 단어 · 수집 {category.items.filter((item) => item.collected).length}개 · 자동화 {category.items.filter((item) => item.automated).length}개
+                          </div>
+                        </div>
+                        <span className="tag tag-muted">{category.code}</span>
+                      </summary>
+                      <div className="grid" style={{ marginTop: 12 }}>
+                        {category.items.map((item) => (
+                          <div key={item.id} className="mini-card">
+                            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                              <strong>{item.lemma}</strong>
+                              <span className={`tag ${item.automated ? "tag-done" : item.collected ? "tag-primary" : "tag-muted"}`}>
+                                {item.automated ? "자동화" : item.collected ? "수집됨" : "미수집"}
+                              </span>
+                            </div>
+                            <div className="muted" style={{ marginTop: 8 }}>
+                              {item.meaningKo} · {item.partOfSpeech}{item.frequencyRank ? ` · 순위 ${item.frequencyRank}` : ""}
+                            </div>
+                            {item.exampleEn && (
+                              <div style={{ marginTop: 8 }}>
+                                <strong>예시</strong> {item.exampleEn}
+                                {item.exampleKo ? <span className="muted"> / {item.exampleKo}</span> : null}
+                              </div>
+                            )}
+                            <div className="muted" style={{ marginTop: 8 }}>
+                              내 표현 {item.expressions.length}개 · 성공 {item.progress?.successCount ?? 0} · 1초 통과 {item.progress?.responseWithin1sCount ?? 0}
+                            </div>
+                            <div className="grid" style={{ marginTop: 10 }}>
+                              {item.expressions.length === 0 ? (
+                                <div className="muted">아직 매핑된 내 표현이 없습니다.</div>
+                              ) : (
+                                item.expressions.map((expression) => (
+                                  <div key={expression.id} className="mini-card">
+                                    <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                                      <strong>{expression.englishBase}</strong>
+                                      <span className="tag tag-muted">{expression.koreanText}</span>
+                                    </div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <div className="mini-card" style={{ marginTop: 14 }}>
+              <strong>패턴 미매핑 내 표현</strong>
+              <div className="muted" style={{ marginTop: 8 }}>
+                패턴 템플릿과 아직 연결되지 않은 내 표현입니다.
+              </div>
+              <div className="grid" style={{ marginTop: 12 }}>
+                {learningAssetsCatalog.unmatchedPatternExpressions.length === 0 ? (
+                  <div className="muted">패턴 미매핑 표현이 없습니다.</div>
+                ) : (
+                  learningAssetsCatalog.unmatchedPatternExpressions.map((expression) => (
+                    <div key={expression.id} className="mini-card">
+                      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                        <strong>{expression.englishBase}</strong>
+                        <span className="tag tag-failed">미매핑</span>
+                      </div>
+                      <div className="muted" style={{ marginTop: 8 }}>{expression.koreanText}</div>
+                      {expression.englishNatural !== expression.englishBase && (
+                        <div className="muted" style={{ marginTop: 6 }}>
+                          자연형: {expression.englishNatural}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="mini-card" style={{ marginTop: 14 }}>
+              <strong>패턴 미매핑 내 표현이지만 단어는 잡힌 표현</strong>
+              <div className="muted" style={{ marginTop: 8 }}>
+                패턴은 아직 못 찾았지만, 단어는 일부 연결된 표현입니다.
+              </div>
+              <div className="grid" style={{ marginTop: 12 }}>
+                {learningAssetsCatalog.unmatchedPatternExpressions.filter(
+                  (expression) => !learningAssetsCatalog.unmatchedVocabularyExpressions.some((item) => item.id === expression.id),
+                ).length === 0 ? (
+                  <div className="muted">해당 표현이 없습니다.</div>
+                ) : (
+                  learningAssetsCatalog.unmatchedPatternExpressions
+                    .filter((expression) => !learningAssetsCatalog.unmatchedVocabularyExpressions.some((item) => item.id === expression.id))
+                    .map((expression) => (
+                      <div key={`partial-${expression.id}`} className="mini-card">
+                        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                          <strong>{expression.englishBase}</strong>
+                          <span className="tag tag-primary">단어만 매핑</span>
+                        </div>
+                        <div className="muted" style={{ marginTop: 8 }}>{expression.koreanText}</div>
+                      </div>
+                    ))
+                )}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="mini-card muted" style={{ marginTop: 14 }}>
+            DB 자산 목록을 불러오는 중입니다.
           </div>
         )}
       </section>
@@ -4126,6 +4781,8 @@ function pickExpressionIdForRecording(
                       className={`expression-item ${selectedExpressionId === expression.id ? "selected" : ""}`}
                       onClick={() => {
                         setSelectedExpressionId(expression.id);
+                        setPracticePromptReadyAtMs(Date.now());
+                        setPracticeResponseStartedAtMs(null);
                         setScore(null);
                         focusSelectedExpressionDetail();
                       }}
@@ -4305,6 +4962,7 @@ function pickExpressionIdForRecording(
               {practicePrompt?.tips && (
                 <div className="muted" style={{ marginTop: 8 }}>힌트: {practicePrompt.tips}</div>
               )}
+              <div className="muted" style={{ marginTop: 8 }}>답변은 문제 제시 후 3초 안에 시작해야 통과합니다.</div>
             </div>
             <div className="row">
               <button
@@ -4328,11 +4986,20 @@ function pickExpressionIdForRecording(
                   ref={answerRef}
                   className="textarea"
                   value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    if (nextValue.length === 0) {
+                      setPracticeResponseStartedAtMs(null);
+                    } else if (practiceResponseStartedAtMs === null) {
+                      setPracticeResponseStartedAtMs(Date.now());
+                    }
+                    setAnswer(nextValue);
+                  }}
+                  disabled={isPracticeQuestionPending}
                   placeholder="영어로 답변을 입력하세요"
                 />
                 <div className="row">
-                  <button className="button secondary" onClick={handleScore} disabled={!!loading || !selectedExpression}>
+                  <button className="button secondary" onClick={handleScore} disabled={!!loading || !selectedExpression || isPracticeQuestionPending}>
                     {loading === "score" ? "채점 중..." : "채점하기"}
                   </button>
                 </div>
@@ -4345,13 +5012,13 @@ function pickExpressionIdForRecording(
                     영어로 말한 뒤 녹음을 종료하면 STT로 인식해서 자동 채점합니다.
                   </div>
                   <div className="row" style={{ marginTop: 12 }}>
-                    <button className="button" onClick={handleStartVoicePractice} disabled={!!loading || isPracticeRecording}>
+                    <button className="button" onClick={handleStartVoicePractice} disabled={!!loading || isPracticeRecording || isPracticeQuestionPending}>
                       {isPracticeRecording ? "녹음 중..." : "녹음 시작"}
                     </button>
                     <button className="button ghost" onClick={handleStopVoicePractice} disabled={!isPracticeRecording}>
                       녹음 종료
                     </button>
-                    <button className="button secondary" onClick={() => void handleScoreVoice()} disabled={!!loading || isPracticeRecording || !voiceAnswerFile || !selectedExpression}>
+                    <button className="button secondary" onClick={() => void handleScoreVoice()} disabled={!!loading || isPracticeRecording || !voiceAnswerFile || !selectedExpression || isPracticeQuestionPending}>
                       {loading === "score-voice" ? "다시 채점 중..." : "다시 채점"}
                     </button>
                   </div>
@@ -4378,6 +5045,14 @@ function pickExpressionIdForRecording(
                 <div className="mini-card"><strong>점수</strong><div className="kpi" style={{ marginTop: 8 }}>{score.score}</div></div>
                 <div className="mini-card"><strong>피드백</strong><div style={{ marginTop: 8 }}>{score.feedback}</div></div>
                 <div className="mini-card"><strong>정답 기준</strong><div style={{ marginTop: 8 }}>{score.target}</div></div>
+                {typeof score.responseLatencyMs === "number" && (
+                  <div className="mini-card">
+                    <strong>응답 시작</strong>
+                    <div style={{ marginTop: 8 }}>
+                      {score.responseTimedOut ? "3초 초과" : "3초 이내"} · {formatRecordingSeconds(score.responseLatencyMs)}
+                    </div>
+                  </div>
+                )}
                 {typeof score.meaningScore === "number" && (
                   <div className="mini-card"><strong>의미 전달</strong><div className="kpi" style={{ marginTop: 8 }}>{score.meaningScore}</div></div>
                 )}
@@ -4426,9 +5101,35 @@ function pickExpressionIdForRecording(
           )}
           {expandedSections.reviews && (
           <div className="grid" style={{ marginTop: 14 }}>
+            <div className="mini-card">
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div>
+                  <strong>연속 복습</strong>
+                  <div className="muted" style={{ marginTop: 4 }}>
+                    음성으로 답변하면 채점 후 다음 복습 카드로 자동 이동합니다.
+                  </div>
+                </div>
+                <div className="row" style={{ gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    className={`chip ${reviewAutoAdvance ? "selected" : ""}`}
+                    onClick={() => setReviewAutoAdvance((current) => !current)}
+                  >
+                    {reviewAutoAdvance ? "켜짐" : "꺼짐"}
+                  </button>
+                  <button
+                    type="button"
+                    className={`chip ${reviewReadQuestion ? "selected" : ""}`}
+                    onClick={() => setReviewReadQuestion((current) => !current)}
+                  >
+                    한국어 문제 읽기 {reviewReadQuestion ? "켜짐" : "꺼짐"}
+                  </button>
+                </div>
+              </div>
+            </div>
             {reviews.length === 0 && <div className="mini-card muted">복습 항목이 없습니다.</div>}
             {visibleReviews.map((item, index) => (
-              <div key={item.id} className="mini-card">
+              <div key={item.id} className={`mini-card ${activeReviewExpressionId === item.id ? "section-highlight" : ""}`}>
                 <strong>복습 카드 {index + 1}</strong>
                 <div className="progress" style={{ marginTop: 12 }}><span style={{ width: `${item.mastery}%` }} /></div>
                 <div className="muted" style={{ marginTop: 8 }}>최근 숙련도 {item.mastery}%</div>
@@ -4446,21 +5147,21 @@ function pickExpressionIdForRecording(
                 <div className="row" style={{ marginTop: 12 }}>
                   <button
                     className="button secondary"
-                    onClick={() => handleStartReviewPractice(item, item.recommendedTestType ?? "translation")}
+                    onClick={() => handleStartReviewPractice(item, item.recommendedTestType ?? "translation", { autoAdvance: reviewAutoAdvance })}
                     disabled={!!loading}
                   >
                     {item.recommendedTestType === "situation" ? "추천 방식으로 풀기" : "번역형으로 풀기"}
                   </button>
                   <button
                     className="button ghost"
-                    onClick={() => handleStartReviewPractice(item, "translation")}
+                    onClick={() => handleStartReviewPractice(item, "translation", { autoAdvance: reviewAutoAdvance })}
                     disabled={!!loading}
                   >
                     번역형
                   </button>
                   <button
                     className="button ghost"
-                    onClick={() => handleStartReviewPractice(item, "situation")}
+                    onClick={() => handleStartReviewPractice(item, "situation", { autoAdvance: reviewAutoAdvance })}
                     disabled={!!loading}
                   >
                     상황형

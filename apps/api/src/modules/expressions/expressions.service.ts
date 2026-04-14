@@ -3,6 +3,7 @@ import { GenerateRecordingExpressionsDto } from './dto/generate-recording-expres
 import { OpenAiService } from '../openai/openai.service';
 import { PrismaService } from '../db/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { LearningAssetsService } from '../learning-assets/learning-assets.service';
 
 type ExpressionContextTurn = {
   utteranceId?: string;
@@ -92,6 +93,7 @@ export class ExpressionsService {
     private readonly prisma: PrismaService,
     private readonly openai: OpenAiService,
     private readonly storage: StorageService,
+    private readonly learningAssetsService: LearningAssetsService,
   ) {}
 
   private async generateExpressionTtsAssets(expression: {
@@ -283,6 +285,8 @@ export class ExpressionsService {
       },
     } as any);
 
+    await this.learningAssetsService.syncExpressionAssets(userId, expression.id);
+
     return expression;
   }
 
@@ -369,6 +373,7 @@ export class ExpressionsService {
           note: generated.note,
         },
       });
+      await this.learningAssetsService.syncExpressionAssets(userId, expression.id);
       expressions.push(expression);
     }
 

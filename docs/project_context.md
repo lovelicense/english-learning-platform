@@ -235,6 +235,281 @@ git push origin main
 - 모바일 앱까지 고려한 장시간 녹음/업로드 구조 정리
 
 
+# 제품 방향 재정의
+이 프로젝트는 단순히 영어 문장을 생성하는 앱이 아니라,
+"내가 실제로 자주 하는 한국어를 기반으로 영어 말하기 패턴과 단어를 자산화하고, 반복 훈련과 진도 관리로 말하기 자동화를 만드는 시스템"을 목표로 함
+
+핵심 목표:
+- 사용자가 실제로 하는 한국어 문장을 수집
+- 영어 표현으로 변환
+- 한국어/영어 TTS와 복습으로 반복 훈련
+- 한국어를 보고 1초 안에 영어로 반응할 수 있는 상태를 목표로 함
+- 결과적으로 CEFR A1~A2 수준의 기본 일상 상호작용 출발선을 만드는 방향
+
+중요한 기준:
+- CEFR는 "무엇을 할 수 있는가"를 설명하는 기능 기준이며, 패턴 수나 단어 수를 공식 고정하지 않음
+- 따라서 서비스에서는 "CEFR A1~A2 기능 기준을 참고한 앱 내부 목표 자산"을 정의해서 사용
+- 사용자에게는 국제 기준을 참고한 목표 구조와, 현재 나의 위치/진도율을 함께 보여주는 방향
+
+
+# 영어 문장 패턴 자산화 설계
+핵심 개념:
+- 문장 모음보다 "재사용 가능한 패턴 템플릿"이 중요
+- 저장 개수보다 "유형별 커버리지"가 중요
+- 공부했다보다 "자동화됐다"를 보여주는 것이 중요
+
+
+# 2026-04-14 작업 메모
+
+## 최근 결정한 방향
+- 영어 학습 목표를 `내가 실제로 하는 한국어를 영어 말하기 패턴과 단어 자산으로 바꾸는 시스템`으로 재정의
+- CEFR A1~A2는 `공식 숫자`가 아니라 `기능 기준`으로 참고하고, 패턴/단어 목표치는 앱 내부 자산으로 운영
+- 패턴은 `문장 예시`가 아니라 `재사용 가능한 템플릿`으로 관리
+- 단어도 별도 자산 DB로 관리하고, 표현/패턴과 연결해서 현재 보유량과 학습 가능량을 보여주는 방식으로 운영
+- 패턴/단어 진도는 `수집률`, `자동화율`, `1초 응답 통과율` 같은 KPI로 시각화
+- 수집률은 `활성 표현 기준`으로 계산
+- 자동화율은 학습 이력 기준으로 유지
+- 표현을 삭제해도 이미 쌓인 패턴/단어 학습 이력은 유지
+
+## 현재 구현된 자산 구조
+- `PatternCategory`, `PatternTemplate`, `ExpressionPatternMatch`, `UserPatternProgress`
+- `VocabularyCategory`, `VocabularyItem`, `VocabularyVariant`, `ExpressionVocabularyMatch`, `UserVocabularyProgress`
+- 대시보드에서 패턴/단어 자산을 조회하고, 각 항목별로 매핑된 내 표현도 함께 확인 가능
+- 패턴/단어 자산 화면은 기본 접힘 상태로 두고, 필요할 때만 펼쳐서 보는 UI로 운영
+- 패턴/단어 자산과 진도 카드에는 전체 건수, 카테고리별 건수, 수집 수, 자동화 수를 함께 표시
+
+## 말하기 테스트 / 복습 흐름
+- 말하기 테스트 기본 모드는 `음성 답변`
+- `오늘의 복습`은 카드 하나씩 수동 진행이 아니라 연속 진행이 가능하도록 개선
+- 복습에는 `한국어 문제 읽기` 옵션을 추가
+- 복습 질문은 브라우저 TTS로 읽고, 읽기 종료 후 답변을 시작하는 흐름으로 운영
+- 답변 속도는 `종료 시간`이 아니라 `답변 시작 시점` 기준으로 판정
+- 텍스트 답변은 `첫 타이핑 시작 시간` 기준
+- 음성 답변은 `녹음 시작 시간` 기준
+- 3초 안에 답변 시작을 못 하면 오답으로 간주
+
+## 최근 UI 정리
+- PC와 모바일 네비게이션에 `개인 인물 사전`, `패턴 / 단어 진도`, `패턴 / 단어 DB 보기`, `패턴 자산`, `단어 자산`을 포함
+- `패턴 / 단어 DB 보기`, `패턴 / 단어 진도`, `개인 인물 사전`은 기본 접기 상태
+- 패턴 자산과 단어 자산은 각각 별도 접기/펼치기 가능
+- 통계 영역에는 `?` 도움말 아이콘을 붙여 각 KPI의 계산 기준을 설명
+
+## 앞으로 이어갈 작업
+- 패턴/단어 자산 시드 확장
+- 패턴/단어 자동 매칭 규칙 고도화
+- 대시보드 KPI 계산식과 문구 정제
+- 복습 자동 진행을 더 안정적으로 다듬기
+- 패턴/단어 export 구조 설계
+
+패턴 관리 방향:
+- A1/A2 + 유형별 패턴 목표 DB를 미리 정의
+- 사용자가 영어 표현을 생성하거나 TTS를 만들면, 그 표현이 어떤 패턴 유형인지 분류
+- 사용자가 현재까지 어떤 패턴을 얼마나 수집했고, 얼마나 자동화했는지 보여줌
+
+예시:
+- A1 요청: `Could you ~?`, `Can you ~?`, `Could you please ~?`
+- A1 되묻기: `Could you say that again?`, `What do you mean?`, `Do you mean ~?`
+- A1 감정표현: `I'm tired.`, `I'm worried about ~.`
+- A2 의견 말하기: `I think ~.`, `In my opinion, ~.`
+- A2 이유 설명: `The reason is ~.`, `It's because ~.`
+- A2 제안/조율: `Why don't we ~?`, `Does ~ work for you?`
+
+권장 카테고리:
+- A1: 요청, 허가/가능 여부, 되묻기/이해 확인, 동의/비동의, 거절/보류, 감정/상태 표현, 감사/사과, 위치/가격/기본 정보 묻기
+- A2: 의견 말하기, 이유 설명, 제안, 일정 조율, 비교/선호, 문제 설명, 계획/의도, 부드러운 반대/조정
+
+권장 구조:
+- `pattern_category`
+- `pattern_template`
+- `expression_pattern_match`
+- `user_pattern_progress`
+
+세부 모델 개념:
+- `pattern_category`
+  - level (`A1`, `A2`)
+  - code (`request`, `clarification`, `opinion`)
+  - name_ko / name_en
+  - target_count
+- `pattern_template`
+  - template_text (`Could you ~?`)
+  - meaning_ko
+  - usage_note
+  - example_en / example_ko
+- `expression_pattern_match`
+  - expression_id
+  - pattern_template_id
+  - confidence
+  - matched_by (`rule`, `llm`, `manual`)
+- `user_pattern_progress`
+  - user_id
+  - pattern_template_id
+  - status (`collected`, `recognized`, `practicing`, `usable_in_speaking`, `automated`)
+
+
+# 영어 단어 자산화 설계
+핵심 개념:
+- 패턴은 말하기의 틀이고, 단어는 그 틀 안에 들어가는 실제 재료
+- 단어도 단순히 "본 적 있음"이 아니라 "말하기에 사용할 수 있음"까지 관리해야 함
+
+단어 관리 방향:
+- A1 핵심 단어, A2 확장 단어 목표 DB를 별도로 정의
+- 각 단어는 수준, 품사, 뜻, 예문, 카테고리 정보를 가짐
+- 사용자의 영어 표현 안에 포함된 단어를 추출해서 수집 현황을 누적
+- 이후 테스트 결과를 통해 "인식", "말하기 사용 가능", "자동화"를 구분
+
+권장 목표 예시:
+- A1 핵심 단어 500
+- A2 확장 단어 800
+
+권장 구조:
+- `vocabulary_category`
+- `vocabulary_item`
+- `vocabulary_variant`
+- `expression_vocabulary_match`
+- `user_vocabulary_progress`
+- `vocabulary_goal`
+
+세부 모델 개념:
+- `vocabulary_item`
+  - level (`A1`, `A2`)
+  - lemma
+  - part_of_speech
+  - meaning_ko
+  - example_en / example_ko
+  - frequency_rank
+  - is_core
+- `expression_vocabulary_match`
+  - expression_id
+  - vocabulary_item_id
+  - confidence
+  - matched_by (`rule`, `llm`, `manual`)
+- `user_vocabulary_progress`
+  - user_id
+  - vocabulary_item_id
+  - status (`collected`, `recognized`, `practicing`, `usable_in_speaking`, `automated`)
+  - success_count / fail_count
+  - response_within_1s_count
+
+단어 자산 구축 원칙:
+- 외부 자료(English Vocabulary Profile, Oxford 3000, NGSL 등)를 참고하되 그대로 복제하지 않고 앱 목표에 맞게 선별
+- 고빈도, 생활 회화 적합성, 패턴과의 결합 가능성을 우선
+- 처음부터 전체를 완벽하게 만들기보다 A1 핵심어부터 시드 데이터를 쌓고 확장
+
+
+# 진도 관리 설계
+핵심 원칙:
+- 단순 문장 수가 아니라 "패턴"과 "단어" 두 축으로 진도를 관리
+- 사용자는 목표가 몇 개인지, 현재 몇 개를 수집했고, 그중 몇 개를 실제로 말할 수 있는지 보게 함
+
+추천 KPI:
+- 패턴 수집률
+- 패턴 자동화율
+- 단어 수집률
+- 단어 말하기 사용 가능률
+- 1초 응답 통과율
+- A1 진행률 / A2 진행률
+
+정의:
+- 패턴 수집률
+  - 목표 패턴 중 사용자가 실제 표현을 통해 확보한 패턴의 비율
+- 패턴 자동화율
+  - 목표 패턴 중 사용자가 한국어를 보고 거의 바로 영어로 꺼낼 수 있게 된 패턴의 비율
+- 단어 수집률
+  - 목표 단어 중 사용자의 표현/학습 기록에 연결된 단어의 비율
+- 단어 말하기 사용 가능률
+  - 목표 단어 중 실제 말하기 테스트에서 사용 가능한 상태로 확인된 단어의 비율
+
+예시:
+- A1 요청 수집 `12 / 20`
+- A1 요청 자동화 `7 / 20`
+- A2 의견 말하기 수집 `5 / 25`
+- A1 단어 수집 `143 / 500`
+- A1 단어 말하기 사용 가능 `61 / 500`
+- 1초 응답 통과율 `64%`
+
+패턴/단어 상태 단계:
+- `collected`
+- `recognized`
+- `practicing`
+- `usable_in_speaking`
+- `automated`
+
+`automated` 의미:
+- 한국어 prompt를 보고 1초 안에 영어로 말 시작 가능
+- 핵심 의미 전달 성공
+- 최근 반복 테스트에서 안정적으로 통과
+- 단순 1회 정답이 아니라, 어느 정도 반복된 자동 반응 상태
+
+초기 MVP에서는 너무 복잡하게 가지 않고, 아래 정도로 시작 가능:
+- `collected`
+- `practicing`
+- `usable_in_speaking`
+- `automated`
+
+
+# 대시보드 방향
+사용자에게 보여줄 핵심은 "현재 위치"와 "목표 대비 진도율"임
+
+권장 대시보드 카드:
+- `30일 목표`
+- `A1 진행률`
+- `A2 진행률`
+- `패턴 수집률`
+- `패턴 자동화율`
+- `단어 수집률`
+- `말하기 사용 가능 단어 수`
+- `1초 응답 통과율`
+- `가장 부족한 유형 Top 3`
+
+예시 문구:
+- `30일 목표: 생활 회화 패턴 60개 자동화`
+- `A1 진행률 38%`
+- `A2 진행률 12%`
+- `사용 가능 단어 62개`
+- `부족한 유형: 거절 / 되묻기 / 의견 말하기`
+
+
+# 자동 분류 및 데이터 흐름
+목표 흐름:
+1. 사용자가 한국어 문장을 저장
+2. 영어 표현 생성
+3. 영어/한국어 TTS 생성
+4. 영어 표현을 패턴 템플릿과 매핑
+5. 영어 표현에 포함된 핵심 단어 추출
+6. 패턴/단어 수집률 갱신
+7. 복습/테스트를 통해 `usable_in_speaking`, `automated` 상태 갱신
+8. 대시보드에서 A1/A2별 현황과 진도율 표시
+
+분류 방식:
+- 초기에는 규칙 기반 + 수동 보정 가능 구조
+- 이후 LLM 기반 분류를 추가해서 정확도 향상
+- 최종적으로는 `rule + llm + manual` 혼합 구조를 목표
+
+
+# 단계별 구현 우선순위
+1단계:
+- `pattern_category`, `pattern_template` 모델 설계
+- A1/A2 패턴 시드 데이터 1차 구축
+- 표현 생성 시 패턴 분류/매핑 구조 추가
+- 대시보드에 패턴 수집률 표시
+
+2단계:
+- `vocabulary_item`, `user_vocabulary_progress` 모델 설계
+- A1 핵심 단어 시드 데이터 구축
+- 표현-단어 매칭 구조 추가
+- 대시보드에 단어 수집률 표시
+
+3단계:
+- 패턴/단어 복습 결과와 테스트 결과를 progress 상태에 반영
+- `usable_in_speaking`, `automated` 판정 기준 도입
+- 1초 응답 통과율 집계
+
+4단계:
+- 약점 기반 복습 추천 강화
+- A1/A2 유형별 부족 영역 분석
+- 패턴형 문제 출제 및 진도 연동
+
+
 
 
 

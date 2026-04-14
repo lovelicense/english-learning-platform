@@ -4,6 +4,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { DbModule } from './modules/db/db.module';
 import { ExpressionsModule } from './modules/expressions/expressions.module';
 import { HealthModule } from './modules/health/health.module';
+import { LearningAssetsModule } from './modules/learning-assets/learning-assets.module';
 import { OpenAiModule } from './modules/openai/openai.module';
 import { PersonProfilesModule } from './modules/person-profiles/person-profiles.module';
 import { PracticeModule } from './modules/practice/practice.module';
@@ -26,6 +27,7 @@ import { UsersModule } from './modules/users/users.module';
     RecordingSessionsModule,
     RecordingsModule,
     ExpressionsModule,
+    LearningAssetsModule,
     PracticeModule,
     ReviewsModule,
   ],

@@ -16,7 +16,16 @@ export class PracticeController {
 
   @Post('score')
   score(@CurrentUser('userId') userId: string, @Body() dto: ScorePracticeDto) {
-    return this.practiceService.score(userId, dto.expressionId, dto.answer, dto.testType, dto.promptKorean, dto.promptContext);
+    return this.practiceService.score(
+      userId,
+      dto.expressionId,
+      dto.answer,
+      dto.testType,
+      dto.promptKorean,
+      dto.promptContext,
+      dto.promptReadyAtMs,
+      dto.responseStartedAtMs,
+    );
   }
 
   @Post('voice/presign')
@@ -34,6 +43,8 @@ export class PracticeController {
       dto.testType,
       dto.promptKorean,
       dto.promptContext,
+      dto.promptReadyAtMs,
+      dto.responseStartedAtMs,
     );
   }
 }

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../db/prisma.service';
+import { LearningAssetsService } from '../learning-assets/learning-assets.service';
 import { OpenAiService } from '../openai/openai.service';
 import { StorageService } from '../storage/storage.service';
 
@@ -47,12 +48,20 @@ function buildParticipantContext(
     .join('\n\n');
 }
 
+const RESPONSE_START_LIMIT_MS = 3000;
+
+function formatResponseStartLatency(latencyMs: number) {
+  const seconds = latencyMs / 1000;
+  return `${seconds.toFixed(seconds < 10 ? 1 : 0)}초`;
+}
+
 @Injectable()
 export class PracticeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly openai: OpenAiService,
     private readonly storage: StorageService,
+    private readonly learningAssetsService: LearningAssetsService,
   ) {}
 
   async createVoicePresignedUpload(fileName: string, contentType?: string) {
@@ -80,6 +89,8 @@ export class PracticeService {
     testType: 'translation' | 'situation' | 'pattern' = 'translation',
     promptKorean?: string,
     promptContext?: string,
+    promptReadyAtMs?: number,
+    responseStartedAtMs?: number,
   ) {
     const expression = await this.prisma.expression.findFirst({
       where: { id: expressionId, userId },
@@ -109,6 +120,12 @@ export class PracticeService {
     } as any) as any;
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
 
+    const responseLatencyMs =
+      typeof promptReadyAtMs === 'number' && typeof responseStartedAtMs === 'number'
+        ? Math.max(0, responseStartedAtMs - promptReadyAtMs)
+        : null;
+    const isResponseTimedOut = responseLatencyMs !== null && responseLatencyMs > RESPONSE_START_LIMIT_MS;
+
     const evaluation = await this.openai.evaluatePracticeAnswer({
       koreanPrompt: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
@@ -127,6 +144,13 @@ export class PracticeService {
       easyAnswer: expression.englishEasy,
       naturalAnswer: expression.englishNatural,
     });
+    const effectiveScore = isResponseTimedOut ? 0 : evaluation.score;
+    const effectiveMeaningScore = isResponseTimedOut ? 0 : evaluation.meaningScore;
+    const effectiveNaturalnessScore = isResponseTimedOut ? 0 : evaluation.naturalnessScore;
+    const effectiveGrammarScore = isResponseTimedOut ? 0 : evaluation.grammarScore;
+    const feedback = isResponseTimedOut
+      ? `답변 시작이 ${formatResponseStartLatency(responseLatencyMs ?? RESPONSE_START_LIMIT_MS)}로 3초 제한을 초과해 오답 처리했습니다.`
+      : evaluation.feedback;
 
     const log = await this.createPracticeLogWithFallback({
       userId,
@@ -138,30 +162,35 @@ export class PracticeService {
       promptKorean: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
       recognizedAnswer: answer.trim(),
-      score: evaluation.score,
-      meaningScore: evaluation.meaningScore,
-      naturalnessScore: evaluation.naturalnessScore,
-      grammarScore: evaluation.grammarScore,
-      feedback: evaluation.feedback,
+      score: effectiveScore,
+      meaningScore: effectiveMeaningScore,
+      naturalnessScore: effectiveNaturalnessScore,
+      grammarScore: effectiveGrammarScore,
+      feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
       suggestedAnswer: evaluation.suggestedAnswer,
       suggestedAnswerAlt: evaluation.suggestedAnswerAlt,
     });
 
+    await this.learningAssetsService.promoteProgressFromPractice(userId, expressionId, effectiveScore);
+
     return {
       id: log.id,
-      score: evaluation.score,
-      meaningScore: evaluation.meaningScore,
-      naturalnessScore: evaluation.naturalnessScore,
-      grammarScore: evaluation.grammarScore,
-      feedback: evaluation.feedback,
+      score: effectiveScore,
+      meaningScore: effectiveMeaningScore,
+      naturalnessScore: effectiveNaturalnessScore,
+      grammarScore: effectiveGrammarScore,
+      feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
       suggestedAnswer: evaluation.suggestedAnswer,
       suggestedAnswerAlt: evaluation.suggestedAnswerAlt,
       target: expression.englishBase,
       answer,
+      responseLatencyMs,
+      responseTimedOut: isResponseTimedOut,
+      responseLimitMs: RESPONSE_START_LIMIT_MS,
     };
   }
 
@@ -173,6 +202,8 @@ export class PracticeService {
     testType: 'translation' | 'situation' | 'pattern' = 'translation',
     promptKorean?: string,
     promptContext?: string,
+    promptReadyAtMs?: number,
+    responseStartedAtMs?: number,
   ) {
     const expression = await this.prisma.expression.findFirst({
       where: { id: expressionId, userId },
@@ -212,6 +243,12 @@ export class PracticeService {
       throw new NotFoundException('음성에서 영어 답변을 인식하지 못했습니다.');
     }
 
+    const responseLatencyMs =
+      typeof promptReadyAtMs === 'number' && typeof responseStartedAtMs === 'number'
+        ? Math.max(0, responseStartedAtMs - promptReadyAtMs)
+        : null;
+    const isResponseTimedOut = responseLatencyMs !== null && responseLatencyMs > RESPONSE_START_LIMIT_MS;
+
     const evaluation = await this.openai.evaluatePracticeAnswer({
       koreanPrompt: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
@@ -230,6 +267,13 @@ export class PracticeService {
       easyAnswer: expression.englishEasy,
       naturalAnswer: expression.englishNatural,
     });
+    const effectiveScore = isResponseTimedOut ? 0 : evaluation.score;
+    const effectiveMeaningScore = isResponseTimedOut ? 0 : evaluation.meaningScore;
+    const effectiveNaturalnessScore = isResponseTimedOut ? 0 : evaluation.naturalnessScore;
+    const effectiveGrammarScore = isResponseTimedOut ? 0 : evaluation.grammarScore;
+    const feedback = isResponseTimedOut
+      ? `답변 시작이 ${formatResponseStartLatency(responseLatencyMs ?? RESPONSE_START_LIMIT_MS)}로 3초 제한을 초과해 오답 처리했습니다.`
+      : evaluation.feedback;
 
     const log = await this.createPracticeLogWithFallback({
       userId,
@@ -242,24 +286,26 @@ export class PracticeService {
       promptKorean: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
       recognizedAnswer: answer,
-      score: evaluation.score,
-      meaningScore: evaluation.meaningScore,
-      naturalnessScore: evaluation.naturalnessScore,
-      grammarScore: evaluation.grammarScore,
-      feedback: evaluation.feedback,
+      score: effectiveScore,
+      meaningScore: effectiveMeaningScore,
+      naturalnessScore: effectiveNaturalnessScore,
+      grammarScore: effectiveGrammarScore,
+      feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
       suggestedAnswer: evaluation.suggestedAnswer,
       suggestedAnswerAlt: evaluation.suggestedAnswerAlt,
     });
 
+    await this.learningAssetsService.promoteProgressFromPractice(userId, expressionId, effectiveScore);
+
     return {
       id: log.id,
-      score: evaluation.score,
-      meaningScore: evaluation.meaningScore,
-      naturalnessScore: evaluation.naturalnessScore,
-      grammarScore: evaluation.grammarScore,
-      feedback: evaluation.feedback,
+      score: effectiveScore,
+      meaningScore: effectiveMeaningScore,
+      naturalnessScore: effectiveNaturalnessScore,
+      grammarScore: effectiveGrammarScore,
+      feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
       suggestedAnswer: evaluation.suggestedAnswer,
@@ -267,6 +313,9 @@ export class PracticeService {
       target: expression.englishBase,
       answer,
       audioUrl: await this.storage.createPresignedDownload(audioKey),
+      responseLatencyMs,
+      responseTimedOut: isResponseTimedOut,
+      responseLimitMs: RESPONSE_START_LIMIT_MS,
     };
   }
 

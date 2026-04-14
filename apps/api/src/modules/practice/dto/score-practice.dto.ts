@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
 
 export class GeneratePracticePromptDto {
   @IsString()
@@ -30,6 +30,16 @@ export class ScorePracticeDto {
   @IsOptional()
   @IsString()
   promptContext?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  promptReadyAtMs?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  responseStartedAtMs?: number;
 }
 
 export class CreatePracticePresignDto {
@@ -66,4 +76,14 @@ export class ScoreVoicePracticeDto {
   @IsOptional()
   @IsString()
   promptContext?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  promptReadyAtMs?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  responseStartedAtMs?: number;
 }
