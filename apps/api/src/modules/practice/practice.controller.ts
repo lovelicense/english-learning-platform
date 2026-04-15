@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreatePracticePresignDto, GeneratePracticePromptDto, ScorePracticeDto, ScoreVoicePracticeDto } from './dto/score-practice.dto';
@@ -8,6 +8,15 @@ import { PracticeService } from './practice.service';
 @Controller('practice')
 export class PracticeController {
   constructor(private readonly practiceService: PracticeService) {}
+
+  @Get('logs')
+  listLogs(@CurrentUser('userId') userId: string, @Query('limit') limit?: string) {
+    const parsedLimit = Number(limit);
+    return this.practiceService.listLogs(
+      userId,
+      Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : undefined,
+    );
+  }
 
   @Post('prompts')
   generatePrompt(@CurrentUser('userId') userId: string, @Body() dto: GeneratePracticePromptDto) {

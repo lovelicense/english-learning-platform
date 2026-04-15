@@ -2,6 +2,24 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../db/prisma.service';
 import { StorageService } from '../storage/storage.service';
 
+type ReviewStrategy = 'system' | 'low_score' | 'stale' | 'voice_gap' | 'random';
+
+function normalizeReviewStrategy(value?: string): ReviewStrategy {
+  if (value === 'low_score' || value === 'stale' || value === 'voice_gap' || value === 'random') {
+    return value;
+  }
+  return 'system';
+}
+
+function shuffleArray<T>(items: T[]) {
+  const next = [...items];
+  for (let i = next.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [next[i], next[j]] = [next[j], next[i]];
+  }
+  return next;
+}
+
 @Injectable()
 export class ReviewsService {
   constructor(
@@ -9,11 +27,11 @@ export class ReviewsService {
     private readonly storage: StorageService,
   ) {}
 
-  async getToday(userId: string) {
+  async getToday(userId: string, strategyInput?: string) {
+    const strategy = normalizeReviewStrategy(strategyInput);
     const expressions = await this.prisma.expression.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
-      take: 10,
     });
 
     const expressionIds = expressions.map((expression) => expression.id);
@@ -45,8 +63,7 @@ export class ReviewsService {
       logsByExpressionId.set(log.expressionId, current);
     }
 
-    return Promise.all(
-      expressions.map(async (e) => {
+    const ranked = expressions.map((e) => {
         const latestLog = latestLogByExpressionId.get(e.id) ?? null;
         const recentLogs = (logsByExpressionId.get(e.id) ?? []).slice(0, 3);
         const mastery = latestLog?.score ?? 0;
@@ -77,6 +94,8 @@ export class ReviewsService {
           reviewReason = '기본 의미는 잡히고 있지만 아직 말하기 기록이 적어서, 먼저 번역형으로 안정화한 뒤 음성 연습으로 넘어가면 좋습니다.';
         }
 
+        const voiceAttempts = recentLogs.filter((log) => Boolean(log.audioKey)).length;
+
         return {
           id: e.id,
           korean: e.koreanText,
@@ -87,11 +106,59 @@ export class ReviewsService {
           reviewReason,
           lastReviewedAt: latestLog?.createdAt?.toISOString?.() ?? null,
           practiceAnswer: latestLog?.answer ?? null,
-          practiceAudioUrl: latestLog?.audioKey
-            ? await this.storage.createPresignedDownload(latestLog.audioKey)
-            : null,
+          latestAudioKey: latestLog?.audioKey ?? null,
+          createdAt: e.createdAt,
+          voiceAttempts,
+          reviewCount: recentLogs.length,
         };
-      }),
+      });
+
+    let selected = ranked;
+    if (strategy === 'system') {
+      selected = ranked.slice(0, 10);
+    } else if (strategy === 'low_score') {
+      selected = [...ranked]
+        .sort((a, b) => {
+          if (a.mastery !== b.mastery) return a.mastery - b.mastery;
+          return b.createdAt.getTime() - a.createdAt.getTime();
+        })
+        .slice(0, 10);
+    } else if (strategy === 'stale') {
+      selected = [...ranked]
+        .sort((a, b) => {
+          const aTime = a.lastReviewedAt ? new Date(a.lastReviewedAt).getTime() : 0;
+          const bTime = b.lastReviewedAt ? new Date(b.lastReviewedAt).getTime() : 0;
+          if (aTime !== bTime) return aTime - bTime;
+          return b.createdAt.getTime() - a.createdAt.getTime();
+        })
+        .slice(0, 10);
+    } else if (strategy === 'voice_gap') {
+      selected = [...ranked]
+        .sort((a, b) => {
+          if (a.voiceAttempts !== b.voiceAttempts) return a.voiceAttempts - b.voiceAttempts;
+          if (a.mastery !== b.mastery) return a.mastery - b.mastery;
+          return b.createdAt.getTime() - a.createdAt.getTime();
+        })
+        .slice(0, 10);
+    } else if (strategy === 'random') {
+      selected = shuffleArray(ranked).slice(0, 10);
+    }
+
+    return Promise.all(
+      selected.map(async (item) => ({
+        id: item.id,
+        korean: item.korean,
+        english: item.english,
+        mastery: item.mastery,
+        ttsKey: item.ttsKey,
+        recommendedTestType: item.recommendedTestType,
+        reviewReason: item.reviewReason,
+        lastReviewedAt: item.lastReviewedAt,
+        practiceAnswer: item.practiceAnswer,
+        practiceAudioUrl: item.latestAudioKey
+          ? await this.storage.createPresignedDownload(item.latestAudioKey)
+          : null,
+      })),
     );
   }
 }

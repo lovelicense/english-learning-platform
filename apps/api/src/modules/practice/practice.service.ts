@@ -68,6 +68,49 @@ export class PracticeService {
     return this.storage.createPracticePresignedUpload(fileName, contentType);
   }
 
+  async listLogs(userId: string, limit = 20) {
+    const logs = await this.prisma.practiceLog.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(limit, 50),
+      include: {
+        expression: {
+          select: {
+            koreanText: true,
+            englishBase: true,
+          },
+        },
+      },
+    });
+
+    return Promise.all(
+      logs.map(async (log) => ({
+        id: log.id,
+        expressionId: log.expressionId,
+        koreanText: log.expression.koreanText,
+        englishBase: log.expression.englishBase,
+        answer: log.answer,
+        recognizedAnswer: log.recognizedAnswer,
+        target: log.target,
+        mode: log.mode,
+        testType: log.testType,
+        promptKorean: log.promptKorean,
+        promptContext: log.promptContext,
+        score: log.score,
+        meaningScore: log.meaningScore,
+        naturalnessScore: log.naturalnessScore,
+        grammarScore: log.grammarScore,
+        feedback: log.feedback,
+        strengthComment: log.strengthComment,
+        correctionComment: log.correctionComment,
+        suggestedAnswer: log.suggestedAnswer,
+        suggestedAnswerAlt: log.suggestedAnswerAlt,
+        createdAt: log.createdAt.toISOString(),
+        audioUrl: log.audioKey ? await this.storage.createPresignedDownload(log.audioKey) : null,
+      })),
+    );
+  }
+
   async generatePrompt(userId: string, expressionId: string, testType: 'translation' | 'situation' | 'pattern') {
     const expression = await this.prisma.expression.findFirst({ where: { id: expressionId, userId } });
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');

@@ -1,5 +1,5 @@
 output "alb_dns_name" {
-  value       = aws_lb.main.dns_name
+  value       = var.runtime_enabled ? aws_lb.main[0].dns_name : null
   description = "공용 ALB DNS"
 }
 

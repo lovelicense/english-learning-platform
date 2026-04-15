@@ -5,6 +5,7 @@ AWS_REGION="${AWS_REGION:-ap-northeast-2}"
 PROJECT_NAME="${PROJECT_NAME:-english-learning}"
 ENVIRONMENT="${ENVIRONMENT:-prod}"
 IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d%H%M%S)}"
+DB_IDENTIFIER="${DB_IDENTIFIER:-${PROJECT_NAME}-${ENVIRONMENT}-postgres}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TF_DIR="${ROOT_DIR}/infrastructure/terraform"
@@ -29,6 +30,7 @@ terraform apply -auto-approve \
   -target=aws_ecr_repository.web \
   -target=aws_ecr_repository.api \
   -target=aws_ecr_repository.worker \
+  -var="runtime_enabled=true" \
   -var="web_image=${WEB_IMAGE}" \
   -var="api_image=${API_IMAGE}" \
   -var="worker_image=${WORKER_IMAGE}"
@@ -37,8 +39,29 @@ popd >/dev/null
 AWS_REGION="${AWS_REGION}" PROJECT_NAME="${PROJECT_NAME}" ENVIRONMENT="${ENVIRONMENT}" IMAGE_TAG="${IMAGE_TAG}" \
   "${ROOT_DIR}/infrastructure/scripts/push-ecr-images.sh"
 
+DB_STATUS="$(aws rds describe-db-instances \
+  --region "${AWS_REGION}" \
+  --db-instance-identifier "${DB_IDENTIFIER}" \
+  --query 'DBInstances[0].DBInstanceStatus' \
+  --output text 2>/dev/null || true)"
+
+if [[ "${DB_STATUS}" == "stopped" ]]; then
+  echo "Starting RDS instance: ${DB_IDENTIFIER}"
+  aws rds start-db-instance \
+    --region "${AWS_REGION}" \
+    --db-instance-identifier "${DB_IDENTIFIER}" >/dev/null
+fi
+
+if [[ -n "${DB_STATUS}" && "${DB_STATUS}" != "None" ]]; then
+  echo "Waiting for RDS instance to become available: ${DB_IDENTIFIER}"
+  aws rds wait db-instance-available \
+    --region "${AWS_REGION}" \
+    --db-instance-identifier "${DB_IDENTIFIER}"
+fi
+
 pushd "${TF_DIR}" >/dev/null
 terraform apply -auto-approve \
+  -var="runtime_enabled=true" \
   -var="web_image=${WEB_IMAGE}" \
   -var="api_image=${API_IMAGE}" \
   -var="worker_image=${WORKER_IMAGE}"

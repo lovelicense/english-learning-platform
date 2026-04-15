@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ReviewsService } from './reviews.service';
@@ -9,7 +9,7 @@ export class ReviewsController {
   constructor(private readonly reviewsService: ReviewsService) {}
 
   @Get('today')
-  getToday(@CurrentUser('userId') userId: string) {
-    return this.reviewsService.getToday(userId);
+  getToday(@CurrentUser('userId') userId: string, @Query('strategy') strategy?: string) {
+    return this.reviewsService.getToday(userId, strategy);
   }
 }

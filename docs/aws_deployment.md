@@ -188,6 +188,25 @@ cors_allowed_origins = [
 - Terraform apply로 ECS 서비스 반영
 ## 11. 배포 체크리스트
 - RDS 접속 가능
+
+## 12. 운영 자원 중지/재시작
+- 운영 테스트를 쉬는 동안에는 `RDS`, `S3` 데이터는 유지하고 `ECS`, `ALB`, `NAT Gateway` 같은 실행 비용 중심 리소스만 내릴 수 있습니다.
+- 중지 명령:
+
+```bash
+./infrastructure/scripts/stop-aws.sh
+```
+
+- 재배포 명령:
+
+```bash
+./infrastructure/scripts/deploy-aws.sh
+```
+
+- `stop-aws.sh`는 Terraform에 `runtime_enabled=false`를 적용해서 운영 리소스를 내리고, 이어서 RDS 인스턴스를 `stop` 요청합니다.
+- `deploy-aws.sh`는 이미지를 푸시한 뒤 RDS가 `stopped` 상태면 자동으로 다시 시작하고, 그 다음 운영 리소스를 다시 생성합니다.
+- S3 버킷과 RDS 데이터는 유지됩니다.
+- RDS 중지는 AWS 정책상 최대 7일까지만 유지될 수 있어, 장기간 쉬면 자동 재시작될 수 있습니다.
 - 회원가입/로그인 가능
 - presigned URL 발급 가능
 - S3 업로드 가능

@@ -73,6 +73,12 @@ variable "worker_image" {
   description = "worker 컨테이너 이미지 URI"
 }
 
+variable "runtime_enabled" {
+  type        = bool
+  default     = true
+  description = "ECS/ALB/NAT 등 운영 실행 리소스 활성화 여부"
+}
+
 variable "web_desired_count" {
   type        = number
   default     = 1
@@ -93,32 +99,32 @@ variable "worker_desired_count" {
 
 variable "web_cpu" {
   type    = number
-  default = 512
+  default = 256
 }
 
 variable "web_memory" {
   type    = number
-  default = 1024
+  default = 512
 }
 
 variable "api_cpu" {
   type    = number
-  default = 512
+  default = 256
 }
 
 variable "api_memory" {
   type    = number
-  default = 1024
+  default = 512
 }
 
 variable "worker_cpu" {
   type    = number
-  default = 512
+  default = 256
 }
 
 variable "worker_memory" {
   type    = number
-  default = 1024
+  default = 512
 }
 
 variable "db_name" {

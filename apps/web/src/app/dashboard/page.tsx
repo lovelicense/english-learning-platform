@@ -92,6 +92,8 @@ type Expression = {
   sourceSituation?: string | null;
   sourceTone?: string | null;
   sourceContextNote?: string | null;
+  practiceCount?: number;
+  latestPracticeScore?: number | null;
 };
 type TtsResponse = {
   expressionId: string;
@@ -149,6 +151,31 @@ type ReviewItem = {
   lastReviewedAt?: string | null;
   practiceAnswer?: string | null;
   practiceAudioUrl?: string | null;
+};
+type ReviewStrategy = "system" | "low_score" | "stale" | "voice_gap" | "random";
+type PracticeHistoryItem = {
+  id: string;
+  expressionId: string;
+  koreanText: string;
+  englishBase: string;
+  answer: string;
+  recognizedAnswer?: string | null;
+  target: string;
+  mode?: "text" | "voice" | null;
+  testType?: "translation" | "situation" | "pattern" | null;
+  promptKorean?: string | null;
+  promptContext?: string | null;
+  score: number;
+  meaningScore?: number | null;
+  naturalnessScore?: number | null;
+  grammarScore?: number | null;
+  feedback: string;
+  strengthComment?: string | null;
+  correctionComment?: string | null;
+  suggestedAnswer?: string | null;
+  suggestedAnswerAlt?: string | null;
+  createdAt: string;
+  audioUrl?: string | null;
 };
 type LearningAssetsProgress = {
   overall: {
@@ -461,6 +488,14 @@ const DASHBOARD_SECTION_TABS = [
   { id: "ttsLibrary", label: "TTS" },
 ] as const;
 
+const REVIEW_STRATEGY_OPTIONS: Array<{ value: ReviewStrategy; label: string; description: string }> = [
+  { value: "system", label: "시스템 추천", description: "기본 추천 기준으로 복습 문제를 구성합니다." },
+  { value: "low_score", label: "낮은 점수 우선", description: "최근 점수가 낮은 표현을 먼저 복습합니다." },
+  { value: "stale", label: "오래 안 본 표현", description: "최근 복습하지 않은 표현을 먼저 보여줍니다." },
+  { value: "voice_gap", label: "음성 부족 우선", description: "음성 연습 기록이 부족한 표현을 먼저 복습합니다." },
+  { value: "random", label: "랜덤", description: "표현을 무작위로 섞어서 복습합니다." },
+];
+
 type ManualRecordingStats = {
   effectiveMaxMs: number;
   chunkCount: number;
@@ -558,6 +593,8 @@ export default function DashboardPage() {
   const [voiceAnswerFile, setVoiceAnswerFile] = useState<File | null>(null);
   const [score, setScore] = useState<PracticeScore | null>(null);
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
+  const [practiceHistory, setPracticeHistory] = useState<PracticeHistoryItem[]>([]);
+  const [reviewStrategy, setReviewStrategy] = useState<ReviewStrategy>("system");
   const [reviewAutoAdvance, setReviewAutoAdvance] = useState(true);
   const [reviewReadQuestion, setReviewReadQuestion] = useState(true);
   const [pendingAutoReview, setPendingAutoReview] = useState<ReviewItem | null>(null);
@@ -578,6 +615,7 @@ export default function DashboardPage() {
   const [rawAudioDuration, setRawAudioDuration] = useState(0);
   const [isMicRecording, setIsMicRecording] = useState(false);
   const [isPracticeRecording, setIsPracticeRecording] = useState(false);
+  const [practiceAutoStartCountdown, setPracticeAutoStartCountdown] = useState<number | null>(null);
   const [activeTimeoutMessage, setActiveTimeoutMessage] = useState("");
   const [showAutoFlowHelp, setShowAutoFlowHelp] = useState(false);
   const [showManualGenerateComposer, setShowManualGenerateComposer] = useState(false);
@@ -605,11 +643,12 @@ export default function DashboardPage() {
     isActive: false,
   });
   const [failedManualChunks, setFailedManualChunks] = useState<FailedManualChunk[]>([]);
-  const [expandedSections, setExpandedSections] = useState<Record<"recordings" | "expressions" | "practice" | "reviews" | "ttsLibrary", boolean>>({
+  const [expandedSections, setExpandedSections] = useState<Record<"recordings" | "expressions" | "practice" | "reviews" | "practiceHistory" | "ttsLibrary", boolean>>({
     recordings: true,
     expressions: true,
     practice: true,
     reviews: false,
+    practiceHistory: false,
     ttsLibrary: false,
   });
   const [learningProgressOpen, setLearningProgressOpen] = useState(false);
@@ -637,6 +676,8 @@ export default function DashboardPage() {
   const answerRef = useRef<HTMLTextAreaElement | null>(null);
   const recordingSessionRef = useRef<{ stop: () => void; cancel: () => void } | null>(null);
   const practiceRecordingSessionRef = useRef<RecordingSession | null>(null);
+  const practiceAutoStartTimeoutRef = useRef<number | null>(null);
+  const practiceAutoStartIntervalRef = useRef<number | null>(null);
   const reviewQuestionSpeechRef = useRef<SpeechSynthesisUtterance | null>(null);
   const uploadTaskRef = useRef<ReturnType<typeof createPresignedUploadTask> | null>(null);
   const abortControllersRef = useRef<AbortController[]>([]);
@@ -725,6 +766,12 @@ export default function DashboardPage() {
     () => completedTtsExpressions.slice(0, visibleCounts.ttsLibrary),
     [completedTtsExpressions, visibleCounts.ttsLibrary],
   );
+  const activeReviewIndex = useMemo(
+    () => (activeReviewExpressionId ? reviews.findIndex((item) => item.id === activeReviewExpressionId) : -1),
+    [activeReviewExpressionId, reviews],
+  );
+  const activeReviewItem = activeReviewIndex >= 0 ? reviews[activeReviewIndex] ?? null : null;
+  const nextReviewItem = activeReviewIndex >= 0 ? reviews[activeReviewIndex + 1] ?? null : null;
 
   useEffect(() => {
     if (!pendingAutoReview) return;
@@ -860,6 +907,19 @@ export default function DashboardPage() {
     setRecordingAnalysisMode(loadRecordingAnalysisMode());
   }, []);
 
+  function getReviewsEndpoint(strategy: ReviewStrategy) {
+    const params = new URLSearchParams();
+    if (strategy !== "system") {
+      params.set("strategy", strategy);
+    }
+    const query = params.toString();
+    return query ? `/reviews/today?${query}` : "/reviews/today";
+  }
+
+  async function fetchReviewList(strategy: ReviewStrategy) {
+    return apiFetch<ReviewItem[]>(getReviewsEndpoint(strategy)).catch(() => []);
+  }
+
   useEffect(() => {
     return () => {
       if (ttsLibraryPlaybackTimeoutRef.current) {
@@ -882,19 +942,21 @@ export default function DashboardPage() {
     Promise.all([
       apiFetch<MeResponse>("/auth/me"),
       apiFetch<Expression[]>("/expressions").catch(() => []),
-      apiFetch<ReviewItem[]>("/reviews/today").catch(() => []),
+      fetchReviewList(reviewStrategy),
+      apiFetch<PracticeHistoryItem[]>("/practice/logs?limit=12").catch(() => []),
       apiFetch<RecordingSummary[]>("/recordings").catch(() => []),
       apiFetch<PersonProfile[]>("/person-profiles").catch(() => []),
       apiFetch<LearningAssetsProgress>("/learning-assets/progress").catch(() => null),
       apiFetch<LearningAssetsCatalog>("/learning-assets/catalog").catch(() => null),
     ])
-      .then(([me, expressionList, reviewList, recordingList, personProfileList, learningAssets, learningCatalog]) => {
+      .then(([me, expressionList, reviewList, historyList, recordingList, personProfileList, learningAssets, learningCatalog]) => {
         setUser(me);
         setExpressions(expressionList);
         if (expressionList[0]) {
           setSelectedExpressionId(pickExpressionIdForRecording(expressionList, null));
         }
         setReviews(reviewList);
+        setPracticeHistory(historyList);
         setRecordings(recordingList);
         setPersonProfiles(personProfileList);
         setLearningAssetsProgress(learningAssets);
@@ -911,6 +973,13 @@ export default function DashboardPage() {
       cancelActiveOperations(false);
     };
   }, [router]);
+
+  useEffect(() => {
+    if (!ready || !getToken()) return;
+    fetchReviewList(reviewStrategy).then((reviewList) => {
+      setReviews(reviewList);
+    });
+  }, [ready, reviewStrategy]);
 
   useEffect(() => {
     if (typeof navigator === "undefined") return;
@@ -1078,6 +1147,65 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     return controller;
   }
 
+  function clearPracticeAutoStartCountdown() {
+    if (practiceAutoStartTimeoutRef.current) {
+      window.clearTimeout(practiceAutoStartTimeoutRef.current);
+      practiceAutoStartTimeoutRef.current = null;
+    }
+    if (practiceAutoStartIntervalRef.current) {
+      window.clearInterval(practiceAutoStartIntervalRef.current);
+      practiceAutoStartIntervalRef.current = null;
+    }
+    setPracticeAutoStartCountdown(null);
+  }
+
+  function startVoicePracticeRecording() {
+    userCancelledRef.current = false;
+    stopReviewQuestionSpeech();
+    clearPracticeAutoStartCountdown();
+    setError("");
+    setMessage("영어 말하기 테스트 녹음을 시작했습니다. 말이 끝나면 종료 버튼을 누르면 자동으로 채점합니다.");
+    setVoiceAnswerFile(null);
+    setScore(null);
+    setPracticeResponseStartedAtMs(Date.now());
+
+    const session = startRecordedAudioSession({ durationMs: 15000 });
+    practiceRecordingSessionRef.current = session;
+    setIsPracticeRecording(true);
+
+    session.promise
+      .then(async (file) => {
+        setVoiceAnswerFile(file);
+        setMessage(`음성 답변 녹음이 완료되었습니다: ${file.name}. 자동으로 채점을 시작합니다.`);
+        await handleScoreVoice(file);
+      })
+      .catch((err) => {
+        if (!userCancelledRef.current) {
+          setError(err instanceof Error ? err.message : "음성 답변 녹음에 실패했습니다.");
+        }
+      })
+      .finally(() => {
+        practiceRecordingSessionRef.current = null;
+        setIsPracticeRecording(false);
+      });
+  }
+
+  function scheduleVoicePracticeAutoStart() {
+    clearPracticeAutoStartCountdown();
+    setPracticeAutoStartCountdown(3);
+    setMessage("3초 뒤에 음성 녹음이 자동으로 시작됩니다.");
+    practiceAutoStartIntervalRef.current = window.setInterval(() => {
+      setPracticeAutoStartCountdown((current) => {
+        if (current === null || current <= 1) return current;
+        return current - 1;
+      });
+    }, 1000);
+    practiceAutoStartTimeoutRef.current = window.setTimeout(() => {
+      clearPracticeAutoStartCountdown();
+      startVoicePracticeRecording();
+    }, 3000);
+  }
+
   function clearAbortController(controller: AbortController) {
     abortControllersRef.current = abortControllersRef.current.filter((item) => item !== controller);
   }
@@ -1095,6 +1223,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     uploadTaskRef.current?.cancel();
     uploadTaskRef.current = null;
     stopReviewQuestionSpeech();
+    clearPracticeAutoStartCountdown();
     abortControllersRef.current.forEach((controller) => controller.abort());
     abortControllersRef.current = [];
     setIsMicRecording(false);
@@ -1163,14 +1292,16 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
   }
 
   async function refreshLists(preferredExpressionId?: string) {
-    const [expressionList, reviewList, learningAssets, learningCatalog] = await Promise.all([
+    const [expressionList, reviewList, historyList, learningAssets, learningCatalog] = await Promise.all([
       apiFetch<Expression[]>("/expressions"),
-      apiFetch<ReviewItem[]>("/reviews/today").catch(() => []),
+      fetchReviewList(reviewStrategy),
+      apiFetch<PracticeHistoryItem[]>("/practice/logs?limit=12").catch(() => []),
       apiFetch<LearningAssetsProgress>("/learning-assets/progress").catch(() => null),
       apiFetch<LearningAssetsCatalog>("/learning-assets/catalog").catch(() => null),
     ]);
     setExpressions(expressionList);
     setReviews(reviewList);
+    setPracticeHistory(historyList);
     setLearningAssetsProgress(learningAssets);
     setLearningAssetsCatalog(learningCatalog);
     const nextId = pickExpressionIdForRecording(expressionList, recording, preferredExpressionId);
@@ -1306,6 +1437,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
   }, []);
 
   function selectExpressionForPractice(expression: Expression) {
+    clearPracticeAutoStartCountdown();
     setSelectedExpressionId(expression.id);
     setPracticePromptReadyAtMs(Date.now());
     setPracticeResponseStartedAtMs(null);
@@ -2718,6 +2850,33 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     setPracticeResponseStartedAtMs(null);
   }
 
+  function setReviewAutoAdvanceEnabled(enabled: boolean) {
+    setReviewAutoAdvance(enabled);
+    if (!enabled) {
+      setPendingAutoReview(null);
+    }
+  }
+
+  async function handleMoveToNextReview() {
+    if (!activeReviewExpressionId) {
+      setError("현재 진행 중인 복습 문제가 없습니다.");
+      return;
+    }
+    if (!nextReviewItem) {
+      setActiveReviewExpressionId(null);
+      setMessage("현재 문제가 마지막 복습 카드입니다.");
+      return;
+    }
+
+    setError("");
+    setMessage("다음 복습 카드로 이동합니다.");
+    await handleStartReviewPractice(
+      nextReviewItem,
+      practiceTestType === "situation" ? "situation" : "translation",
+      { autoAdvance: false },
+    );
+  }
+
   async function handleScore() {
     if (!selectedExpression) {
       setError("채점할 표현을 먼저 선택해 주세요.");
@@ -2765,36 +2924,15 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       setError("문제를 모두 읽은 뒤에 녹음을 시작해 주세요.");
       return;
     }
-    userCancelledRef.current = false;
-    stopReviewQuestionSpeech();
-    setError("");
-    setMessage("영어 말하기 테스트 녹음을 시작했습니다. 말이 끝나면 종료 버튼을 누르면 자동으로 채점합니다.");
-    setVoiceAnswerFile(null);
-    setScore(null);
-    setPracticeResponseStartedAtMs(Date.now());
-
-    const session = startRecordedAudioSession({ durationMs: 15000 });
-    practiceRecordingSessionRef.current = session;
-    setIsPracticeRecording(true);
-
-    session.promise
-      .then(async (file) => {
-        setVoiceAnswerFile(file);
-        setMessage(`음성 답변 녹음이 완료되었습니다: ${file.name}. 자동으로 채점을 시작합니다.`);
-        await handleScoreVoice(file);
-      })
-      .catch((err) => {
-        if (!userCancelledRef.current) {
-          setError(err instanceof Error ? err.message : "음성 답변 녹음에 실패했습니다.");
-        }
-      })
-      .finally(() => {
-        practiceRecordingSessionRef.current = null;
-        setIsPracticeRecording(false);
-      });
+    startVoicePracticeRecording();
   }
 
   function handleStopVoicePractice() {
+    if (practiceAutoStartCountdown !== null) {
+      clearPracticeAutoStartCountdown();
+      setMessage("자동 녹음 시작을 취소했습니다.");
+      return;
+    }
     practiceRecordingSessionRef.current?.stop();
   }
 
@@ -2888,6 +3026,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       return;
     }
 
+    clearPracticeAutoStartCountdown();
     setPracticeTestType(nextType);
     setAnswer("");
     setVoiceAnswerFile(null);
@@ -2939,6 +3078,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     }
 
     stopReviewQuestionSpeech();
+    clearPracticeAutoStartCountdown();
     setSelectedExpressionId(expression.id);
     setActiveReviewExpressionId(expression.id);
     setTestMode("voice");
@@ -2961,11 +3101,17 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
         setMessage("문제를 읽어주는 중입니다.");
         speakReviewQuestion(expression.koreanText, () => {
           setPracticePromptReadyAtMs(Date.now());
-          setMessage("이제 답변해 주세요. 3초 안에 답변을 시작해야 합니다.");
+          setMessage("이제 답변을 준비해 주세요. 3초 뒤에 녹음이 자동으로 시작됩니다.");
+          if (testMode === "voice") {
+            scheduleVoicePracticeAutoStart();
+          }
           window.setTimeout(() => answerRef.current?.focus(), 0);
         });
       } else {
         setPracticePromptReadyAtMs(Date.now());
+        if (testMode === "voice") {
+          scheduleVoicePracticeAutoStart();
+        }
       }
     } else {
       setLoading("practice-prompt");
@@ -2980,11 +3126,17 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           setMessage("문제를 읽어주는 중입니다.");
           speakReviewQuestion(prompt.promptKorean, () => {
             setPracticePromptReadyAtMs(Date.now());
-            setMessage("이제 답변해 주세요. 3초 안에 답변을 시작해야 합니다.");
+            setMessage("이제 답변을 준비해 주세요. 3초 뒤에 녹음이 자동으로 시작됩니다.");
+            if (testMode === "voice") {
+              scheduleVoicePracticeAutoStart();
+            }
             window.setTimeout(() => answerRef.current?.focus(), 0);
           });
         } else {
           setPracticePromptReadyAtMs(Date.now());
+          if (testMode === "voice") {
+            scheduleVoicePracticeAutoStart();
+          }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "상황형 문제 생성에 실패했습니다.");
@@ -4926,6 +5078,21 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           <div className="grid" style={{ marginTop: 14 }}>
             <div className="mini-card">
               <div className="muted">문제</div>
+              {activeReviewItem && (
+                <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: "wrap" }}>
+                  <span className="badge" style={{ background: "#e0f2fe", color: "#0f172a" }}>
+                    복습 진행 {activeReviewIndex + 1}/{reviews.length}
+                  </span>
+                  <button
+                    type="button"
+                    className={`chip ${reviewAutoAdvance ? "selected" : ""}`}
+                    onClick={() => setReviewAutoAdvanceEnabled(!reviewAutoAdvance)}
+                    disabled={!!loading}
+                  >
+                    {reviewAutoAdvance ? "자동 이동 켜짐" : "자동 이동 일시정지"}
+                  </button>
+                </div>
+              )}
               <div className="row" style={{ gap: 8, marginTop: 8 }}>
                 <button
                   className={`button ${practiceTestType === "translation" ? "" : "ghost"}`}
@@ -4967,7 +5134,10 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
             <div className="row">
               <button
                 className={`button ${testMode === "text" ? "" : "ghost"}`}
-                onClick={() => setTestMode("text")}
+                onClick={() => {
+                  clearPracticeAutoStartCountdown();
+                  setTestMode("text");
+                }}
                 disabled={!!loading}
               >
                 텍스트 답변
@@ -5011,12 +5181,17 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   <div className="muted" style={{ marginTop: 8 }}>
                     영어로 말한 뒤 녹음을 종료하면 STT로 인식해서 자동 채점합니다.
                   </div>
+                  {practiceAutoStartCountdown !== null && (
+                    <div className="muted" style={{ marginTop: 10 }}>
+                      복습 녹음이 {practiceAutoStartCountdown}초 뒤 자동으로 시작됩니다.
+                    </div>
+                  )}
                   <div className="row" style={{ marginTop: 12 }}>
                     <button className="button" onClick={handleStartVoicePractice} disabled={!!loading || isPracticeRecording || isPracticeQuestionPending}>
-                      {isPracticeRecording ? "녹음 중..." : "녹음 시작"}
+                      {isPracticeRecording ? "녹음 중..." : practiceAutoStartCountdown !== null ? "지금 바로 시작" : "녹음 시작"}
                     </button>
-                    <button className="button ghost" onClick={handleStopVoicePractice} disabled={!isPracticeRecording}>
-                      녹음 종료
+                    <button className="button ghost" onClick={handleStopVoicePractice} disabled={!isPracticeRecording && practiceAutoStartCountdown === null}>
+                      {practiceAutoStartCountdown !== null ? "자동 시작 취소" : "녹음 종료"}
                     </button>
                     <button className="button secondary" onClick={() => void handleScoreVoice()} disabled={!!loading || isPracticeRecording || !voiceAnswerFile || !selectedExpression || isPracticeQuestionPending}>
                       {loading === "score-voice" ? "다시 채점 중..." : "다시 채점"}
@@ -5042,6 +5217,34 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
             )}
             {score && (
               <div className="grid score-grid">
+                {activeReviewItem && (
+                  <div className="mini-card">
+                    <strong>복습 이동</strong>
+                    <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        className="button secondary"
+                        type="button"
+                        onClick={() => void handleMoveToNextReview()}
+                        disabled={!!loading || !nextReviewItem}
+                      >
+                        {nextReviewItem ? "다음 문제" : "마지막 문제"}
+                      </button>
+                      <button
+                        className="button ghost"
+                        type="button"
+                        onClick={() => setReviewAutoAdvanceEnabled(!reviewAutoAdvance)}
+                        disabled={!!loading}
+                      >
+                        {reviewAutoAdvance ? "자동 이동 일시정지" : "자동 이동 다시 켜기"}
+                      </button>
+                    </div>
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      {nextReviewItem
+                        ? `다음 복습 카드: ${activeReviewIndex + 2}/${reviews.length}`
+                        : "현재 카드가 마지막 복습 문제입니다."}
+                    </div>
+                  </div>
+                )}
                 <div className="mini-card"><strong>점수</strong><div className="kpi" style={{ marginTop: 8 }}>{score.score}</div></div>
                 <div className="mini-card"><strong>피드백</strong><div style={{ marginTop: 8 }}>{score.feedback}</div></div>
                 <div className="mini-card"><strong>정답 기준</strong><div style={{ marginTop: 8 }}>{score.target}</div></div>
@@ -5101,6 +5304,29 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           )}
           {expandedSections.reviews && (
           <div className="grid" style={{ marginTop: 14 }}>
+            <div className="mini-card">
+              <strong>복습 문제 생성 기준</strong>
+              <div className="muted" style={{ marginTop: 4 }}>
+                원하는 기준으로 오늘의 복습 목록을 다시 구성할 수 있습니다.
+              </div>
+              <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
+                {REVIEW_STRATEGY_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`chip ${reviewStrategy === option.value ? "selected" : ""}`}
+                    onClick={() => setReviewStrategy(option.value)}
+                    disabled={!!loading}
+                    title={option.description}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <div className="muted" style={{ marginTop: 8 }}>
+                {REVIEW_STRATEGY_OPTIONS.find((option) => option.value === reviewStrategy)?.description}
+              </div>
+            </div>
             <div className="mini-card">
               <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <div>
@@ -5174,10 +5400,72 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           )}
         </section>
 
+        <section className="card panel-lg">
+          {renderSectionIntro(
+            "practiceHistory",
+            "5. 최근 복습 기록",
+            "최근에 채점한 복습 결과를 최신순으로 확인하고, 답변과 피드백을 다시 볼 수 있습니다.",
+            `최근 기록 ${practiceHistory.length}건`,
+          )}
+          {expandedSections.practiceHistory && (
+            <div className="grid" style={{ marginTop: 14 }}>
+              {practiceHistory.length === 0 && (
+                <div className="mini-card muted">아직 저장된 복습 기록이 없습니다.</div>
+              )}
+              {practiceHistory.map((item, index) => (
+                <div key={item.id} className="mini-card">
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                    <div>
+                      <strong>기록 {index + 1}</strong>
+                      <div className="muted" style={{ marginTop: 6 }}>
+                        {recordingDateFormatter.format(new Date(item.createdAt))}
+                      </div>
+                    </div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      <span className="badge" style={{ background: "#e0f2fe", color: "#0f172a" }}>점수 {item.score}</span>
+                      <span className="badge" style={{ background: "#f8fafc", color: "#334155" }}>
+                        {item.mode === "voice" ? "음성" : "텍스트"} · {item.testType === "situation" ? "상황형" : item.testType === "pattern" ? "패턴형" : "번역형"}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 12, fontWeight: 700 }}>{item.promptKorean || item.koreanText}</div>
+                  {item.promptContext && <div className="muted" style={{ marginTop: 8 }}>{item.promptContext}</div>}
+                  <div className="grid" style={{ marginTop: 14, gap: 10 }}>
+                    <div>
+                      <div className="muted">기준 표현</div>
+                      <div style={{ marginTop: 4 }}>{item.target || item.englishBase}</div>
+                    </div>
+                    <div>
+                      <div className="muted">내 답변</div>
+                      <div style={{ marginTop: 4 }}>{item.answer}</div>
+                    </div>
+                    {item.suggestedAnswer && (
+                      <div>
+                        <div className="muted">추천 답안</div>
+                        <div style={{ marginTop: 4 }}>{item.suggestedAnswer}</div>
+                      </div>
+                    )}
+                    <div>
+                      <div className="muted">피드백</div>
+                      <div style={{ marginTop: 4 }}>{item.feedback}</div>
+                    </div>
+                    {item.audioUrl && (
+                      <div>
+                        <div className="muted">음성 다시 듣기</div>
+                        <audio controls className="audio-player" style={{ marginTop: 8 }} src={item.audioUrl} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
         <section ref={ttsLibrarySectionRef} className="card panel-lg">
           {renderSectionIntro(
             "ttsLibrary",
-            "5. TTS 완료 표현 모아보기",
+            "6. TTS 완료 표현 모아보기",
             "영어 음성까지 만들어진 표현만 따로 모아 빠르게 다시 듣고 확인할 수 있습니다.",
             `TTS 완료 표현 ${completedTtsExpressions.length}개`,
           )}
@@ -5289,6 +5577,9 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                           </span>
                         </div>
                         <div className="muted" style={{ marginTop: 8 }}>{expression.koreanText}</div>
+                        <div className="muted" style={{ marginTop: 8 }}>
+                          테스트 {expression.practiceCount ?? 0}회 · 최근 점수 {typeof expression.latestPracticeScore === "number" ? `${expression.latestPracticeScore}점` : "없음"}
+                        </div>
                         <div className="row" style={{ marginTop: 12 }}>
                           <button
                             className="button secondary"

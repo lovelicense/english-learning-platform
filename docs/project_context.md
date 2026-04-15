@@ -199,7 +199,22 @@ worker_ecr_repository_url = "574844118613.dkr.ecr.ap-northeast-2.amazonaws.com/e
 
 
 # AWS에 배포 방법
+운영 테스트가 필요할 때 사용하는 명령.
+- web/api/worker 이미지를 새로 빌드해서 ECR에 푸시
+- RDS가 중지 상태면 자동으로 다시 시작
+- ECS, ALB, NAT Gateway 등 운영 실행 리소스를 다시 생성/활성화
+- 배포 후 `https://chunsay.com`, `https://api.chunsay.com` 으로 접근 가능
+
 ./infrastructure/scripts/deploy-aws.sh
+
+# AWS 운영 자원 중지 방법
+운영 테스트를 쉬는 동안 비용 절감을 위해 사용하는 명령.
+- ECS, ALB, NAT Gateway, 관련 Route53 연결 등 운영 실행 리소스를 내림
+- RDS와 S3는 유지해서 데이터는 보존
+- RDS는 stop 요청만 하므로 AWS 정책상 최대 7일 후 자동 재시작될 수 있음
+- 다시 운영 확인이 필요하면 아래 배포 명령을 다시 실행하면 됨
+
+./infrastructure/scripts/stop-aws.sh
 
 # github 배포 방법
 git status

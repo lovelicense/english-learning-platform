@@ -3,8 +3,12 @@ locals {
   database_url      = "postgresql://${urlencode(var.db_username)}:${urlencode(var.db_password)}@${aws_db_instance.postgres.address}:5432/${var.db_name}"
   has_custom_domain = trimspace(var.domain_name) != ""
   api_domain        = local.has_custom_domain ? "${var.api_subdomain}.${var.domain_name}" : ""
-  web_origin        = local.has_custom_domain ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}"
-  api_origin        = local.has_custom_domain ? "https://${local.api_domain}" : "http://${aws_lb.main.dns_name}:4000"
+  web_origin = local.has_custom_domain ? "https://${var.domain_name}" : (
+    var.runtime_enabled ? "http://${aws_lb.main[0].dns_name}" : "http://localhost:3000"
+  )
+  api_origin = local.has_custom_domain ? "https://${local.api_domain}" : (
+    var.runtime_enabled ? "http://${aws_lb.main[0].dns_name}:4000" : "http://localhost:4000"
+  )
   common_tags = {
     Project     = var.project_name
     Environment = var.environment
@@ -68,6 +72,7 @@ resource "aws_subnet" "private_db" {
 }
 
 resource "aws_eip" "nat" {
+  count  = var.runtime_enabled ? 1 : 0
   domain = "vpc"
 
   tags = merge(local.common_tags, {
@@ -76,7 +81,8 @@ resource "aws_eip" "nat" {
 }
 
 resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
+  count         = var.runtime_enabled ? 1 : 0
+  allocation_id = aws_eip.nat[0].id
   subnet_id     = aws_subnet.public[0].id
 
   tags = merge(local.common_tags, {
@@ -108,9 +114,13 @@ resource "aws_route_table_association" "public" {
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
+  dynamic "route" {
+    for_each = var.runtime_enabled ? [1] : []
+
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.main[0].id
+    }
   }
 
   tags = merge(local.common_tags, {
@@ -404,6 +414,7 @@ resource "aws_iam_role_policy" "ecs_task_s3" {
 }
 
 resource "aws_lb" "main" {
+  count              = var.runtime_enabled ? 1 : 0
   name               = replace(substr("${local.name_prefix}-alb", 0, 32), "_", "-")
   internal           = false
   load_balancer_type = "application"
@@ -414,6 +425,7 @@ resource "aws_lb" "main" {
 }
 
 resource "aws_lb_target_group" "web" {
+  count       = var.runtime_enabled ? 1 : 0
   name        = replace(substr("${local.name_prefix}-web-tg", 0, 32), "_", "-")
   port        = 3000
   protocol    = "HTTP"
@@ -430,6 +442,7 @@ resource "aws_lb_target_group" "web" {
 }
 
 resource "aws_lb_target_group" "api" {
+  count       = var.runtime_enabled ? 1 : 0
   name        = replace(substr("${local.name_prefix}-api-tg", 0, 32), "_", "-")
   port        = 4000
   protocol    = "HTTP"
@@ -487,46 +500,46 @@ resource "aws_acm_certificate_validation" "main" {
 }
 
 resource "aws_route53_record" "web_alias" {
-  count   = local.has_custom_domain ? 1 : 0
+  count   = local.has_custom_domain && var.runtime_enabled ? 1 : 0
   zone_id = data.aws_route53_zone.main[0].zone_id
   name    = var.domain_name
   type    = "A"
 
   alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
+    name                   = aws_lb.main[0].dns_name
+    zone_id                = aws_lb.main[0].zone_id
     evaluate_target_health = true
   }
 }
 
 resource "aws_route53_record" "api_alias" {
-  count   = local.has_custom_domain ? 1 : 0
+  count   = local.has_custom_domain && var.runtime_enabled ? 1 : 0
   zone_id = data.aws_route53_zone.main[0].zone_id
   name    = local.api_domain
   type    = "A"
 
   alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
+    name                   = aws_lb.main[0].dns_name
+    zone_id                = aws_lb.main[0].zone_id
     evaluate_target_health = true
   }
 }
 
 resource "aws_lb_listener" "web_http" {
-  count             = local.has_custom_domain ? 0 : 1
-  load_balancer_arn = aws_lb.main.arn
+  count             = !local.has_custom_domain && var.runtime_enabled ? 1 : 0
+  load_balancer_arn = aws_lb.main[0].arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.web.arn
+    target_group_arn = aws_lb_target_group.web[0].arn
   }
 }
 
 resource "aws_lb_listener" "http_redirect" {
-  count             = local.has_custom_domain ? 1 : 0
-  load_balancer_arn = aws_lb.main.arn
+  count             = local.has_custom_domain && var.runtime_enabled ? 1 : 0
+  load_balancer_arn = aws_lb.main[0].arn
   port              = 80
   protocol          = "HTTP"
 
@@ -542,8 +555,8 @@ resource "aws_lb_listener" "http_redirect" {
 }
 
 resource "aws_lb_listener" "https" {
-  count             = local.has_custom_domain ? 1 : 0
-  load_balancer_arn = aws_lb.main.arn
+  count             = local.has_custom_domain && var.runtime_enabled ? 1 : 0
+  load_balancer_arn = aws_lb.main[0].arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-2016-08"
@@ -551,12 +564,12 @@ resource "aws_lb_listener" "https" {
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.web.arn
+    target_group_arn = aws_lb_target_group.web[0].arn
   }
 }
 
 resource "aws_lb_listener_rule" "api_https" {
-  count        = local.has_custom_domain ? 1 : 0
+  count        = local.has_custom_domain && var.runtime_enabled ? 1 : 0
   listener_arn = aws_lb_listener.https[0].arn
   priority     = 100
 
@@ -568,19 +581,19 @@ resource "aws_lb_listener_rule" "api_https" {
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.api.arn
+    target_group_arn = aws_lb_target_group.api[0].arn
   }
 }
 
 resource "aws_lb_listener" "api_http" {
-  count             = local.has_custom_domain ? 0 : 1
-  load_balancer_arn = aws_lb.main.arn
+  count             = !local.has_custom_domain && var.runtime_enabled ? 1 : 0
+  load_balancer_arn = aws_lb.main[0].arn
   port              = 4000
   protocol          = "HTTP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.api.arn
+    target_group_arn = aws_lb_target_group.api[0].arn
   }
 }
 
@@ -797,6 +810,7 @@ resource "aws_ecs_task_definition" "worker" {
 }
 
 resource "aws_ecs_service" "web" {
+  count           = var.runtime_enabled ? 1 : 0
   name            = "${local.name_prefix}-web"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.web.arn
@@ -810,7 +824,7 @@ resource "aws_ecs_service" "web" {
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.web.arn
+    target_group_arn = aws_lb_target_group.web[0].arn
     container_name   = "web"
     container_port   = 3000
   }
@@ -818,6 +832,7 @@ resource "aws_ecs_service" "web" {
 }
 
 resource "aws_ecs_service" "api" {
+  count           = var.runtime_enabled ? 1 : 0
   name            = "${local.name_prefix}-api"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.api.arn
@@ -831,7 +846,7 @@ resource "aws_ecs_service" "api" {
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.api.arn
+    target_group_arn = aws_lb_target_group.api[0].arn
     container_name   = "api"
     container_port   = 4000
   }
@@ -839,6 +854,7 @@ resource "aws_ecs_service" "api" {
 }
 
 resource "aws_ecs_service" "worker" {
+  count           = var.runtime_enabled ? 1 : 0
   name            = "${local.name_prefix}-worker"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.worker.arn

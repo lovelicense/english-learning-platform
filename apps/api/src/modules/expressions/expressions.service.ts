@@ -693,6 +693,18 @@ export class ExpressionsService {
       where: { userId },
       orderBy: { createdAt: 'desc' },
       include: {
+        practiceLogs: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: {
+            score: true,
+          },
+        },
+        _count: {
+          select: {
+            practiceLogs: true,
+          },
+        },
         utterance: {
           include: {
             recording: true,
@@ -705,6 +717,8 @@ export class ExpressionsService {
     return Promise.all(
       (expressions as any[]).map(async (expression) => ({
         ...expression,
+        practiceCount: expression._count?.practiceLogs ?? 0,
+        latestPracticeScore: expression.practiceLogs?.[0]?.score ?? null,
         sourceAnalysisIntent: expression.utterance?.analysisIntent ?? expression.savedSentence?.analysisIntent ?? null,
         sourceAnalysisSummary:
           expression.utterance?.recording?.analysisSummary ?? expression.savedSentence?.analysisSummary ?? null,
