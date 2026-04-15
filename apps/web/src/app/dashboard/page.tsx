@@ -595,8 +595,8 @@ export default function DashboardPage() {
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
   const [practiceHistory, setPracticeHistory] = useState<PracticeHistoryItem[]>([]);
   const [reviewStrategy, setReviewStrategy] = useState<ReviewStrategy>("system");
-  const [reviewAutoAdvance, setReviewAutoAdvance] = useState(true);
-  const [reviewReadQuestion, setReviewReadQuestion] = useState(true);
+  const [reviewAutoAdvance, setReviewAutoAdvance] = useState(false);
+  const [reviewReadQuestion, setReviewReadQuestion] = useState(false);
   const [pendingAutoReview, setPendingAutoReview] = useState<ReviewItem | null>(null);
   const [learningAssetsProgress, setLearningAssetsProgress] = useState<LearningAssetsProgress | null>(null);
   const [learningAssetsCatalog, setLearningAssetsCatalog] = useState<LearningAssetsCatalog | null>(null);
@@ -775,6 +775,10 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!pendingAutoReview) return;
+    if (!reviewAutoAdvance) {
+      setPendingAutoReview(null);
+      return;
+    }
     if (loading) return;
 
     setPendingAutoReview(null);
@@ -782,7 +786,7 @@ export default function DashboardPage() {
     window.setTimeout(() => {
       scrollToDashboardSection("practice");
     }, 100);
-  }, [pendingAutoReview, loading]);
+  }, [pendingAutoReview, loading, reviewAutoAdvance]);
   const speakerOptions = useMemo(() => {
     const seen = new Set<string>();
     return (recording?.utterances ?? []).filter((utterance) => {
