@@ -66,3 +66,6 @@ terraform apply -auto-approve \
   -var="api_image=${API_IMAGE}" \
   -var="worker_image=${WORKER_IMAGE}"
 popd >/dev/null
+
+AWS_REGION="${AWS_REGION}" PROJECT_NAME="${PROJECT_NAME}" ENVIRONMENT="${ENVIRONMENT}" DB_IDENTIFIER="${DB_IDENTIFIER}" \
+  "${ROOT_DIR}/infrastructure/scripts/seed-aws.sh"

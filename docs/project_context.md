@@ -203,9 +203,17 @@ worker_ecr_repository_url = "574844118613.dkr.ecr.ap-northeast-2.amazonaws.com/e
 - web/api/worker 이미지를 새로 빌드해서 ECR에 푸시
 - RDS가 중지 상태면 자동으로 다시 시작
 - ECS, ALB, NAT Gateway 등 운영 실행 리소스를 다시 생성/활성화
+- 배포 마지막에 운영 RDS로 시드 작업을 자동 실행해서 `seed.ts`에 추가한 패턴/단어를 업서트
 - 배포 후 `https://chunsay.com`, `https://api.chunsay.com` 으로 접근 가능
 
 ./infrastructure/scripts/deploy-aws.sh
+
+참고:
+- 로컬 DB에만 직접 넣어둔 데이터는 자동 복사되지 않음
+- 운영에 반영되는 것은 현재 코드 기준 `apps/api/prisma/seed.ts` 내용
+- 시드만 다시 넣고 싶으면 아래 명령으로 단독 실행 가능
+
+./infrastructure/scripts/seed-aws.sh
 
 # AWS 운영 자원 중지 방법
 운영 테스트를 쉬는 동안 비용 절감을 위해 사용하는 명령.

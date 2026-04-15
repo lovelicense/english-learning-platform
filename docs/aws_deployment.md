@@ -205,6 +205,8 @@ cors_allowed_origins = [
 
 - `stop-aws.sh`는 Terraform에 `runtime_enabled=false`를 적용해서 운영 리소스를 내리고, 이어서 RDS 인스턴스를 `stop` 요청합니다.
 - `deploy-aws.sh`는 이미지를 푸시한 뒤 RDS가 `stopped` 상태면 자동으로 다시 시작하고, 그 다음 운영 리소스를 다시 생성합니다.
+- 배포 마지막에는 `seed-aws.sh`를 실행해서 운영 RDS에 `apps/api/prisma/seed.ts` 내용을 업서트합니다.
+- 로컬 DB에 수동으로 넣은 데이터는 자동 반영되지 않으며, 운영 반영 대상은 현재 코드에 들어 있는 시드 데이터입니다.
 - S3 버킷과 RDS 데이터는 유지됩니다.
 - RDS 중지는 AWS 정책상 최대 7일까지만 유지될 수 있어, 장기간 쉬면 자동 재시작될 수 있습니다.
 - 회원가입/로그인 가능

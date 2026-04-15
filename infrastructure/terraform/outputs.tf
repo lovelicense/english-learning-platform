@@ -33,6 +33,21 @@ output "ecs_cluster_name" {
   description = "ECS cluster name"
 }
 
+output "api_task_definition_arn" {
+  value       = aws_ecs_task_definition.api.arn
+  description = "API ECS task definition ARN"
+}
+
+output "private_app_subnet_ids_csv" {
+  value       = join(",", aws_subnet.private_app[*].id)
+  description = "앱용 프라이빗 서브넷 ID CSV"
+}
+
+output "ecs_security_group_id" {
+  value       = aws_security_group.ecs.id
+  description = "ECS service security group ID"
+}
+
 output "web_ecr_repository_url" {
   value       = aws_ecr_repository.web.repository_url
   description = "web 이미지 푸시용 ECR"
