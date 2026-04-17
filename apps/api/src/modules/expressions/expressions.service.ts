@@ -290,6 +290,66 @@ export class ExpressionsService {
     return expression;
   }
 
+  async savePracticeExpression(
+    userId: string,
+    input: {
+      koreanText: string;
+      englishBase: string;
+      englishEasy?: string;
+      englishNatural?: string;
+      note?: string;
+      promptContext?: string;
+    },
+  ) {
+    const koreanText = input.koreanText.trim();
+    const englishBase = input.englishBase.trim();
+    const englishEasy = input.englishEasy?.trim() || englishBase;
+    const englishNatural = input.englishNatural?.trim() || englishBase;
+    const note = input.note?.trim() || null;
+    const promptContext = input.promptContext?.trim() || null;
+
+    if (!koreanText || !englishBase) {
+      throw new NotFoundException('저장할 한국어 문장과 영어 표현이 필요합니다.');
+    }
+
+    const savedSentence = await (this.prisma as any).savedSentence.create({
+      data: {
+        userId,
+        koreanText,
+        contextNote: promptContext,
+      },
+    } as any);
+
+    const expression = await this.prisma.expression.create({
+      data: {
+        userId,
+        savedSentenceId: savedSentence.id,
+        koreanText,
+        englishBase,
+        englishEasy,
+        englishNatural,
+        note,
+      },
+    } as any);
+
+    const assets = await this.generateExpressionTtsAssets(expression);
+    const updated = await this.prisma.expression.update({
+      where: { id: expression.id },
+      data: {
+        ttsKey: assets.ttsKey,
+        koreanTtsKey: assets.koreanTtsKey,
+      },
+    } as any);
+
+    await this.learningAssetsService.syncExpressionAssets(userId, expression.id);
+
+    return {
+      ...updated,
+      ttsUrl: await this.storage.createPresignedDownload(assets.ttsKey, 3600, 'audio/mpeg'),
+      koreanTtsUrl: await this.storage.createPresignedDownload(assets.koreanTtsKey, 3600, 'audio/mpeg'),
+    };
+  }
+
   async generateForRecording(userId: string, input: GenerateRecordingExpressionsDto) {
     const generationContext = this.toGenerationContext(input);
     const recording = await this.prisma.recording.findFirst({

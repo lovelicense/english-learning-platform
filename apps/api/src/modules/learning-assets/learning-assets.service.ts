@@ -67,6 +67,40 @@ function wordBoundaryPattern(lemma: string) {
   return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i');
 }
 
+const CORE_PATTERN_TEMPLATES = new Set([
+  'I am trying to ~.',
+  "I'm supposed to ~.",
+  'I was about to ~.',
+  "I'm here to ~.",
+  "I've been ~ing.",
+  'Let me ~.',
+  'Can I get ~?',
+  'Can you ~?',
+  'Do you mind ~ing?',
+  "I'm not sure if ~.",
+  "I don't think ~.",
+  'I think you should ~.',
+  'It feels like ~.',
+  'It looks like ~.',
+  'It sounds like ~.',
+  'There is ~.',
+  'There are ~.',
+  "I'd like to ~.",
+  'I need you to ~.',
+  'I just wanted to ~.',
+  'I was wondering if ~.',
+  'The thing is ~.',
+  'As far as I know, ~.',
+  "You don't have to ~.",
+  'You might want to ~.',
+  'It depends on ~.',
+  "I'll let you know ~.",
+  "I didn't mean to ~.",
+  "I can't wait to ~.",
+  "That's why ~.",
+  "That's what I mean.",
+]);
+
 @Injectable()
 export class LearningAssetsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -237,6 +271,7 @@ export class LearningAssetsService {
             difficulty: template.difficulty,
             exampleEn: template.exampleEn,
             exampleKo: template.exampleKo,
+            isCoreExpression: CORE_PATTERN_TEMPLATES.has(template.templateText),
             progress: progress
               ? {
                   status: progress.status,

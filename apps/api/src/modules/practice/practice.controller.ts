@@ -32,6 +32,7 @@ export class PracticeController {
       dto.testType,
       dto.promptKorean,
       dto.promptContext,
+      dto.promptTarget,
       dto.promptReadyAtMs,
       dto.responseStartedAtMs,
     );
@@ -52,6 +53,7 @@ export class PracticeController {
       dto.testType,
       dto.promptKorean,
       dto.promptContext,
+      dto.promptTarget,
       dto.promptReadyAtMs,
       dto.responseStartedAtMs,
     );

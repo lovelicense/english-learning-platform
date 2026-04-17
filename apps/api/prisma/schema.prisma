@@ -217,6 +217,11 @@ model Expression {
   englishBase String
   englishEasy String
   englishNatural String
+  situationPromptKorean String?
+  situationPromptContext String?
+  situationPromptTips String?
+  situationPromptVersion Int       @default(1)
+  situationPromptGeneratedAt DateTime?
   note        String?
   userMemo    String?
   ttsKey      String?
@@ -279,6 +284,7 @@ model PracticeLog {
   feedback     String
   strengthComment String?
   correctionComment String?
+  meaningComment String?
   suggestedAnswer String?
   suggestedAnswerAlt String?
   createdAt    DateTime    @default(now())

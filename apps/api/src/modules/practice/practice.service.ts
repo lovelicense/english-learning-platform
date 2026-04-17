@@ -103,6 +103,7 @@ export class PracticeService {
         feedback: log.feedback,
         strengthComment: log.strengthComment,
         correctionComment: log.correctionComment,
+        meaningComment: (log as any).meaningComment ?? null,
         suggestedAnswer: log.suggestedAnswer,
         suggestedAnswerAlt: log.suggestedAnswerAlt,
         createdAt: log.createdAt.toISOString(),
@@ -115,7 +116,37 @@ export class PracticeService {
     const expression = await this.prisma.expression.findFirst({ where: { id: expressionId, userId } });
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
 
-    return this.openai.generatePracticePrompt({
+    if (testType === 'situation') {
+      const storedSituationPrompt = await this.prisma.$queryRaw<
+        Array<{
+          situationPromptKorean: string | null;
+          situationPromptContext: string | null;
+          situationPromptTips: string | null;
+        }>
+      >(
+        Prisma.sql`
+          SELECT
+            "situationPromptKorean",
+            "situationPromptContext",
+            "situationPromptTips"
+          FROM "Expression"
+          WHERE "id" = ${expression.id}
+          LIMIT 1
+        `,
+      );
+      const cachedPrompt = storedSituationPrompt[0];
+      if (cachedPrompt?.situationPromptKorean) {
+        return {
+          testType: 'situation' as const,
+          promptKorean: cachedPrompt.situationPromptKorean,
+          promptContext: cachedPrompt.situationPromptContext ?? undefined,
+          tips: cachedPrompt.situationPromptTips ?? undefined,
+          target: expression.englishBase,
+        };
+      }
+    }
+
+    const prompt = await this.openai.generatePracticePrompt({
       koreanText: expression.koreanText,
       englishBase: expression.englishBase,
       englishEasy: expression.englishEasy,
@@ -123,6 +154,22 @@ export class PracticeService {
       note: expression.note ?? undefined,
       testType,
     });
+
+    if (testType === 'situation') {
+      await this.prisma.$executeRaw(
+        Prisma.sql`
+          UPDATE "Expression"
+          SET
+            "situationPromptKorean" = ${prompt.promptKorean},
+            "situationPromptContext" = ${prompt.promptContext ?? null},
+            "situationPromptTips" = ${prompt.tips ?? null},
+            "situationPromptGeneratedAt" = ${new Date()}
+          WHERE "id" = ${expression.id}
+        `,
+      );
+    }
+
+    return prompt;
   }
 
   async score(
@@ -132,6 +179,7 @@ export class PracticeService {
     testType: 'translation' | 'situation' | 'pattern' = 'translation',
     promptKorean?: string,
     promptContext?: string,
+    promptTarget?: string,
     promptReadyAtMs?: number,
     responseStartedAtMs?: number,
   ) {
@@ -169,6 +217,8 @@ export class PracticeService {
         : null;
     const isResponseTimedOut = responseLatencyMs !== null && responseLatencyMs > RESPONSE_START_LIMIT_MS;
 
+    const scoringTarget = promptTarget?.trim() || expression.englishBase;
+
     const evaluation = await this.openai.evaluatePracticeAnswer({
       koreanPrompt: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
@@ -179,7 +229,7 @@ export class PracticeService {
       sourceContextNote: expression.utterance?.contextNote ?? expression.savedSentence?.contextNote ?? undefined,
       conversationSummary: expression.utterance?.recording?.analysisSummary ?? expression.savedSentence?.analysisSummary ?? undefined,
       currentIntent: expression.utterance?.analysisIntent ?? expression.savedSentence?.analysisIntent ?? undefined,
-      targetEnglish: expression.englishBase,
+      targetEnglish: scoringTarget,
       userAnswer: answer.trim(),
       mode: 'text',
       testType,
@@ -198,7 +248,7 @@ export class PracticeService {
     const log = await this.createPracticeLogWithFallback({
       userId,
       expressionId,
-      target: expression.englishBase,
+      target: scoringTarget,
       answer,
       mode: 'text',
       testType,
@@ -212,6 +262,7 @@ export class PracticeService {
       feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
+      meaningComment: evaluation.meaningComment,
       suggestedAnswer: evaluation.suggestedAnswer,
       suggestedAnswerAlt: evaluation.suggestedAnswerAlt,
     });
@@ -227,9 +278,10 @@ export class PracticeService {
       feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
+      meaningComment: evaluation.meaningComment,
       suggestedAnswer: evaluation.suggestedAnswer,
       suggestedAnswerAlt: evaluation.suggestedAnswerAlt,
-      target: expression.englishBase,
+      target: scoringTarget,
       answer,
       responseLatencyMs,
       responseTimedOut: isResponseTimedOut,
@@ -245,6 +297,7 @@ export class PracticeService {
     testType: 'translation' | 'situation' | 'pattern' = 'translation',
     promptKorean?: string,
     promptContext?: string,
+    promptTarget?: string,
     promptReadyAtMs?: number,
     responseStartedAtMs?: number,
   ) {
@@ -292,6 +345,8 @@ export class PracticeService {
         : null;
     const isResponseTimedOut = responseLatencyMs !== null && responseLatencyMs > RESPONSE_START_LIMIT_MS;
 
+    const scoringTarget = promptTarget?.trim() || expression.englishBase;
+
     const evaluation = await this.openai.evaluatePracticeAnswer({
       koreanPrompt: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
@@ -302,7 +357,7 @@ export class PracticeService {
       sourceContextNote: expression.utterance?.contextNote ?? expression.savedSentence?.contextNote ?? undefined,
       conversationSummary: expression.utterance?.recording?.analysisSummary ?? expression.savedSentence?.analysisSummary ?? undefined,
       currentIntent: expression.utterance?.analysisIntent ?? expression.savedSentence?.analysisIntent ?? undefined,
-      targetEnglish: expression.englishBase,
+      targetEnglish: scoringTarget,
       userAnswer: answer,
       mode: 'voice',
       testType,
@@ -321,7 +376,7 @@ export class PracticeService {
     const log = await this.createPracticeLogWithFallback({
       userId,
       expressionId,
-      target: expression.englishBase,
+      target: scoringTarget,
       answer,
       audioKey,
       mode: 'voice',
@@ -336,6 +391,7 @@ export class PracticeService {
       feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
+      meaningComment: evaluation.meaningComment,
       suggestedAnswer: evaluation.suggestedAnswer,
       suggestedAnswerAlt: evaluation.suggestedAnswerAlt,
     });
@@ -351,9 +407,10 @@ export class PracticeService {
       feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
+      meaningComment: evaluation.meaningComment,
       suggestedAnswer: evaluation.suggestedAnswer,
       suggestedAnswerAlt: evaluation.suggestedAnswerAlt,
-      target: expression.englishBase,
+      target: scoringTarget,
       answer,
       audioUrl: await this.storage.createPresignedDownload(audioKey),
       responseLatencyMs,
@@ -380,6 +437,7 @@ export class PracticeService {
     feedback: string;
     strengthComment: string;
     correctionComment: string;
+    meaningComment: string;
     suggestedAnswer: string;
     suggestedAnswerAlt?: string;
   }) {
@@ -411,7 +469,8 @@ export class PracticeService {
       message.includes('testtype') ||
       message.includes('promptkorean') ||
       message.includes('recognizedanswer') ||
-      message.includes('meaningscore')
+      message.includes('meaningscore') ||
+      message.includes('meaningcomment')
     );
   }
 }

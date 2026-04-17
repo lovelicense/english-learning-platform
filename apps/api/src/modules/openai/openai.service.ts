@@ -86,6 +86,7 @@ type PracticeEvaluationResult = {
   feedback: string;
   strengthComment: string;
   correctionComment: string;
+  meaningComment: string;
   suggestedAnswer: string;
   suggestedAnswerAlt?: string;
 };
@@ -104,6 +105,8 @@ type PracticePromptResult = {
   promptKorean: string;
   promptContext?: string;
   target: string;
+  referenceTarget?: string;
+  targetAlt?: string;
   tips?: string;
   patternLabel?: string;
   patternDescription?: string;
@@ -307,7 +310,8 @@ export class OpenAiService {
             'Pay special attention to directional/confusable pairs such as take/bring, come/go, give/take, lend/borrow, and here/there.',
             'Provide concise Korean feedback.',
             'strengthComment: what the learner did well.',
-            'correctionComment: what to improve and why.',
+            'correctionComment: feedback based on the reference expression. Explain how the learner answer differs from the stored targetEnglish pattern and what to change if the learner wants to match that exact study expression more closely.',
+            'meaningComment: feedback based on meaning only. Explain whether the learner preserved the Korean prompt meaning, regardless of whether it exactly matches the stored reference expression.',
             'suggestedAnswer: a strong recommended answer that matches the Korean prompt meaning first.',
             'suggestedAnswerAlt: an alternative natural answer with the same meaning as the Korean prompt.',
             'If the provided reference expression appears semantically wrong, you may correct it in suggestedAnswer and mention the mismatch briefly in correctionComment.',
@@ -351,6 +355,7 @@ export class OpenAiService {
               feedback: { type: 'string' },
               strengthComment: { type: 'string' },
               correctionComment: { type: 'string' },
+              meaningComment: { type: 'string' },
               suggestedAnswer: { type: 'string' },
               suggestedAnswerAlt: { type: 'string' },
             },
@@ -362,6 +367,7 @@ export class OpenAiService {
               'feedback',
               'strengthComment',
               'correctionComment',
+              'meaningComment',
               'suggestedAnswer',
               'suggestedAnswerAlt',
             ],
@@ -388,6 +394,8 @@ export class OpenAiService {
       };
     }
 
+    const isPatternPrompt = input.testType === 'pattern';
+
     const response = await this.client.responses.create({
       model: process.env.OPENAI_LLM_MODEL ?? 'gpt-4.1-mini',
       input: [
@@ -397,7 +405,10 @@ export class OpenAiService {
             'You create Korean situation prompts for English speaking practice.',
             'Given a Korean source sentence and its English target, generate either a short Korean situation description or a pattern drill prompt.',
             'If testType is situation, create a short Korean situation description that helps the learner produce the target meaning, but do not reveal the exact answer.',
+            'For situation prompts, never include the exact target English, a near-copy of it, or a pattern label that reveals the answer.',
+            'For situation prompts, keep hints abstract and useful, but do not mention the exact target phrase or sentence structure verbatim.',
             'If testType is pattern, extract the reusable English pattern, explain it in Korean, and generate a new Korean prompt that can be answered with the same pattern.',
+            'If testType is pattern, also generate expectedAnswer and expectedAnswerAlt for that new Korean prompt.',
             'Return JSON only.',
           ].join(' '),
         },
@@ -425,10 +436,18 @@ export class OpenAiService {
               promptKorean: { type: 'string' },
               promptContext: { type: 'string' },
               tips: { type: 'string' },
-              patternLabel: { type: 'string' },
-              patternDescription: { type: 'string' },
+              ...(isPatternPrompt
+                ? {
+                    patternLabel: { type: 'string' },
+                    patternDescription: { type: 'string' },
+                    expectedAnswer: { type: 'string' },
+                    expectedAnswerAlt: { type: 'string' },
+                  }
+                : {}),
             },
-            required: ['promptKorean', 'promptContext', 'tips', 'patternLabel', 'patternDescription'],
+            required: isPatternPrompt
+              ? ['promptKorean', 'promptContext', 'tips', 'patternLabel', 'patternDescription', 'expectedAnswer', 'expectedAnswerAlt']
+              : ['promptKorean', 'promptContext', 'tips'],
           },
         },
       },
@@ -441,9 +460,11 @@ export class OpenAiService {
       promptKorean: parsed.promptKorean,
       promptContext: parsed.promptContext,
       tips: parsed.tips,
-      patternLabel: parsed.patternLabel,
-      patternDescription: parsed.patternDescription,
-      target: input.englishBase,
+      patternLabel: isPatternPrompt ? parsed.patternLabel : undefined,
+      patternDescription: isPatternPrompt ? parsed.patternDescription : undefined,
+      target: isPatternPrompt ? parsed.expectedAnswer : input.englishBase,
+      targetAlt: isPatternPrompt ? parsed.expectedAnswerAlt : undefined,
+      referenceTarget: isPatternPrompt ? input.englishBase : undefined,
     };
   }
 
@@ -713,8 +734,14 @@ export class OpenAiService {
           : '답변을 끝까지 영어로 만들려는 시도가 좋습니다.',
       correctionComment:
         score >= 90
-          ? '지금 답변도 충분히 좋습니다. 더 다양한 말투로도 연습해 보세요.'
-          : `기준 표현 "${input.targetEnglish}"를 중심으로 이유, 대상, 동작을 더 선명하게 넣어보세요.`,
+          ? `기준 표현 "${input.targetEnglish}"과 거의 같거나 매우 가깝습니다. 같은 패턴으로 반복해 익히면 좋아요.`
+          : `정답 기준 "${input.targetEnglish}"에 더 가깝게 맞추려면 핵심 패턴과 동작 표현을 그대로 살려 보세요.`,
+      meaningComment:
+        score >= 90
+          ? '한국어 문제의 핵심 의미가 정확하게 전달되었습니다.'
+          : score >= 70
+          ? '한국어 문제의 핵심 의미는 대체로 전달됐습니다. 다만 일부 뉘앙스를 더 선명하게 다듬을 수 있어요.'
+          : '한국어 문제의 핵심 의미가 일부만 전달됐습니다. 말하려는 대상, 동작, 상황을 더 분명하게 넣어보세요.',
       suggestedAnswer: input.targetEnglish,
       suggestedAnswerAlt: input.naturalAnswer ?? input.easyAnswer ?? input.targetEnglish,
     };
@@ -736,6 +763,8 @@ export class OpenAiService {
         promptKorean: '같은 영어 패턴으로 말할 수 있는 새로운 상황입니다. 영어로 답해보세요.',
         promptContext: `패턴 응용 상황: ${input.koreanText}와 비슷한 의미를 다른 장면에 맞게 영어로 표현해 보세요.`,
         target: input.englishBase,
+        targetAlt: input.englishNatural ?? input.englishEasy ?? input.englishBase,
+        referenceTarget: input.englishBase,
         tips: '문장 전체를 외우기보다 반복되는 틀을 잡아서 말해보세요.',
         patternLabel: '핵심 패턴 응용',
         patternDescription: '원래 문장의 영어 틀을 유지하면서 핵심 내용만 바꿔 말하는 연습입니다.',
@@ -748,8 +777,6 @@ export class OpenAiService {
       promptContext: `상황: ${input.koreanText}와 같은 의미를 상대에게 자연스럽게 전달하는 장면입니다.`,
       target: input.englishBase,
       tips: '직역보다 실제 대화처럼 자연스럽게 말해보세요.',
-      patternLabel: '상황형 응용',
-      patternDescription: '문맥을 보고 가장 자연스러운 영어 표현을 떠올리는 연습입니다.',
     };
   }
 

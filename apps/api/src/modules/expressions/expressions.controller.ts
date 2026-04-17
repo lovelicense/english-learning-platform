@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GenerateExpressionDto } from './dto/generate-expression.dto';
 import { GenerateRecordingExpressionsDto } from './dto/generate-recording-expressions.dto';
 import { GenerateRecordingTtsDto } from './dto/generate-recording-tts.dto';
+import { SavePracticeExpressionDto } from './dto/save-practice-expression.dto';
 import { UpdateExpressionMemoDto } from './dto/update-expression-memo.dto';
 import { ExpressionsService } from './expressions.service';
 
@@ -15,6 +16,11 @@ export class ExpressionsController {
   @Post('generate')
   generate(@CurrentUser('userId') userId: string, @Body() dto: GenerateExpressionDto) {
     return this.expressionsService.generate(userId, dto);
+  }
+
+  @Post('save-practice')
+  savePracticeExpression(@CurrentUser('userId') userId: string, @Body() dto: SavePracticeExpressionDto) {
+    return this.expressionsService.savePracticeExpression(userId, dto);
   }
 
   @Post('generate/bulk')

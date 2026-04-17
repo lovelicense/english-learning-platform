@@ -32,6 +32,10 @@ export class ScorePracticeDto {
   promptContext?: string;
 
   @IsOptional()
+  @IsString()
+  promptTarget?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(0)
   promptReadyAtMs?: number;
@@ -76,6 +80,10 @@ export class ScoreVoicePracticeDto {
   @IsOptional()
   @IsString()
   promptContext?: string;
+
+  @IsOptional()
+  @IsString()
+  promptTarget?: string;
 
   @IsOptional()
   @IsInt()
