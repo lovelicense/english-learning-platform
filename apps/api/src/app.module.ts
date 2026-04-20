@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './modules/auth/auth.module';
 import { DbModule } from './modules/db/db.module';
 import { ExpressionsModule } from './modules/expressions/expressions.module';
+import { ExportsModule } from './modules/exports/exports.module';
 import { HealthModule } from './modules/health/health.module';
 import { LearningAssetsModule } from './modules/learning-assets/learning-assets.module';
 import { OpenAiModule } from './modules/openai/openai.module';
@@ -27,6 +28,7 @@ import { UsersModule } from './modules/users/users.module';
     RecordingSessionsModule,
     RecordingsModule,
     ExpressionsModule,
+    ExportsModule,
     LearningAssetsModule,
     PracticeModule,
     ReviewsModule,

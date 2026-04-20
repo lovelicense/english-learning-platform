@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch, createPresignedUploadTask } from "../../lib/api-client";
+import { apiFetch, createPresignedUploadTask, downloadApiFile } from "../../lib/api-client";
 import { normalizeAudioFileForUpload, prepareAudioChunksForUpload } from "../../lib/audio-split";
 import { clearSession, getStoredUser, getToken } from "../../lib/auth";
 import {
@@ -94,6 +94,14 @@ type Expression = {
   sourceContextNote?: string | null;
   practiceCount?: number;
   latestPracticeScore?: number | null;
+  createdAt?: string;
+  utterance?: {
+    recording?: {
+      id: string;
+      fileName?: string | null;
+      createdAt?: string;
+    } | null;
+  } | null;
 };
 type TtsResponse = {
   expressionId: string;
@@ -131,6 +139,7 @@ type PracticeScore = {
   feedback: string;
   strengthComment?: string;
   correctionComment?: string;
+  meaningComment?: string;
   suggestedAnswer?: string;
   suggestedAnswerAlt?: string;
   target: string;
@@ -153,6 +162,8 @@ type ReviewItem = {
   practiceAudioUrl?: string | null;
 };
 type ReviewStrategy = "system" | "low_score" | "stale" | "voice_gap" | "random";
+type ExpressionBrowserScope = "recording" | "all";
+type PracticeFlowMode = "single" | "review_once" | "review_series";
 type PracticeHistoryItem = {
   id: string;
   expressionId: string;
@@ -172,6 +183,7 @@ type PracticeHistoryItem = {
   feedback: string;
   strengthComment?: string | null;
   correctionComment?: string | null;
+  meaningComment?: string | null;
   suggestedAnswer?: string | null;
   suggestedAnswerAlt?: string | null;
   createdAt: string;
@@ -231,6 +243,7 @@ type LearningPatternTemplate = {
   difficulty?: number | null;
   exampleEn?: string | null;
   exampleKo?: string | null;
+  isCoreExpression: boolean;
   progress: {
     status: "COLLECTED" | "RECOGNIZED" | "PRACTICING" | "USABLE_IN_SPEAKING" | "AUTOMATED";
     successCount: number;
@@ -292,14 +305,27 @@ type LearningAssetsCatalog = {
 
 function MetricHelpButton({ label, description }: { label: string; description: string }) {
   return (
-    <button
-      type="button"
-      className="help-icon-button"
-      title={description}
-      aria-label={`${label} 도움말`}
-    >
-      ?
-    </button>
+    <span className="help-tooltip">
+      <button
+        type="button"
+        className="help-icon-button"
+        aria-label={`${label} 도움말`}
+      >
+        ?
+      </button>
+      <span role="tooltip" className="help-tooltip-bubble">
+        {description}
+      </span>
+    </span>
+  );
+}
+
+function FieldHelpLabel({ label, description }: { label: string; description: string }) {
+  return (
+    <div className="row" style={{ alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
+      <strong>{label}</strong>
+      <MetricHelpButton label={label} description={description} />
+    </div>
   );
 }
 type PracticeVoicePresignResponse = { key: string; uploadUrl: string };
@@ -348,10 +374,21 @@ type PracticePrompt = {
   promptKorean: string;
   promptContext?: string;
   target: string;
+  referenceTarget?: string;
+  targetAlt?: string;
   tips?: string;
   patternLabel?: string;
   patternDescription?: string;
 };
+
+function buildTranslationPracticePrompt(expression: Expression): PracticePrompt {
+  return {
+    testType: "translation",
+    promptKorean: expression.koreanText,
+    target: expression.englishBase,
+    tips: "핵심 의미를 살려 자연스럽게 영어로 말해보세요.",
+  };
+}
 type RecordingAnalysis = {
   summary: string;
   intents: Array<{
@@ -464,6 +501,7 @@ const DEFAULT_PREVIEW_COUNTS = {
   utterances: 6,
   expressions: 6,
   reviews: 4,
+  practiceHistory: 6,
   ttsLibrary: 4,
 } as const;
 const LIST_INCREMENT_SMALL = 5;
@@ -483,8 +521,17 @@ const DASHBOARD_SECTION_TABS = [
   { id: "recordings", label: "녹음 목록" },
   { id: "recordingDetail", label: "녹음 상세" },
   { id: "expressions", label: "표현" },
-  { id: "practice", label: "테스트" },
-  { id: "reviews", label: "복습" },
+  { id: "practice", label: "연습" },
+  { id: "practiceHistory", label: "기록" },
+  { id: "ttsLibrary", label: "TTS" },
+] as const;
+
+const MOBILE_DASHBOARD_SECTION_TABS = [
+  { id: "autoFlow", label: "원클릭" },
+  { id: "recordings", label: "녹음" },
+  { id: "expressions", label: "표현" },
+  { id: "practice", label: "연습" },
+  { id: "practiceHistory", label: "기록" },
   { id: "ttsLibrary", label: "TTS" },
 ] as const;
 
@@ -582,6 +629,8 @@ export default function DashboardPage() {
   const [expressions, setExpressions] = useState<Expression[]>([]);
   const [selectedExpressionId, setSelectedExpressionId] = useState("");
   const [expressionMemoDraft, setExpressionMemoDraft] = useState("");
+  const [expressionBrowserScope, setExpressionBrowserScope] = useState<ExpressionBrowserScope>("recording");
+  const [expressionQuery, setExpressionQuery] = useState("");
   const [ttsUrl, setTtsUrl] = useState("");
   const [testMode, setTestMode] = useState<"text" | "voice">("voice");
   const [practiceTestType, setPracticeTestType] = useState<"translation" | "situation" | "pattern">("translation");
@@ -592,9 +641,15 @@ export default function DashboardPage() {
   const [answer, setAnswer] = useState("");
   const [voiceAnswerFile, setVoiceAnswerFile] = useState<File | null>(null);
   const [score, setScore] = useState<PracticeScore | null>(null);
+  const [savedPatternExpression, setSavedPatternExpression] = useState<{
+    id: string;
+    hasEnglishTts: boolean;
+    hasKoreanTts: boolean;
+  } | null>(null);
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
   const [practiceHistory, setPracticeHistory] = useState<PracticeHistoryItem[]>([]);
   const [reviewStrategy, setReviewStrategy] = useState<ReviewStrategy>("system");
+  const [practiceFlowMode, setPracticeFlowMode] = useState<PracticeFlowMode>("single");
   const [reviewAutoAdvance, setReviewAutoAdvance] = useState(false);
   const [reviewReadQuestion, setReviewReadQuestion] = useState(false);
   const [pendingAutoReview, setPendingAutoReview] = useState<ReviewItem | null>(null);
@@ -628,6 +683,7 @@ export default function DashboardPage() {
   const [ttsLibraryRepeatCount, setTtsLibraryRepeatCount] = useState<1 | 2 | 3>(1);
   const [ttsLibraryGapMs, setTtsLibraryGapMs] = useState(0);
   const [ttsLibraryIncludeKorean, setTtsLibraryIncludeKorean] = useState(false);
+  const [ttsLibraryQuery, setTtsLibraryQuery] = useState("");
   const [isTtsLibraryPlaying, setIsTtsLibraryPlaying] = useState(false);
   const [isTtsLibraryPreparing, setIsTtsLibraryPreparing] = useState(false);
   const [ttsLibraryCurrentExpressionId, setTtsLibraryCurrentExpressionId] = useState("");
@@ -643,23 +699,28 @@ export default function DashboardPage() {
     isActive: false,
   });
   const [failedManualChunks, setFailedManualChunks] = useState<FailedManualChunk[]>([]);
-  const [expandedSections, setExpandedSections] = useState<Record<"recordings" | "expressions" | "practice" | "reviews" | "practiceHistory" | "ttsLibrary", boolean>>({
+  const [expandedSections, setExpandedSections] = useState<Record<"recordings" | "expressions" | "practice" | "practiceHistory" | "ttsLibrary", boolean>>({
     recordings: true,
     expressions: true,
     practice: true,
-    reviews: false,
     practiceHistory: false,
     ttsLibrary: false,
   });
   const [learningProgressOpen, setLearningProgressOpen] = useState(false);
   const [personDictionaryOpen, setPersonDictionaryOpen] = useState(false);
   const [assetSectionOpen, setAssetSectionOpen] = useState(false);
+  const [exportSectionOpen, setExportSectionOpen] = useState(false);
   const [patternAssetOpen, setPatternAssetOpen] = useState(false);
   const [vocabularyAssetOpen, setVocabularyAssetOpen] = useState(false);
+  const [patternAssetQuery, setPatternAssetQuery] = useState("");
+  const [patternAssetCoreOnly, setPatternAssetCoreOnly] = useState(false);
+  const [vocabularyAssetQuery, setVocabularyAssetQuery] = useState("");
   const [visibleCounts, setVisibleCounts] = useState<Record<keyof typeof DEFAULT_PREVIEW_COUNTS, number>>(DEFAULT_PREVIEW_COUNTS);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ttsLibraryAudioRef = useRef<HTMLAudioElement | null>(null);
+  const practiceReferenceAudioRef = useRef<HTMLAudioElement | null>(null);
   const expressionDetailRef = useRef<HTMLDivElement | null>(null);
+  const practiceMainCardRef = useRef<HTMLDivElement | null>(null);
   const recordingDetailRef = useRef<HTMLDivElement | null>(null);
   const rawAudioRef = useRef<HTMLAudioElement | null>(null);
   const personDictionarySectionRef = useRef<HTMLElement | null>(null);
@@ -671,13 +732,15 @@ export default function DashboardPage() {
   const vocabularyAssetsSectionRef = useRef<HTMLElement | null>(null);
   const recordingsSectionRef = useRef<HTMLElement | null>(null);
   const expressionsSectionRef = useRef<HTMLElement | null>(null);
-  const reviewsSectionRef = useRef<HTMLElement | null>(null);
+  const practiceHistorySectionRef = useRef<HTMLElement | null>(null);
   const ttsLibrarySectionRef = useRef<HTMLElement | null>(null);
   const answerRef = useRef<HTMLTextAreaElement | null>(null);
   const recordingSessionRef = useRef<{ stop: () => void; cancel: () => void } | null>(null);
   const practiceRecordingSessionRef = useRef<RecordingSession | null>(null);
   const practiceAutoStartTimeoutRef = useRef<number | null>(null);
   const practiceAutoStartIntervalRef = useRef<number | null>(null);
+  const reviewAutoAdvanceTimeoutRef = useRef<number | null>(null);
+  const reviewAutoAdvanceScrollTimeoutRef = useRef<number | null>(null);
   const reviewQuestionSpeechRef = useRef<SpeechSynthesisUtterance | null>(null);
   const uploadTaskRef = useRef<ReturnType<typeof createPresignedUploadTask> | null>(null);
   const abortControllersRef = useRef<AbortController[]>([]);
@@ -712,9 +775,41 @@ export default function DashboardPage() {
     () => (recording ? recordingExpressions : savedSentenceExpressions),
     [recording, recordingExpressions, savedSentenceExpressions],
   );
+  const browsedExpressions = useMemo(
+    () => (expressionBrowserScope === "all" ? expressions : sectionExpressions),
+    [expressionBrowserScope, expressions, sectionExpressions],
+  );
+  const filteredExpressions = useMemo(() => {
+    const query = expressionQuery.trim().toLowerCase();
+    if (!query) return browsedExpressions;
+    return browsedExpressions.filter((expression) =>
+      [
+        expression.koreanText,
+        expression.englishBase,
+        expression.englishEasy,
+        expression.englishNatural,
+        expression.note ?? "",
+        expression.userMemo ?? "",
+        expression.sourceAnalysisSummary ?? "",
+        expression.sourceAnalysisIntent ?? "",
+        expression.sourceRelationship ?? "",
+        expression.sourceSituation ?? "",
+        expression.sourceTone ?? "",
+        expression.sourceContextNote ?? "",
+        expression.utterance?.recording?.fileName ?? "",
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [browsedExpressions, expressionQuery]);
   const selectedSectionExpression = useMemo(
     () => sectionExpressions.find((item) => item.id === selectedExpressionId) ?? null,
     [sectionExpressions, selectedExpressionId],
+  );
+  const selectedBrowserExpression = useMemo(
+    () => filteredExpressions.find((item) => item.id === selectedExpressionId) ?? filteredExpressions[0] ?? null,
+    [filteredExpressions, selectedExpressionId],
   );
   const utteranceExpressionIds = useMemo(
     () => new Set(recordingExpressions.map((item) => item.utteranceId).filter((value): value is string => Boolean(value))),
@@ -746,6 +841,64 @@ export default function DashboardPage() {
     () => expressions.filter((expression) => Boolean(expression.ttsKey && expression.ttsUrl)),
     [expressions],
   );
+  const filteredCompletedTtsExpressions = useMemo(() => {
+    const query = ttsLibraryQuery.trim().toLowerCase();
+    if (!query) return completedTtsExpressions;
+    return completedTtsExpressions.filter((expression) =>
+      `${expression.englishBase} ${expression.koreanText}`.toLowerCase().includes(query),
+    );
+  }, [completedTtsExpressions, ttsLibraryQuery]);
+  const filteredPatternCategories = useMemo(() => {
+    const categories = learningAssetsCatalog?.patternCategories ?? [];
+    const query = patternAssetQuery.trim().toLowerCase();
+    return categories
+      .map((category) => ({
+        ...category,
+        templates: category.templates.filter((template) => {
+          if (patternAssetCoreOnly && !template.isCoreExpression) {
+            return false;
+          }
+          if (!query) {
+            return true;
+          }
+          return [
+            template.templateText,
+            template.meaningKo,
+            template.usageNote ?? "",
+            template.exampleEn ?? "",
+            template.exampleKo ?? "",
+            ...template.expressions.flatMap((expression) => [expression.englishBase, expression.koreanText, expression.englishNatural]),
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(query);
+        }),
+      }))
+      .filter((category) => category.templates.length > 0);
+  }, [learningAssetsCatalog, patternAssetCoreOnly, patternAssetQuery]);
+  const filteredVocabularyCategories = useMemo(() => {
+    const categories = learningAssetsCatalog?.vocabularyCategories ?? [];
+    const query = vocabularyAssetQuery.trim().toLowerCase();
+    if (!query) return categories;
+    return categories
+      .map((category) => ({
+        ...category,
+        items: category.items.filter((item) =>
+          [
+            item.lemma,
+            item.meaningKo,
+            item.exampleEn ?? "",
+            item.exampleKo ?? "",
+            item.partOfSpeech,
+            ...item.expressions.flatMap((expression) => [expression.englishBase, expression.koreanText, expression.englishNatural]),
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(query),
+        ),
+      }))
+      .filter((category) => category.items.length > 0);
+  }, [learningAssetsCatalog, vocabularyAssetQuery]);
   const visibleRecordings = useMemo(
     () => recordings.slice(0, visibleCounts.recordings),
     [recordings, visibleCounts.recordings],
@@ -755,16 +908,20 @@ export default function DashboardPage() {
     [recording, visibleCounts.utterances],
   );
   const visibleExpressions = useMemo(
-    () => sectionExpressions.slice(0, visibleCounts.expressions),
-    [sectionExpressions, visibleCounts.expressions],
+    () => filteredExpressions.slice(0, visibleCounts.expressions),
+    [filteredExpressions, visibleCounts.expressions],
   );
   const visibleReviews = useMemo(
     () => reviews.slice(0, visibleCounts.reviews),
     [reviews, visibleCounts.reviews],
   );
+  const visiblePracticeHistory = useMemo(
+    () => practiceHistory.slice(0, visibleCounts.practiceHistory),
+    [practiceHistory, visibleCounts.practiceHistory],
+  );
   const visibleCompletedTtsExpressions = useMemo(
-    () => completedTtsExpressions.slice(0, visibleCounts.ttsLibrary),
-    [completedTtsExpressions, visibleCounts.ttsLibrary],
+    () => filteredCompletedTtsExpressions.slice(0, visibleCounts.ttsLibrary),
+    [filteredCompletedTtsExpressions, visibleCounts.ttsLibrary],
   );
   const activeReviewIndex = useMemo(
     () => (activeReviewExpressionId ? reviews.findIndex((item) => item.id === activeReviewExpressionId) : -1),
@@ -772,21 +929,13 @@ export default function DashboardPage() {
   );
   const activeReviewItem = activeReviewIndex >= 0 ? reviews[activeReviewIndex] ?? null : null;
   const nextReviewItem = activeReviewIndex >= 0 ? reviews[activeReviewIndex + 1] ?? null : null;
+  const practiceFocusLabel =
+    practiceFlowMode === "review_series"
+      ? "연속 복습"
+      : practiceFlowMode === "review_once"
+      ? "복습 1건"
+      : "단일 연습";
 
-  useEffect(() => {
-    if (!pendingAutoReview) return;
-    if (!reviewAutoAdvance) {
-      setPendingAutoReview(null);
-      return;
-    }
-    if (loading) return;
-
-    setPendingAutoReview(null);
-    void handleStartReviewPractice(pendingAutoReview, "translation", { autoAdvance: true });
-    window.setTimeout(() => {
-      scrollToDashboardSection("practice");
-    }, 100);
-  }, [pendingAutoReview, loading, reviewAutoAdvance]);
   const speakerOptions = useMemo(() => {
     const seen = new Set<string>();
     return (recording?.utterances ?? []).filter((utterance) => {
@@ -802,10 +951,10 @@ export default function DashboardPage() {
   const selectedExpressionIntent = selectedExpression?.utteranceId
     ? intentByUtteranceId.get(selectedExpression.utteranceId) ?? ""
     : "";
-  const selectedSectionExpressionIntent =
-    selectedSectionExpression?.utteranceId
-      ? intentByUtteranceId.get(selectedSectionExpression.utteranceId) ?? ""
-      : selectedSectionExpression?.sourceAnalysisIntent ?? "";
+  const selectedBrowserExpressionIntent =
+    selectedBrowserExpression?.utteranceId
+      ? intentByUtteranceId.get(selectedBrowserExpression.utteranceId) ?? ""
+      : selectedBrowserExpression?.sourceAnalysisIntent ?? "";
   const isPracticeQuestionPending = activeReviewExpressionId !== null && reviewReadQuestion && practicePromptReadyAtMs === null;
   const visibleRecordingSummary = recordingAnalysis?.summary ?? recording?.analysisSummary ?? "";
   const hasUnsavedContextChanges = !contextsEqual(recordingContextDraft, recordingContext);
@@ -868,18 +1017,33 @@ export default function DashboardPage() {
   }, [selectedExpression]);
 
   useEffect(() => {
+    if (!expressions.length) {
+      if (selectedExpressionId) {
+        setSelectedExpressionId("");
+      }
+      return;
+    }
+    if (!selectedExpressionId) {
+      setSelectedExpressionId(filteredExpressions[0]?.id ?? expressions[0]?.id ?? "");
+      return;
+    }
+    if (!expressions.some((expression) => expression.id === selectedExpressionId)) {
+      setSelectedExpressionId(filteredExpressions[0]?.id ?? expressions[0]?.id ?? "");
+    }
+  }, [expressions, filteredExpressions, selectedExpressionId]);
+
+  useEffect(() => {
     if (!selectedExpression) {
       setPracticePrompt(null);
       return;
     }
     setPracticeTestType("translation");
-    setPracticePrompt({
-      testType: "translation",
-      promptKorean: selectedExpression.koreanText,
-      target: selectedExpression.englishBase,
-      tips: "핵심 의미를 살려 자연스럽게 영어로 말해보세요.",
-    });
-  }, [selectedExpression]);
+    setPracticePrompt(buildTranslationPracticePrompt(selectedExpression));
+  }, [selectedExpression?.id]);
+
+  useEffect(() => {
+    setSavedPatternExpression(null);
+  }, [practicePrompt?.testType, practicePrompt?.promptKorean, practicePrompt?.target, score?.id]);
 
   useEffect(() => {
     if (!recording?.id) {
@@ -947,7 +1111,7 @@ export default function DashboardPage() {
       apiFetch<MeResponse>("/auth/me"),
       apiFetch<Expression[]>("/expressions").catch(() => []),
       fetchReviewList(reviewStrategy),
-      apiFetch<PracticeHistoryItem[]>("/practice/logs?limit=12").catch(() => []),
+      apiFetch<PracticeHistoryItem[]>("/practice/logs?limit=50").catch(() => []),
       apiFetch<RecordingSummary[]>("/recordings").catch(() => []),
       apiFetch<PersonProfile[]>("/person-profiles").catch(() => []),
       apiFetch<LearningAssetsProgress>("/learning-assets/progress").catch(() => null),
@@ -1299,7 +1463,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     const [expressionList, reviewList, historyList, learningAssets, learningCatalog] = await Promise.all([
       apiFetch<Expression[]>("/expressions"),
       fetchReviewList(reviewStrategy),
-      apiFetch<PracticeHistoryItem[]>("/practice/logs?limit=12").catch(() => []),
+      apiFetch<PracticeHistoryItem[]>("/practice/logs?limit=50").catch(() => []),
       apiFetch<LearningAssetsProgress>("/learning-assets/progress").catch(() => null),
       apiFetch<LearningAssetsCatalog>("/learning-assets/catalog").catch(() => null),
     ]);
@@ -1364,7 +1528,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       recordingDetail: recordingDetailRef,
       expressions: expressionsSectionRef,
       practice: testSectionRef,
-      reviews: reviewsSectionRef,
+      practiceHistory: practiceHistorySectionRef,
       ttsLibrary: ttsLibrarySectionRef,
     } as const;
 
@@ -1408,7 +1572,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       { id: "recordingDetail", ref: recordingDetailRef },
       { id: "expressions", ref: expressionsSectionRef },
       { id: "practice", ref: testSectionRef },
-      { id: "reviews", ref: reviewsSectionRef },
+      { id: "practiceHistory", ref: practiceHistorySectionRef },
       { id: "ttsLibrary", ref: ttsLibrarySectionRef },
     ] as const;
 
@@ -1442,12 +1606,33 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
 
   function selectExpressionForPractice(expression: Expression) {
     clearPracticeAutoStartCountdown();
+    setPracticeFlowMode("single");
+    setReviewAutoAdvance(false);
+    setPendingAutoReview(null);
+    setActiveReviewExpressionId(null);
     setSelectedExpressionId(expression.id);
     setPracticePromptReadyAtMs(Date.now());
     setPracticeResponseStartedAtMs(null);
     setScore(null);
     setTtsUrl(expression.ttsUrl ?? "");
     scrollToDashboardSection("practice");
+  }
+
+  async function handlePlayPracticeReferenceTts() {
+    if (!selectedExpression?.ttsUrl) {
+      setError("정답 기준 영어 음성이 아직 준비되지 않았습니다.");
+      return;
+    }
+
+    try {
+      const player = practiceReferenceAudioRef.current;
+      if (!player) return;
+      player.src = selectedExpression.ttsUrl;
+      player.load();
+      await player.play();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "정답 기준 음성을 재생하지 못했습니다.");
+    }
   }
 
   function expandList(list: keyof typeof DEFAULT_PREVIEW_COUNTS, amount: number | "all", total: number) {
@@ -1459,6 +1644,25 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
 
   function collapseList(list: keyof typeof DEFAULT_PREVIEW_COUNTS) {
     setVisibleCounts((current) => ({ ...current, [list]: DEFAULT_PREVIEW_COUNTS[list] }));
+  }
+
+  async function handleDownloadAssetExport(assetType: "korean" | "english", format: "json" | "csv") {
+    setError("");
+    setMessage("");
+    setLoading(`export-${assetType}-${format}`);
+    try {
+      const fileName = `english-learning-${assetType}-assets.${format}`;
+      await downloadApiFile(`/exports/assets/${assetType}?format=${format}`, fileName);
+      setMessage(
+        assetType === "korean"
+          ? `한글표현 자산을 ${format.toUpperCase()}로 내보냈습니다.`
+          : `영어표현 자산을 ${format.toUpperCase()}로 내보냈습니다.`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "데이터 export에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
   }
 
   function renderListControls(list: keyof typeof DEFAULT_PREVIEW_COUNTS, total: number) {
@@ -1536,6 +1740,14 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     window.requestAnimationFrame(() => {
       recordingDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       recordingDetailRef.current?.focus({ preventScroll: true });
+    });
+  }
+
+  function focusPracticeMainCard() {
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      practiceMainCardRef.current?.focus({ preventScroll: true });
+      answerRef.current?.focus();
     });
   }
 
@@ -1696,7 +1908,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
   }
 
   async function startTtsLibraryPlayback() {
-    if (completedTtsExpressions.length === 0) {
+    if (filteredCompletedTtsExpressions.length === 0) {
       setError("재생할 TTS 완료 표현이 없습니다.");
       return;
     }
@@ -1705,8 +1917,8 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     setError("");
     setMessage("");
     const playbackExpressions = ttsLibraryIncludeKorean
-      ? completedTtsExpressions.filter((item) => item.koreanTtsUrl)
-      : completedTtsExpressions;
+      ? filteredCompletedTtsExpressions.filter((item) => item.koreanTtsUrl)
+      : filteredCompletedTtsExpressions;
     if (playbackExpressions.length === 0) {
       setError("한국어 포함 재생에 필요한 한국어 TTS가 아직 없습니다. TTS를 다시 생성해 주세요.");
       return;
@@ -1729,8 +1941,8 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       sessionId: nextSessionId,
     };
     ttsLibraryPlaybackPlanRef.current = plan;
-    if (ttsLibraryIncludeKorean && playbackExpressions.length < completedTtsExpressions.length) {
-      setMessage(`한국어 TTS가 없는 표현 ${completedTtsExpressions.length - playbackExpressions.length}개는 제외하고 재생합니다.`);
+    if (ttsLibraryIncludeKorean && playbackExpressions.length < filteredCompletedTtsExpressions.length) {
+      setMessage(`한국어 TTS가 없는 표현 ${filteredCompletedTtsExpressions.length - playbackExpressions.length}개는 제외하고 재생합니다.`);
     }
     await playTtsLibraryPlanStep(plan);
   }
@@ -2726,32 +2938,48 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     koreanTtsUrl?: string | null;
     ttsUrl?: string | null;
   }) {
-    const target = expression ?? selectedSectionExpression ?? selectedExpression;
+    const target = expression ?? selectedBrowserExpression ?? selectedExpression;
     if (!target?.ttsUrl) {
       setError("영어 TTS 재생 URL이 없습니다.");
       return;
     }
 
-    const playEnglish = async () => {
-      const player = audioRef.current;
-      if (!player) return;
-      player.src = target.ttsUrl!;
+    const player = audioRef.current;
+    if (!player) return;
+
+    const playUrl = async (url: string, errorMessage: string) => {
+      player.src = url;
       player.load();
-      await player.play();
+      await new Promise<void>((resolve, reject) => {
+        const handleEnded = () => {
+          cleanup();
+          resolve();
+        };
+        const handleError = () => {
+          cleanup();
+          reject(new Error(errorMessage));
+        };
+        const cleanup = () => {
+          player.onended = null;
+          player.onerror = null;
+        };
+
+        player.onended = handleEnded;
+        player.onerror = handleError;
+        player.play().catch((err) => {
+          cleanup();
+          reject(err instanceof Error ? err : new Error(errorMessage));
+        });
+      });
     };
 
     if (!target.koreanTtsUrl) {
-      await playEnglish();
+      await playUrl(target.ttsUrl, "영어 TTS 재생에 실패했습니다.");
       return;
     }
 
-    const koreanAudio = new Audio(target.koreanTtsUrl);
-    await new Promise<void>((resolve, reject) => {
-      koreanAudio.onended = () => resolve();
-      koreanAudio.onerror = () => reject(new Error("한국어 TTS 음성 파일을 재생하지 못했습니다."));
-      koreanAudio.play().catch((err) => reject(err instanceof Error ? err : new Error("한국어 TTS 재생에 실패했습니다.")));
-    });
-    await playEnglish();
+    await playUrl(target.koreanTtsUrl, "한국어 TTS 재생에 실패했습니다.");
+    await playUrl(target.ttsUrl, "영어 TTS 재생에 실패했습니다.");
   }
 
   async function handleGenerateTtsBulk() {
@@ -2849,16 +3077,128 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     }
   }
 
+  async function handleSavePatternPracticeExpression() {
+    if (!practicePrompt || practicePrompt.testType !== "pattern") {
+      setError("패턴형 문제 결과만 표현 자산으로 저장할 수 있습니다.");
+      return;
+    }
+    if (savedPatternExpression) {
+      setMessage("이 패턴형 문제 결과는 이미 표현 자산으로 저장했습니다.");
+      return;
+    }
+
+    const koreanText = practicePrompt.promptKorean?.trim();
+    const englishBase = score?.suggestedAnswer?.trim() || practicePrompt.target?.trim();
+    const englishNatural = score?.suggestedAnswerAlt?.trim() || practicePrompt.targetAlt?.trim() || englishBase;
+
+    if (!koreanText || !englishBase) {
+      setError("저장할 문제 문장 또는 영어 표현이 없습니다.");
+      return;
+    }
+
+    const noteParts = [
+      practicePrompt.patternLabel ? `패턴: ${practicePrompt.patternLabel}` : null,
+      practicePrompt.patternDescription ?? null,
+      practicePrompt.referenceTarget ? `원래 대표 표현: ${practicePrompt.referenceTarget}` : null,
+    ].filter(Boolean);
+
+    setError("");
+    setMessage("");
+    setLoading("save-pattern-expression");
+    try {
+      const created = await apiFetch<Expression>("/expressions/save-practice", {
+        method: "POST",
+        body: JSON.stringify({
+          koreanText,
+          englishBase,
+          englishEasy: practicePrompt.target,
+          englishNatural,
+          promptContext: practicePrompt.promptContext,
+          note: noteParts.join("\n"),
+        }),
+      });
+      await refreshLists(created.id);
+      setSavedPatternExpression({
+        id: created.id,
+        hasEnglishTts: Boolean(created.ttsUrl),
+        hasKoreanTts: Boolean(created.koreanTtsUrl),
+      });
+      setMessage(
+        created.ttsUrl || created.koreanTtsUrl
+          ? "패턴형 문제를 새 표현 자산으로 저장했고, TTS도 함께 준비했습니다."
+          : "패턴형 문제를 새 표현 자산으로 저장했습니다.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "패턴형 표현 저장에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
   function resetPracticeResponseTiming() {
     setPracticePromptReadyAtMs(null);
     setPracticeResponseStartedAtMs(null);
   }
 
+  function clearReviewAutoAdvanceTimers() {
+    if (reviewAutoAdvanceTimeoutRef.current !== null) {
+      window.clearTimeout(reviewAutoAdvanceTimeoutRef.current);
+      reviewAutoAdvanceTimeoutRef.current = null;
+    }
+    if (reviewAutoAdvanceScrollTimeoutRef.current !== null) {
+      window.clearTimeout(reviewAutoAdvanceScrollTimeoutRef.current);
+      reviewAutoAdvanceScrollTimeoutRef.current = null;
+    }
+  }
+
   function setReviewAutoAdvanceEnabled(enabled: boolean) {
     setReviewAutoAdvance(enabled);
     if (!enabled) {
+      clearReviewAutoAdvanceTimers();
       setPendingAutoReview(null);
     }
+    setPracticeFlowMode(enabled ? "review_series" : (activeReviewExpressionId ? "review_once" : "single"));
+  }
+
+  function switchToSinglePracticeMode() {
+    clearPracticeAutoStartCountdown();
+    clearReviewAutoAdvanceTimers();
+    setPracticeFlowMode("single");
+    setReviewAutoAdvance(false);
+    setPendingAutoReview(null);
+    setActiveReviewExpressionId(null);
+  }
+
+  function triggerAutoAdvanceToReview(nextReview: ReviewItem) {
+    clearReviewAutoAdvanceTimers();
+    setPendingAutoReview(nextReview);
+    reviewAutoAdvanceTimeoutRef.current = window.setTimeout(() => {
+      reviewAutoAdvanceTimeoutRef.current = null;
+      setPendingAutoReview(null);
+      void handleStartReviewPractice(nextReview, "translation", { autoAdvance: true });
+      reviewAutoAdvanceScrollTimeoutRef.current = window.setTimeout(() => {
+        reviewAutoAdvanceScrollTimeoutRef.current = null;
+        testSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        focusPracticeMainCard();
+      }, 100);
+    }, 180);
+  }
+
+  async function handleStartReviewFlow(mode: "review_once" | "review_series") {
+    if (reviews.length === 0) {
+      setError("오늘의 복습 항목이 없습니다.");
+      return;
+    }
+
+    const targetReview = activeReviewItem ?? reviews[0];
+    setPracticeFlowMode(mode);
+    setReviewAutoAdvance(mode === "review_series");
+    setPendingAutoReview(null);
+    await handleStartReviewPractice(
+      targetReview,
+      mode === "review_series" ? "translation" : (targetReview.recommendedTestType ?? "translation"),
+      { autoAdvance: mode === "review_series" },
+    );
   }
 
   async function handleMoveToNextReview() {
@@ -2874,6 +3214,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
 
     setError("");
     setMessage("다음 복습 카드로 이동합니다.");
+    setPracticeFlowMode(reviewAutoAdvance ? "review_series" : "review_once");
     await handleStartReviewPractice(
       nextReviewItem,
       practiceTestType === "situation" ? "situation" : "translation",
@@ -2904,17 +3245,33 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           testType: practiceTestType,
           promptKorean: practicePrompt?.promptKorean,
           promptContext: practicePrompt?.promptContext,
+          promptTarget: practicePrompt?.target,
           promptReadyAtMs,
           responseStartedAtMs,
         }),
         signal,
       }));
+      const currentReviewId = activeReviewExpressionId;
+      const currentReviewIndex = currentReviewId ? reviews.findIndex((item) => item.id === currentReviewId) : -1;
+      const nextReview = reviewAutoAdvance && currentReviewIndex >= 0 ? reviews[currentReviewIndex + 1] ?? null : null;
+
       setScore(result);
       if (selectedExpression?.id === activeReviewExpressionId) {
         setActiveReviewExpressionId(selectedExpression.id);
       }
       await refreshLists(selectedExpression.id);
-      setMessage("말하기 테스트를 채점했습니다.");
+      if (currentReviewId && reviewAutoAdvance) {
+        if (nextReview) {
+          setMessage("말하기 테스트를 채점했습니다. 다음 복습 카드로 자동 이동합니다.");
+          triggerAutoAdvanceToReview(nextReview);
+        } else {
+          setPendingAutoReview(null);
+          setActiveReviewExpressionId(null);
+          setMessage("말하기 테스트를 채점했습니다. 오늘의 복습이 모두 끝났습니다.");
+        }
+      } else {
+        setMessage("말하기 테스트를 채점했습니다.");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "채점에 실패했습니다.");
     } finally {
@@ -2991,6 +3348,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
             testType: practiceTestType,
             promptKorean: practicePrompt?.promptKorean,
             promptContext: practicePrompt?.promptContext,
+            promptTarget: practicePrompt?.target,
             promptReadyAtMs,
             responseStartedAtMs,
           }),
@@ -3008,7 +3366,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       if (currentReviewId && reviewAutoAdvance) {
         if (nextReview) {
           setMessage("음성 답변을 채점했습니다. 다음 복습 카드로 자동 이동합니다.");
-          setPendingAutoReview(nextReview);
+          triggerAutoAdvanceToReview(nextReview);
         } else {
           setPendingAutoReview(null);
           setActiveReviewExpressionId(null);
@@ -3031,6 +3389,9 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     }
 
     clearPracticeAutoStartCountdown();
+    if (!activeReviewExpressionId) {
+      setPracticeFlowMode("single");
+    }
     setPracticeTestType(nextType);
     setAnswer("");
     setVoiceAnswerFile(null);
@@ -3042,12 +3403,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
 
     if (nextType === "translation") {
       const readyAtMs = Date.now();
-      setPracticePrompt({
-        testType: "translation",
-        promptKorean: selectedExpression.koreanText,
-        target: selectedExpression.englishBase,
-        tips: "핵심 의미를 살려 자연스럽게 영어로 말해보세요.",
-      });
+      setPracticePrompt(buildTranslationPracticePrompt(selectedExpression));
       setPracticePromptReadyAtMs(readyAtMs);
       return;
     }
@@ -3068,24 +3424,18 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     }
   }
 
-  async function handleStartReviewPractice(
-    review: ReviewItem,
-    nextType?: "translation" | "situation",
-    options?: { autoAdvance?: boolean },
+  async function startPracticeForExpression(
+    expression: Expression,
+    targetType: "translation" | "situation" | "pattern",
+    options?: { activeReviewExpressionId?: string | null; forceVoiceMode?: boolean },
   ) {
-    const expression = expressions.find((item) => item.id === review.id);
-    const targetType = options?.autoAdvance ? "translation" : (nextType ?? review.recommendedTestType ?? "translation");
-
-    if (!expression) {
-      setError("복습을 시작할 표현을 찾지 못했습니다.");
-      return;
-    }
-
     stopReviewQuestionSpeech();
     clearPracticeAutoStartCountdown();
     setSelectedExpressionId(expression.id);
-    setActiveReviewExpressionId(expression.id);
-    setTestMode("voice");
+    setActiveReviewExpressionId(options?.activeReviewExpressionId ?? null);
+    if (options?.forceVoiceMode) {
+      setTestMode("voice");
+    }
     setAnswer("");
     setVoiceAnswerFile(null);
     setScore(null);
@@ -3095,12 +3445,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
 
     if (targetType === "translation") {
       setPracticeTestType("translation");
-      setPracticePrompt({
-        testType: "translation",
-        promptKorean: expression.koreanText,
-        target: expression.englishBase,
-        tips: "핵심 의미를 살려 자연스럽게 영어로 말해보세요.",
-      });
+      setPracticePrompt(buildTranslationPracticePrompt(expression));
       if (reviewReadQuestion) {
         setMessage("문제를 읽어주는 중입니다.");
         speakReviewQuestion(expression.koreanText, () => {
@@ -3122,9 +3467,9 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       try {
         const prompt = await apiFetch<PracticePrompt>("/practice/prompts", {
           method: "POST",
-          body: JSON.stringify({ expressionId: expression.id, testType: "situation" }),
+          body: JSON.stringify({ expressionId: expression.id, testType: targetType }),
         });
-        setPracticeTestType("situation");
+        setPracticeTestType(targetType);
         setPracticePrompt(prompt);
         if (reviewReadQuestion) {
           setMessage("문제를 읽어주는 중입니다.");
@@ -3153,8 +3498,44 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
 
     window.setTimeout(() => {
       testSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      answerRef.current?.focus();
+      focusPracticeMainCard();
     }, 120);
+  }
+
+  async function handleStartReviewPractice(
+    review: ReviewItem,
+    nextType?: "translation" | "situation",
+    options?: { autoAdvance?: boolean },
+  ) {
+    const expression = expressions.find((item) => item.id === review.id);
+    const targetType = options?.autoAdvance ? "translation" : (nextType ?? review.recommendedTestType ?? "translation");
+
+    if (!expression) {
+      setError("복습을 시작할 표현을 찾지 못했습니다.");
+      return;
+    }
+
+    setPracticeFlowMode(options?.autoAdvance ? "review_series" : "review_once");
+    await startPracticeForExpression(expression, targetType, {
+      activeReviewExpressionId: expression.id,
+      forceVoiceMode: true,
+    });
+  }
+
+  async function handleStartPracticeFromHistory(item: PracticeHistoryItem) {
+    const expression = expressions.find((entry) => entry.id === item.expressionId);
+    const targetType = item.testType ?? "translation";
+
+    if (!expression) {
+      setError("최근 복습 기록과 연결된 표현을 찾지 못했습니다.");
+      return;
+    }
+
+    setPracticeFlowMode("single");
+    await startPracticeForExpression(expression, targetType, {
+      activeReviewExpressionId: null,
+      forceVoiceMode: false,
+    });
   }
 
   async function handleLoadRecording(recordingId: string) {
@@ -3964,6 +4345,75 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
         </div>
         {assetSectionOpen && learningAssetsCatalog ? (
           <>
+            <section className="mini-card" style={{ marginTop: 14 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div>
+                  <strong>데이터 Export</strong>
+                  <div className="muted" style={{ marginTop: 4 }}>
+                    다른 앱이나 AI 워크플로우에서 다시 쓸 수 있도록 자산을 JSON 또는 CSV로 내려받습니다.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="chip selected"
+                  onClick={() => setExportSectionOpen((current) => !current)}
+                >
+                  {exportSectionOpen ? "접기" : "펼치기"}
+                </button>
+              </div>
+              {exportSectionOpen && (
+                <div className="grid" style={{ marginTop: 12, gap: 12 }}>
+                  <div className="mini-card">
+                    <strong>1. 한글표현 자산</strong>
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      원문 문장, 맥락 메모, 화자, 시간축, 관계/상황/톤, 연결된 영어 표현 정보를 함께 내보냅니다.
+                    </div>
+                    <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={() => void handleDownloadAssetExport("korean", "json")}
+                        disabled={!!loading}
+                      >
+                        {loading === "export-korean-json" ? "내보내는 중..." : "JSON 다운로드"}
+                      </button>
+                      <button
+                        type="button"
+                        className="button ghost"
+                        onClick={() => void handleDownloadAssetExport("korean", "csv")}
+                        disabled={!!loading}
+                      >
+                        {loading === "export-korean-csv" ? "내보내는 중..." : "CSV 다운로드"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mini-card">
+                    <strong>2. 영어표현 자산</strong>
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      기본형/쉬운형/자연형, 설명/메모, 원문 연결, TTS 키, 연습 이력 요약, 패턴/단어 매칭 정보를 함께 내보냅니다.
+                    </div>
+                    <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={() => void handleDownloadAssetExport("english", "json")}
+                        disabled={!!loading}
+                      >
+                        {loading === "export-english-json" ? "내보내는 중..." : "JSON 다운로드"}
+                      </button>
+                      <button
+                        type="button"
+                        className="button ghost"
+                        onClick={() => void handleDownloadAssetExport("english", "csv")}
+                        disabled={!!loading}
+                      >
+                        {loading === "export-english-csv" ? "내보내는 중..." : "CSV 다운로드"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
             <section ref={patternAssetsSectionRef} className="mini-card" style={{ marginTop: 14 }}>
               <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <strong>
@@ -3982,7 +4432,34 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
               </div>
               {patternAssetOpen && (
                 <div className="grid" style={{ marginTop: 12, gap: 12 }}>
-                  {learningAssetsCatalog.patternCategories.map((category) => (
+                  <div className="mini-card">
+                    <div className="muted" style={{ marginBottom: 8 }}>패턴 검색</div>
+                    <input
+                      className="input"
+                      type="search"
+                      value={patternAssetQuery}
+                      onChange={(event) => setPatternAssetQuery(event.target.value)}
+                      placeholder="패턴, 뜻, 예시, 매핑 표현으로 검색"
+                    />
+                    <div className="row" style={{ marginTop: 10, gap: 8 }}>
+                      <button
+                        type="button"
+                        className={`chip ${patternAssetCoreOnly ? "selected" : ""}`}
+                        onClick={() => setPatternAssetCoreOnly((current) => !current)}
+                      >
+                        {patternAssetCoreOnly ? "핵심표현만 보는 중" : "핵심표현만 보기"}
+                      </button>
+                    </div>
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      {patternAssetQuery.trim() || patternAssetCoreOnly
+                        ? `${patternAssetCoreOnly ? "핵심표현 " : ""}검색 결과 ${filteredPatternCategories.reduce((sum, category) => sum + category.templates.length, 0)}개`
+                        : "패턴 템플릿, 한국어 뜻, 예시 문장, 연결된 내 표현까지 함께 검색합니다."}
+                    </div>
+                  </div>
+                  {filteredPatternCategories.length === 0 && (
+                    <div className="mini-card muted">검색 결과가 없습니다.</div>
+                  )}
+                  {filteredPatternCategories.map((category) => (
                     <details key={category.id} className="mini-card" open={category.level === "A1"}>
                       <summary className="row" style={{ cursor: "pointer", justifyContent: "space-between", alignItems: "center" }}>
                         <div>
@@ -3997,7 +4474,10 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                         {category.templates.map((template) => (
                           <div key={template.id} className="mini-card">
                             <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                              <strong>{template.templateText}</strong>
+                              <div className="row" style={{ alignItems: "center", gap: 8 }}>
+                                <strong>{template.templateText}</strong>
+                                {template.isCoreExpression && <span className="tag tag-core">핵심표현</span>}
+                              </div>
                               <span className={`tag ${template.automated ? "tag-done" : template.collected ? "tag-primary" : "tag-muted"}`}>
                                 {template.automated ? "자동화" : template.collected ? "수집됨" : "미수집"}
                               </span>
@@ -4059,7 +4539,25 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
               </div>
               {vocabularyAssetOpen && (
                 <div className="grid" style={{ marginTop: 12, gap: 12 }}>
-                  {learningAssetsCatalog.vocabularyCategories.map((category) => (
+                  <div className="mini-card">
+                    <div className="muted" style={{ marginBottom: 8 }}>단어 검색</div>
+                    <input
+                      className="input"
+                      type="search"
+                      value={vocabularyAssetQuery}
+                      onChange={(event) => setVocabularyAssetQuery(event.target.value)}
+                      placeholder="단어, 뜻, 예시, 매핑 표현으로 검색"
+                    />
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      {vocabularyAssetQuery.trim()
+                        ? `검색 결과 ${filteredVocabularyCategories.reduce((sum, category) => sum + category.items.length, 0)}개`
+                        : "lemma, 한국어 뜻, 예시 문장, 연결된 내 표현까지 함께 검색합니다."}
+                    </div>
+                  </div>
+                  {filteredVocabularyCategories.length === 0 && (
+                    <div className="mini-card muted">검색 결과가 없습니다.</div>
+                  )}
+                  {filteredVocabularyCategories.map((category) => (
                     <details key={category.id} className="mini-card" open={category.code === "daily_life"}>
                       <summary className="row" style={{ cursor: "pointer", justifyContent: "space-between", alignItems: "center" }}>
                         <div>
@@ -4906,14 +5404,50 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
             "expressions",
             "2. 영어 표현 생성 / 영어 음성 생성",
             "생성된 표현을 선택하고 영어 음성을 만들어 듣고 활용합니다.",
-            `표현 ${sectionExpressions.length}개 · TTS 완료 ${completedSectionTtsExpressions.length}개`,
+            expressionBrowserScope === "all"
+              ? `전체 표현 ${filteredExpressions.length}개 · TTS 완료 ${completedTtsExpressions.length}개`
+              : `표현 ${filteredExpressions.length}개 · TTS 완료 ${completedSectionTtsExpressions.length}개`,
           )}
           {expandedSections.expressions && (
             <>
           <div className="row" style={{ marginTop: 12 }}>
+            <button
+              className={`button ${expressionBrowserScope === "recording" ? "" : "secondary"}`}
+              onClick={() => setExpressionBrowserScope("recording")}
+              disabled={!!loading || !recording}
+            >
+              현재 녹음 표현
+            </button>
+            <button
+              className={`button ${expressionBrowserScope === "all" ? "" : "secondary"}`}
+              onClick={() => setExpressionBrowserScope("all")}
+              disabled={!!loading}
+            >
+              전체 표현 라이브러리
+            </button>
             <button className="button secondary" onClick={handleGenerateTtsBulk} disabled={!!loading || !recording || pendingSectionTtsCount === 0}>
               {loading === "tts-bulk" ? "일괄 생성 중..." : `남은 TTS 일괄 생성 (${pendingSectionTtsCount})`}
             </button>
+          </div>
+          <div className="mini-card" style={{ marginTop: 12 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <strong>{expressionBrowserScope === "all" ? "전체 표현 탐색" : "현재 녹음 표현 탐색"}</strong>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  {expressionBrowserScope === "all"
+                    ? `모든 표현 ${expressions.length}개 중 ${filteredExpressions.length}개가 검색 결과에 표시됩니다.`
+                    : `현재 녹음 표현 ${sectionExpressions.length}개 중 ${filteredExpressions.length}개가 검색 결과에 표시됩니다.`}
+                </div>
+              </div>
+              <input
+                className="input"
+                type="search"
+                value={expressionQuery}
+                onChange={(event) => setExpressionQuery(event.target.value)}
+                placeholder="한국어, 영어, 메모, 상황, 녹음 파일명으로 검색"
+                style={{ minWidth: 280, flex: "1 1 320px" }}
+              />
+            </div>
           </div>
           {!isReviewAnswerHidden && (
             <div className="expression-layout" style={{ marginTop: 14 }}>
@@ -4921,14 +5455,18 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                 <div className="expression-section-head">
                   <div>
                     <div className="expression-section-eyebrow">Expression List</div>
-                    <strong>생성된 표현</strong>
+                    <strong>{expressionBrowserScope === "all" ? "전체 표현 목록" : "생성된 표현"}</strong>
                   </div>
-                  <span className="tag tag-muted">{sectionExpressions.length}개</span>
+                  <span className="tag tag-muted">{filteredExpressions.length}개</span>
                 </div>
                 <div className="grid" style={{ marginTop: 12 }}>
-                  {sectionExpressions.length === 0 && (
+                  {filteredExpressions.length === 0 && (
                     <div className="mini-card muted">
-                      {recording ? "이 녹음에서 아직 생성된 표현이 없습니다." : "빠른 저장 문장에서 아직 생성된 표현이 없습니다."}
+                      {expressionBrowserScope === "all"
+                        ? "검색 조건에 맞는 표현이 없습니다."
+                        : recording
+                        ? "이 녹음에서 아직 생성된 표현이 없습니다."
+                        : "빠른 저장 문장에서 아직 생성된 표현이 없습니다."}
                     </div>
                   )}
                   {visibleExpressions.map((expression, index) => (
@@ -4950,13 +5488,21 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                         </span>
                       </div>
                       <div style={{ fontWeight: 700, marginTop: 6 }}>{index + 1}. {expression.englishBase}</div>
+                      <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: "wrap" }}>
+                        <span className={`tag ${expression.utteranceId ? "tag-primary" : "tag-muted"}`}>
+                          {expression.utteranceId ? "녹음 문장" : "빠른 저장"}
+                        </span>
+                        {expression.utterance?.recording?.fileName && (
+                          <span className="tag tag-muted">{expression.utterance.recording.fileName}</span>
+                        )}
+                      </div>
                     </button>
                   ))}
                 </div>
-                {renderListControls("expressions", sectionExpressions.length)}
+                {renderListControls("expressions", filteredExpressions.length)}
               </div>
 
-              {selectedSectionExpression && (
+              {selectedBrowserExpression && (
                 <div ref={expressionDetailRef} className="expression-detail-panel" tabIndex={-1}>
                   <div className="expression-section-head">
                     <div>
@@ -4968,19 +5514,19 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   <div className="grid" style={{ marginTop: 12 }}>
                     <div className="mini-card">
                       <strong>기본형</strong>
-                      <div style={{ marginTop: 8 }}>{selectedSectionExpression.englishBase}</div>
+                      <div style={{ marginTop: 8 }}>{selectedBrowserExpression.englishBase}</div>
                     </div>
                     <div className="mini-card">
                       <strong>쉬운형</strong>
-                      <div style={{ marginTop: 8 }}>{selectedSectionExpression.englishEasy}</div>
+                      <div style={{ marginTop: 8 }}>{selectedBrowserExpression.englishEasy}</div>
                     </div>
                     <div className="mini-card">
                       <strong>자연형</strong>
-                      <div style={{ marginTop: 8 }}>{selectedSectionExpression.englishNatural}</div>
+                      <div style={{ marginTop: 8 }}>{selectedBrowserExpression.englishNatural}</div>
                     </div>
                     <div className="mini-card">
                       <strong>설명</strong>
-                      <div style={{ marginTop: 8 }}>{selectedSectionExpression.note || "설명 없음"}</div>
+                      <div style={{ marginTop: 8 }}>{selectedBrowserExpression.note || "설명 없음"}</div>
                     </div>
                     <div className="mini-card">
                       <strong>메모</strong>
@@ -4992,33 +5538,43 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                         placeholder="예: 이 표현은 아이를 타이르듯 말할 때 자주 씀"
                       />
                       <div className="row" style={{ marginTop: 10 }}>
-                        <button className="button secondary" onClick={handleSaveExpressionMemo} disabled={!!loading || !selectedSectionExpression}>
+                        <button className="button secondary" onClick={handleSaveExpressionMemo} disabled={!!loading || !selectedBrowserExpression}>
                           {loading === "save-expression-memo" ? "메모 저장 중..." : "메모 저장"}
                         </button>
                       </div>
                     </div>
                     <div className="mini-card">
                       <strong>대화 요약</strong>
-                      <div style={{ marginTop: 8 }}>{visibleRecordingSummary || "아직 분석된 대화 요약이 없습니다."}</div>
+                      <div style={{ marginTop: 8 }}>{selectedBrowserExpression.sourceAnalysisSummary || "아직 분석된 대화 요약이 없습니다."}</div>
                     </div>
                     <div className="mini-card">
                       <strong>발화 의도</strong>
-                      <div style={{ marginTop: 8 }}>{selectedSectionExpressionIntent || "아직 분석된 발화 의도가 없습니다."}</div>
+                      <div style={{ marginTop: 8 }}>{selectedBrowserExpressionIntent || "아직 분석된 발화 의도가 없습니다."}</div>
                     </div>
                     <div className="mini-card">
                       <strong>문장별 맥락 메모</strong>
-                      <div style={{ marginTop: 8 }}>{selectedSectionExpression.sourceContextNote || "저장된 문장별 맥락 메모가 없습니다."}</div>
+                      <div style={{ marginTop: 8 }}>{selectedBrowserExpression.sourceContextNote || "저장된 문장별 맥락 메모가 없습니다."}</div>
+                    </div>
+                    <div className="mini-card">
+                      <strong>출처</strong>
+                      <div style={{ marginTop: 8 }}>
+                        {selectedBrowserExpression.utterance?.recording?.fileName
+                          ? selectedBrowserExpression.utterance.recording.fileName
+                          : selectedBrowserExpression.utteranceId
+                          ? "연결된 녹음 문장"
+                          : "빠른 저장 문장"}
+                      </div>
                     </div>
                     <div className="row">
                       <button className="button" onClick={handleGenerateTts} disabled={!!loading}>
                         {loading === "tts"
-                          ? (selectedSectionExpression?.ttsKey ? "TTS 재생성 중..." : "TTS 생성 중...")
-                          : (selectedSectionExpression?.ttsKey ? "TTS 재생성" : "TTS 생성")}
+                          ? (selectedBrowserExpression?.ttsKey ? "TTS 재생성 중..." : "TTS 생성 중...")
+                          : (selectedBrowserExpression?.ttsKey ? "TTS 재생성" : "TTS 생성")}
                       </button>
                       <button
                         className="button ghost"
                         onClick={handleCopyExpression}
-                        disabled={!!loading || !selectedSectionExpression}
+                        disabled={!!loading || !selectedBrowserExpression}
                       >
                         영어 표현 복사
                       </button>
@@ -5029,10 +5585,15 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                       >
                         TTS 재생
                       </button>
+                      {selectedBrowserExpression.utterance?.recording?.id && (
+                        <Link className="button ghost" href={`/recordings/${selectedBrowserExpression.utterance.recording.id}`}>
+                          원본 녹음 보기
+                        </Link>
+                      )}
                       <button
                         className="button danger"
                         onClick={handleDeleteExpression}
-                        disabled={!!loading || !selectedSectionExpression}
+                        disabled={!!loading || !selectedBrowserExpression}
                       >
                         {loading === "delete-expression" ? "삭제 중..." : "표현 삭제"}
                       </button>
@@ -5071,154 +5632,283 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
             <div style={{ flex: 1 }}>
               {renderSectionIntro(
                 "practice",
-                "3. 말하기 테스트",
-                "선택한 기본형을 기준으로 텍스트 또는 음성으로 답변을 채점합니다.",
-                `선택 표현 ${selectedExpression ? 1 : 0}개 · 최근 점수 ${score?.score ?? "-"}`,
+                "3. 연습 / 복습 플레이어",
+                "문제 하나에 집중해 풀고, 원하면 오늘의 복습을 같은 자리에서 한 건씩 또는 연속으로 이어서 진행합니다.",
+                `${practiceFocusLabel} · 선택 표현 ${selectedExpression ? 1 : 0}개 · 복습 대상 ${reviews.length}개`,
               )}
             </div>
             {flowStepId === "complete" && <span className="badge" style={{ background: "#dbeafe" }}>자동 이동 완료</span>}
           </div>
           {expandedSections.practice && (
           <div className="grid" style={{ marginTop: 14 }}>
-            <div className="mini-card">
-              <div className="muted">문제</div>
-              {activeReviewItem && (
-                <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: "wrap" }}>
-                  <span className="badge" style={{ background: "#e0f2fe", color: "#0f172a" }}>
-                    복습 진행 {activeReviewIndex + 1}/{reviews.length}
-                  </span>
-                  <button
-                    type="button"
-                    className={`chip ${reviewAutoAdvance ? "selected" : ""}`}
-                    onClick={() => setReviewAutoAdvanceEnabled(!reviewAutoAdvance)}
-                    disabled={!!loading}
-                  >
-                    {reviewAutoAdvance ? "자동 이동 켜짐" : "자동 이동 일시정지"}
-                  </button>
+            <div className="practice-hero-card">
+              <div className="practice-hero-top">
+                <div>
+                  <div className="practice-eyebrow">Practice Flow</div>
+                  <strong style={{ fontSize: 20 }}>한 문제 집중형 플레이어</strong>
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    선택한 표현을 바로 연습하거나, 오늘의 복습을 같은 화면에서 이어서 풀 수 있습니다.
+                  </div>
                 </div>
-              )}
-              <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                  <span className="badge" style={{ background: "#dbeafe", color: "#1d4ed8" }}>{practiceFocusLabel}</span>
+                  {activeReviewItem && (
+                    <span className="badge" style={{ background: "#e0f2fe", color: "#0f172a" }}>
+                      진행 {activeReviewIndex + 1}/{reviews.length}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="practice-mode-row">
                 <button
-                  className={`button ${practiceTestType === "translation" ? "" : "ghost"}`}
-                  onClick={() => handleGeneratePracticePrompt("translation")}
-                  disabled={!!loading || !selectedExpression}
+                  type="button"
+                  className={`chip ${practiceFlowMode === "single" ? "selected" : ""}`}
+                  onClick={switchToSinglePracticeMode}
+                  disabled={!!loading}
                 >
-                  번역형
+                  단일 연습
                 </button>
                 <button
-                  className={`button ${practiceTestType === "situation" ? "" : "ghost"}`}
-                  onClick={() => handleGeneratePracticePrompt("situation")}
-                  disabled={!!loading || !selectedExpression}
+                  type="button"
+                  className={`chip ${practiceFlowMode === "review_once" ? "selected" : ""}`}
+                  onClick={() => void handleStartReviewFlow("review_once")}
+                  disabled={!!loading || reviews.length === 0}
                 >
-                  {loading === "practice-prompt" ? "생성 중..." : "상황형"}
+                  복습 1건
                 </button>
                 <button
-                  className={`button ${practiceTestType === "pattern" ? "" : "ghost"}`}
-                  onClick={() => handleGeneratePracticePrompt("pattern")}
-                  disabled={!!loading || !selectedExpression}
+                  type="button"
+                  className={`chip ${practiceFlowMode === "review_series" ? "selected" : ""}`}
+                  onClick={() => void handleStartReviewFlow("review_series")}
+                  disabled={!!loading || reviews.length === 0}
                 >
-                  {loading === "practice-prompt" ? "생성 중..." : "패턴형"}
+                  연속 복습
+                </button>
+                <button
+                  type="button"
+                  className={`chip ${reviewAutoAdvance ? "selected" : ""}`}
+                  onClick={() => setReviewAutoAdvanceEnabled(!reviewAutoAdvance)}
+                  disabled={!!loading}
+                >
+                  자동 이동 {reviewAutoAdvance ? "켜짐" : "꺼짐"}
+                </button>
+                <button
+                  type="button"
+                  className={`chip ${reviewReadQuestion ? "selected" : ""}`}
+                  onClick={() => setReviewReadQuestion((current) => !current)}
+                  disabled={!!loading}
+                >
+                  문제 읽기 {reviewReadQuestion ? "켜짐" : "꺼짐"}
                 </button>
               </div>
-              <div style={{ marginTop: 12, fontWeight: 700 }}>{practicePrompt?.promptKorean ?? selectedExpression?.koreanText ?? "표현을 먼저 선택하세요."}</div>
-              {practicePrompt?.promptContext && (
-                <div className="muted" style={{ marginTop: 8 }}>{practicePrompt.promptContext}</div>
-              )}
-              {practicePrompt?.patternLabel && (
-                <div className="muted" style={{ marginTop: 8 }}>패턴: {practicePrompt.patternLabel}</div>
-              )}
-              {practicePrompt?.patternDescription && (
-                <div className="muted" style={{ marginTop: 8 }}>{practicePrompt.patternDescription}</div>
-              )}
-              {practicePrompt?.tips && (
-                <div className="muted" style={{ marginTop: 8 }}>힌트: {practicePrompt.tips}</div>
-              )}
-              <div className="muted" style={{ marginTop: 8 }}>답변은 문제 제시 후 3초 안에 시작해야 통과합니다.</div>
-            </div>
-            <div className="row">
-              <button
-                className={`button ${testMode === "text" ? "" : "ghost"}`}
-                onClick={() => {
-                  clearPracticeAutoStartCountdown();
-                  setTestMode("text");
-                }}
-                disabled={!!loading}
-              >
-                텍스트 답변
-              </button>
-              <button
-                className={`button ${testMode === "voice" ? "" : "ghost"}`}
-                onClick={() => setTestMode("voice")}
-                disabled={!!loading}
-              >
-                음성 답변
-              </button>
-            </div>
-            {testMode === "text" ? (
-              <>
-                <textarea
-                  ref={answerRef}
-                  className="textarea"
-                  value={answer}
-                  onChange={(e) => {
-                    const nextValue = e.target.value;
-                    if (nextValue.length === 0) {
-                      setPracticeResponseStartedAtMs(null);
-                    } else if (practiceResponseStartedAtMs === null) {
-                      setPracticeResponseStartedAtMs(Date.now());
-                    }
-                    setAnswer(nextValue);
-                  }}
-                  disabled={isPracticeQuestionPending}
-                  placeholder="영어로 답변을 입력하세요"
-                />
-                <div className="row">
-                  <button className="button secondary" onClick={handleScore} disabled={!!loading || !selectedExpression || isPracticeQuestionPending}>
-                    {loading === "score" ? "채점 중..." : "채점하기"}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="grid">
-                <div className="mini-card">
-                  <strong>음성 답변 녹음</strong>
-                  <div className="muted" style={{ marginTop: 8 }}>
-                    영어로 말한 뒤 녹음을 종료하면 STT로 인식해서 자동 채점합니다.
+
+              <div className="practice-queue-card">
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div>
+                    <strong>오늘의 복습 큐</strong>
+                    <div className="muted" style={{ marginTop: 4 }}>
+                      카드를 눌러 바로 같은 플레이어에서 풉니다. 연속 복습 모드를 켜면 채점 후 자동으로 다음 카드로 이어집니다.
+                    </div>
                   </div>
-                  {practiceAutoStartCountdown !== null && (
-                    <div className="muted" style={{ marginTop: 10 }}>
-                      복습 녹음이 {practiceAutoStartCountdown}초 뒤 자동으로 시작됩니다.
+                  <span className="tag tag-muted">{reviews.length}개</span>
+                </div>
+                <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
+                  {REVIEW_STRATEGY_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`chip ${reviewStrategy === option.value ? "selected" : ""}`}
+                      onClick={() => setReviewStrategy(option.value)}
+                      disabled={!!loading}
+                      title={option.description}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="muted" style={{ marginTop: 8 }}>
+                  {REVIEW_STRATEGY_OPTIONS.find((option) => option.value === reviewStrategy)?.description}
+                </div>
+                {reviews.length === 0 ? (
+                  <div className="mini-card muted" style={{ marginTop: 12 }}>복습 항목이 없습니다.</div>
+                ) : (
+                  <div className="practice-queue-strip" style={{ marginTop: 14 }}>
+                    {visibleReviews.map((item, index) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`practice-queue-item ${activeReviewExpressionId === item.id ? "selected" : ""}`}
+                        onClick={() => void handleStartReviewPractice(item, item.recommendedTestType ?? "translation", { autoAdvance: false })}
+                        disabled={!!loading}
+                      >
+                        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                          <strong>복습 {index + 1}</strong>
+                          <span className="tag tag-muted">{item.mastery}%</span>
+                        </div>
+                        <div style={{ marginTop: 10, fontWeight: 700 }}>{item.korean}</div>
+                        <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
+                          {item.recommendedTestType === "situation" ? "추천: 상황형" : "추천: 번역형"}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="practice-queue-controls">
+                  {renderListControls("reviews", reviews.length)}
+                </div>
+              </div>
+            </div>
+
+            <div className="practice-player-shell">
+              <div ref={practiceMainCardRef} className="practice-main-card" tabIndex={-1}>
+                <div className="practice-main-head">
+                  <div>
+                    <div className="practice-eyebrow">Current Card</div>
+                    <strong style={{ fontSize: 20 }}>
+                      {activeReviewItem ? "복습 카드 풀이" : "표현 연습"}
+                    </strong>
+                  </div>
+                  <div className="row" style={{ gap: 8 }}>
+                    <span className="tag tag-primary">
+                      {practicePrompt?.testType === "situation" ? "상황형" : practicePrompt?.testType === "pattern" ? "패턴형" : "번역형"}
+                    </span>
+                    <span className="tag tag-muted">{testMode === "voice" ? "음성 답변" : "텍스트 답변"}</span>
+                  </div>
+                </div>
+
+                <div className="practice-question-card">
+                  <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                    <button
+                      className={`button ${practiceTestType === "translation" ? "" : "ghost"}`}
+                      onClick={() => handleGeneratePracticePrompt("translation")}
+                      disabled={!!loading || !selectedExpression}
+                    >
+                      번역형
+                    </button>
+                    <button
+                      className={`button ${practiceTestType === "situation" ? "" : "ghost"}`}
+                      onClick={() => handleGeneratePracticePrompt("situation")}
+                      disabled={!!loading || !selectedExpression}
+                    >
+                      {loading === "practice-prompt" ? "생성 중..." : "상황형"}
+                    </button>
+                    <button
+                      className={`button ${practiceTestType === "pattern" ? "" : "ghost"}`}
+                      onClick={() => handleGeneratePracticePrompt("pattern")}
+                      disabled={!!loading || !selectedExpression}
+                    >
+                      {loading === "practice-prompt" ? "생성 중..." : "패턴형"}
+                    </button>
+                  </div>
+                  <div className="practice-question-title">
+                    {practicePrompt?.promptKorean ?? selectedExpression?.koreanText ?? "표현을 먼저 선택하세요."}
+                  </div>
+                  {practicePrompt?.promptContext && (
+                    <div className="muted" style={{ marginTop: 10 }}>{practicePrompt.promptContext}</div>
+                  )}
+                  {practicePrompt?.testType === "pattern" && practicePrompt?.patternLabel && (
+                    <div className="muted" style={{ marginTop: 8 }}>패턴: {practicePrompt.patternLabel}</div>
+                  )}
+                  {practicePrompt?.testType === "pattern" && practicePrompt?.patternDescription && (
+                    <div className="muted" style={{ marginTop: 8 }}>{practicePrompt.patternDescription}</div>
+                  )}
+                  {practicePrompt?.tips && (
+                    <div className="muted" style={{ marginTop: 8 }}>힌트: {practicePrompt.tips}</div>
+                  )}
+                  <div className="muted" style={{ marginTop: 10 }}>답변은 문제 제시 후 3초 안에 시작해야 통과합니다.</div>
+                </div>
+
+                <div className="practice-answer-card">
+                  <div className="row">
+                    <button
+                      className={`button ${testMode === "text" ? "" : "ghost"}`}
+                      onClick={() => {
+                        clearPracticeAutoStartCountdown();
+                        setTestMode("text");
+                      }}
+                      disabled={!!loading}
+                    >
+                      텍스트 답변
+                    </button>
+                    <button
+                      className={`button ${testMode === "voice" ? "" : "ghost"}`}
+                      onClick={() => setTestMode("voice")}
+                      disabled={!!loading}
+                    >
+                      음성 답변
+                    </button>
+                  </div>
+
+                  {testMode === "text" ? (
+                    <>
+                      <textarea
+                        ref={answerRef}
+                        className="textarea"
+                        value={answer}
+                        onChange={(e) => {
+                          const nextValue = e.target.value;
+                          if (nextValue.length === 0) {
+                            setPracticeResponseStartedAtMs(null);
+                          } else if (practiceResponseStartedAtMs === null) {
+                            setPracticeResponseStartedAtMs(Date.now());
+                          }
+                          setAnswer(nextValue);
+                        }}
+                        disabled={isPracticeQuestionPending}
+                        placeholder="영어로 답변을 입력하세요"
+                        style={{ marginTop: 12 }}
+                      />
+                      <div className="row" style={{ marginTop: 12 }}>
+                        <button className="button secondary" onClick={handleScore} disabled={!!loading || !selectedExpression || isPracticeQuestionPending}>
+                          {loading === "score" ? "채점 중..." : "채점하기"}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="grid" style={{ marginTop: 12 }}>
+                      <div className="mini-card">
+                        <strong>음성 답변 녹음</strong>
+                        <div className="muted" style={{ marginTop: 8 }}>
+                          영어로 말한 뒤 녹음을 종료하면 STT로 인식해서 자동 채점합니다.
+                        </div>
+                        {practiceAutoStartCountdown !== null && (
+                          <div className="muted" style={{ marginTop: 10 }}>
+                            복습 녹음이 {practiceAutoStartCountdown}초 뒤 자동으로 시작됩니다.
+                          </div>
+                        )}
+                        <div className="row" style={{ marginTop: 12 }}>
+                          <button className="button" onClick={handleStartVoicePractice} disabled={!!loading || isPracticeRecording || isPracticeQuestionPending}>
+                            {isPracticeRecording ? "녹음 중..." : practiceAutoStartCountdown !== null ? "지금 바로 시작" : "녹음 시작"}
+                          </button>
+                          <button className="button ghost" onClick={handleStopVoicePractice} disabled={!isPracticeRecording && practiceAutoStartCountdown === null}>
+                            {practiceAutoStartCountdown !== null ? "자동 시작 취소" : "녹음 종료"}
+                          </button>
+                          <button className="button secondary" onClick={() => void handleScoreVoice()} disabled={!!loading || isPracticeRecording || !voiceAnswerFile || !selectedExpression || isPracticeQuestionPending}>
+                            {loading === "score-voice" ? "다시 채점 중..." : "다시 채점"}
+                          </button>
+                        </div>
+                        <div className="muted" style={{ marginTop: 10 }}>
+                          {voiceAnswerFile ? `녹음 파일 준비됨: ${voiceAnswerFile.name}` : "아직 녹음된 음성 답변이 없습니다."}
+                        </div>
+                      </div>
+                      {score?.answer && (
+                        <div className="mini-card">
+                          <strong>인식된 영어 답변</strong>
+                          <div style={{ marginTop: 8 }}>{score.answer}</div>
+                        </div>
+                      )}
+                      {score?.audioUrl && (
+                        <div className="mini-card">
+                          <strong>저장된 음성 다시 듣기</strong>
+                          <audio controls className="audio-player" style={{ marginTop: 12 }} src={score.audioUrl} />
+                        </div>
+                      )}
                     </div>
                   )}
-                  <div className="row" style={{ marginTop: 12 }}>
-                    <button className="button" onClick={handleStartVoicePractice} disabled={!!loading || isPracticeRecording || isPracticeQuestionPending}>
-                      {isPracticeRecording ? "녹음 중..." : practiceAutoStartCountdown !== null ? "지금 바로 시작" : "녹음 시작"}
-                    </button>
-                    <button className="button ghost" onClick={handleStopVoicePractice} disabled={!isPracticeRecording && practiceAutoStartCountdown === null}>
-                      {practiceAutoStartCountdown !== null ? "자동 시작 취소" : "녹음 종료"}
-                    </button>
-                    <button className="button secondary" onClick={() => void handleScoreVoice()} disabled={!!loading || isPracticeRecording || !voiceAnswerFile || !selectedExpression || isPracticeQuestionPending}>
-                      {loading === "score-voice" ? "다시 채점 중..." : "다시 채점"}
-                    </button>
-                  </div>
-                  <div className="muted" style={{ marginTop: 10 }}>
-                    {voiceAnswerFile ? `녹음 파일 준비됨: ${voiceAnswerFile.name}` : "아직 녹음된 음성 답변이 없습니다."}
-                  </div>
                 </div>
-                {score?.answer && (
-                  <div className="mini-card">
-                    <strong>인식된 영어 답변</strong>
-                    <div style={{ marginTop: 8 }}>{score.answer}</div>
-                  </div>
-                )}
-                {score?.audioUrl && (
-                  <div className="mini-card">
-                    <strong>저장된 음성 다시 듣기</strong>
-                    <audio controls className="audio-player" style={{ marginTop: 12 }} src={score.audioUrl} />
-                  </div>
-                )}
               </div>
-            )}
+            </div>
             {score && (
               <div className="grid score-grid">
                 {activeReviewItem && (
@@ -5249,9 +5939,63 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                     </div>
                   </div>
                 )}
-                <div className="mini-card"><strong>점수</strong><div className="kpi" style={{ marginTop: 8 }}>{score.score}</div></div>
-                <div className="mini-card"><strong>피드백</strong><div style={{ marginTop: 8 }}>{score.feedback}</div></div>
-                <div className="mini-card"><strong>정답 기준</strong><div style={{ marginTop: 8 }}>{score.target}</div></div>
+                <div className="mini-card">
+                  <FieldHelpLabel
+                    label="점수"
+                    description="의미 전달, 자연스러움, 문법/정확도를 종합해서 나온 최종 점수입니다."
+                  />
+                  <div className="kpi" style={{ marginTop: 8 }}>{score.score}</div>
+                </div>
+                <div className="mini-card">
+                  <FieldHelpLabel
+                    label="피드백"
+                    description="이번 답변에 대한 짧은 총평입니다. 점수와 세부 평가를 바탕으로 요약해서 보여줍니다."
+                  />
+                  <div style={{ marginTop: 8 }}>{score.feedback}</div>
+                </div>
+                <div className="mini-card">
+                  <FieldHelpLabel
+                    label={practicePrompt?.testType === "pattern" ? "이번 문제 정답" : "정답 기준"}
+                    description={
+                      practicePrompt?.testType === "pattern"
+                        ? "이번 패턴형 문제에 대해 맞춰야 하는 기준 답안입니다."
+                        : "이 앱에서 우선 익히려는 대표 기준 문장입니다. 저장된 기본 영어 표현이에요."
+                    }
+                  />
+                  <div style={{ marginTop: 8 }}>{score.target}</div>
+                  <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      className="button secondary"
+                      type="button"
+                      onClick={() => void handlePlayPracticeReferenceTts()}
+                      disabled={!!loading || !selectedExpression?.ttsUrl}
+                    >
+                      정답 기준 듣기
+                    </button>
+                  </div>
+                  {selectedExpression?.ttsUrl ? (
+                    <audio
+                      ref={practiceReferenceAudioRef}
+                      controls
+                      className="audio-player"
+                      style={{ marginTop: 12 }}
+                      src={selectedExpression.ttsUrl}
+                    />
+                  ) : (
+                    <div className="muted" style={{ marginTop: 10 }}>
+                      이 표현의 영어 TTS가 아직 없어 정답 기준 음성을 재생할 수 없습니다.
+                    </div>
+                  )}
+                </div>
+                {practicePrompt?.testType === "pattern" && practicePrompt.referenceTarget && (
+                  <div className="mini-card">
+                    <FieldHelpLabel
+                      label="원래 대표 표현"
+                      description="이 패턴형 문제가 만들어지기 전에 기준이 된 원래 대표 표현입니다."
+                    />
+                    <div style={{ marginTop: 8 }}>{practicePrompt.referenceTarget}</div>
+                  </div>
+                )}
                 {typeof score.responseLatencyMs === "number" && (
                   <div className="mini-card">
                     <strong>응답 시작</strong>
@@ -5261,36 +6005,114 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   </div>
                 )}
                 {typeof score.meaningScore === "number" && (
-                  <div className="mini-card"><strong>의미 전달</strong><div className="kpi" style={{ marginTop: 8 }}>{score.meaningScore}</div></div>
+                  <div className="mini-card">
+                    <FieldHelpLabel
+                      label="의미 전달"
+                      description="한국어 문제의 핵심 뜻이 얼마나 정확하게 전달됐는지 보는 점수입니다."
+                    />
+                    <div className="kpi" style={{ marginTop: 8 }}>{score.meaningScore}</div>
+                  </div>
                 )}
                 {typeof score.naturalnessScore === "number" && (
-                  <div className="mini-card"><strong>자연스러움</strong><div className="kpi" style={{ marginTop: 8 }}>{score.naturalnessScore}</div></div>
+                  <div className="mini-card">
+                    <FieldHelpLabel
+                      label="자연스러움"
+                      description="원어민이 실제 대화에서 쓸 법한 자연스러운 표현인지 보는 점수입니다."
+                    />
+                    <div className="kpi" style={{ marginTop: 8 }}>{score.naturalnessScore}</div>
+                  </div>
                 )}
                 {typeof score.grammarScore === "number" && (
-                  <div className="mini-card"><strong>문법/정확도</strong><div className="kpi" style={{ marginTop: 8 }}>{score.grammarScore}</div></div>
+                  <div className="mini-card">
+                    <FieldHelpLabel
+                      label="문법/정확도"
+                      description="문법, 어순, 시제, 전치사, 핵심 표현의 정확성을 중심으로 보는 점수입니다."
+                    />
+                    <div className="kpi" style={{ marginTop: 8 }}>{score.grammarScore}</div>
+                  </div>
                 )}
                 {score.strengthComment && (
                   <div className="mini-card">
-                    <strong>잘한 점</strong>
+                    <FieldHelpLabel
+                      label="잘한 점"
+                      description="내 답변에서 의미 전달이나 표현상 좋았던 부분입니다."
+                    />
                     <div style={{ marginTop: 8 }}>{score.strengthComment}</div>
                   </div>
                 )}
                 {score.correctionComment && (
                   <div className="mini-card">
-                    <strong>개선 코멘트</strong>
+                    <FieldHelpLabel
+                      label="정답 기준 코멘트"
+                      description="내 답변이 정답 기준 문장과 얼마나 가까운지 보고, 그 기준 표현에 더 가깝게 맞추려면 무엇을 바꾸면 좋은지 알려줍니다."
+                    />
                     <div style={{ marginTop: 8 }}>{score.correctionComment}</div>
+                  </div>
+                )}
+                {score.meaningComment && (
+                  <div className="mini-card">
+                    <FieldHelpLabel
+                      label="의미 기준 코멘트"
+                      description="정답 기준과 완전히 같지 않아도, 한국어 문제의 핵심 의미가 얼마나 잘 전달됐는지 중심으로 설명합니다."
+                    />
+                    <div style={{ marginTop: 8 }}>{score.meaningComment}</div>
                   </div>
                 )}
                 {score.suggestedAnswer && (
                   <div className="mini-card">
-                    <strong>추천 답안</strong>
+                    <FieldHelpLabel
+                      label="추천 답안"
+                      description="이번 문제를 기준으로 가장 추천하는 답안 예시입니다. 정답 기준과 조금 다를 수 있습니다."
+                    />
                     <div style={{ marginTop: 8 }}>{score.suggestedAnswer}</div>
                   </div>
                 )}
                 {score.suggestedAnswerAlt && score.suggestedAnswerAlt !== score.suggestedAnswer && (
                   <div className="mini-card">
-                    <strong>다른 자연스러운 답안</strong>
+                    <FieldHelpLabel
+                      label="다른 자연스러운 답안"
+                      description="같은 뜻을 전달할 수 있는 또 다른 자연스러운 표현 예시입니다."
+                    />
                     <div style={{ marginTop: 8 }}>{score.suggestedAnswerAlt}</div>
+                  </div>
+                )}
+                {practicePrompt?.testType === "pattern" && (
+                  <div className="mini-card">
+                    <FieldHelpLabel
+                      label="표현 자산 저장"
+                      description="이번 패턴형 문제의 한국어 문장과 답안을 새 표현 자산으로 저장합니다. 저장 후에도 현재 테스트 화면은 그대로 유지됩니다."
+                    />
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      저장하면 새 `SavedSentence`와 연결된 `Expression`이 만들어지고, 영어/한국어 TTS도 함께 준비됩니다.
+                    </div>
+                    {savedPatternExpression && (
+                      <div className="success-box" style={{ marginTop: 12 }}>
+                        표현 자산 저장 완료
+                        {savedPatternExpression.hasEnglishTts || savedPatternExpression.hasKoreanTts
+                          ? ` · TTS 준비됨${
+                              savedPatternExpression.hasEnglishTts && savedPatternExpression.hasKoreanTts
+                                ? " (영어/한국어)"
+                                : savedPatternExpression.hasEnglishTts
+                                  ? " (영어)"
+                                  : " (한국어)"
+                            }`
+                          : ""}
+                      </div>
+                    )}
+                    <div className="row" style={{ marginTop: 12 }}>
+                      <button
+                        className="button secondary"
+                        type="button"
+                        onClick={() => void handleSavePatternPracticeExpression()}
+                        disabled={!!loading || !!savedPatternExpression}
+                      >
+                        {loading === "save-pattern-expression"
+                          ? "표현 자산 저장 중..."
+                          : savedPatternExpression
+                            ? "표현 자산 저장 완료"
+                            : "표현 자산으로 저장"}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -5299,112 +6121,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           )}
         </section>
 
-        <section ref={reviewsSectionRef} className="card panel-lg">
-          {renderSectionIntro(
-            "reviews",
-            "4. 오늘의 복습",
-            "사용자 표현과 최근 점수를 바탕으로 복습 목록을 표시합니다.",
-            `복습 대상 ${reviews.length}개`,
-          )}
-          {expandedSections.reviews && (
-          <div className="grid" style={{ marginTop: 14 }}>
-            <div className="mini-card">
-              <strong>복습 문제 생성 기준</strong>
-              <div className="muted" style={{ marginTop: 4 }}>
-                원하는 기준으로 오늘의 복습 목록을 다시 구성할 수 있습니다.
-              </div>
-              <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
-                {REVIEW_STRATEGY_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`chip ${reviewStrategy === option.value ? "selected" : ""}`}
-                    onClick={() => setReviewStrategy(option.value)}
-                    disabled={!!loading}
-                    title={option.description}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              <div className="muted" style={{ marginTop: 8 }}>
-                {REVIEW_STRATEGY_OPTIONS.find((option) => option.value === reviewStrategy)?.description}
-              </div>
-            </div>
-            <div className="mini-card">
-              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <div>
-                  <strong>연속 복습</strong>
-                  <div className="muted" style={{ marginTop: 4 }}>
-                    음성으로 답변하면 채점 후 다음 복습 카드로 자동 이동합니다.
-                  </div>
-                </div>
-                <div className="row" style={{ gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  <button
-                    type="button"
-                    className={`chip ${reviewAutoAdvance ? "selected" : ""}`}
-                    onClick={() => setReviewAutoAdvance((current) => !current)}
-                  >
-                    {reviewAutoAdvance ? "켜짐" : "꺼짐"}
-                  </button>
-                  <button
-                    type="button"
-                    className={`chip ${reviewReadQuestion ? "selected" : ""}`}
-                    onClick={() => setReviewReadQuestion((current) => !current)}
-                  >
-                    한국어 문제 읽기 {reviewReadQuestion ? "켜짐" : "꺼짐"}
-                  </button>
-                </div>
-              </div>
-            </div>
-            {reviews.length === 0 && <div className="mini-card muted">복습 항목이 없습니다.</div>}
-            {visibleReviews.map((item, index) => (
-              <div key={item.id} className={`mini-card ${activeReviewExpressionId === item.id ? "section-highlight" : ""}`}>
-                <strong>복습 카드 {index + 1}</strong>
-                <div className="progress" style={{ marginTop: 12 }}><span style={{ width: `${item.mastery}%` }} /></div>
-                <div className="muted" style={{ marginTop: 8 }}>최근 숙련도 {item.mastery}%</div>
-                <div className="muted" style={{ marginTop: 8 }}>
-                  마지막 복습: {item.lastReviewedAt ? recordingDateFormatter.format(new Date(item.lastReviewedAt)) : "아직 없음"}
-                </div>
-                {item.recommendedTestType && (
-                  <div className="muted" style={{ marginTop: 8 }}>
-                    추천 문제 유형: {item.recommendedTestType === "situation" ? "상황형" : "번역형"}
-                  </div>
-                )}
-                {item.reviewReason && (
-                  <div className="muted" style={{ marginTop: 8 }}>{item.reviewReason}</div>
-                )}
-                <div className="row" style={{ marginTop: 12 }}>
-                  <button
-                    className="button secondary"
-                    onClick={() => handleStartReviewPractice(item, item.recommendedTestType ?? "translation", { autoAdvance: reviewAutoAdvance })}
-                    disabled={!!loading}
-                  >
-                    {item.recommendedTestType === "situation" ? "추천 방식으로 풀기" : "번역형으로 풀기"}
-                  </button>
-                  <button
-                    className="button ghost"
-                    onClick={() => handleStartReviewPractice(item, "translation", { autoAdvance: reviewAutoAdvance })}
-                    disabled={!!loading}
-                  >
-                    번역형
-                  </button>
-                  <button
-                    className="button ghost"
-                    onClick={() => handleStartReviewPractice(item, "situation", { autoAdvance: reviewAutoAdvance })}
-                    disabled={!!loading}
-                  >
-                    상황형
-                  </button>
-                </div>
-              </div>
-            ))}
-            {renderListControls("reviews", reviews.length)}
-          </div>
-          )}
-        </section>
-
-        <section className="card panel-lg">
+        <section ref={practiceHistorySectionRef} className="card panel-lg">
           {renderSectionIntro(
             "practiceHistory",
             "5. 최근 복습 기록",
@@ -5416,8 +6133,11 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
               {practiceHistory.length === 0 && (
                 <div className="mini-card muted">아직 저장된 복습 기록이 없습니다.</div>
               )}
-              {practiceHistory.map((item, index) => (
-                <div key={item.id} className="mini-card">
+              {visiblePracticeHistory.map((item, index) => (
+                <div
+                  key={item.id}
+                  className={`mini-card ${selectedExpressionId === item.expressionId && activeReviewExpressionId === null ? "section-highlight" : ""}`}
+                >
                   <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                     <div>
                       <strong>기록 {index + 1}</strong>
@@ -5434,6 +6154,30 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   </div>
                   <div style={{ marginTop: 12, fontWeight: 700 }}>{item.promptKorean || item.koreanText}</div>
                   {item.promptContext && <div className="muted" style={{ marginTop: 8 }}>{item.promptContext}</div>}
+                  <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      className="button secondary"
+                      type="button"
+                      onClick={() => void handleStartPracticeFromHistory(item)}
+                      disabled={!!loading}
+                    >
+                      {item.testType === "situation" ? "상황형 테스트" : item.testType === "pattern" ? "패턴형 테스트" : "번역형 테스트"}
+                    </button>
+                    <button
+                      className="button ghost"
+                      type="button"
+                      onClick={() => {
+                        setSelectedExpressionId(item.expressionId);
+                        setActiveReviewExpressionId(null);
+                        window.setTimeout(() => {
+                          testSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }, 120);
+                      }}
+                      disabled={!!loading}
+                    >
+                      테스트 영역으로 이동
+                    </button>
+                  </div>
                   <div className="grid" style={{ marginTop: 14, gap: 10 }}>
                     <div>
                       <div className="muted">기준 표현</div>
@@ -5449,6 +6193,18 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                         <div style={{ marginTop: 4 }}>{item.suggestedAnswer}</div>
                       </div>
                     )}
+                    {item.correctionComment && (
+                      <div>
+                        <div className="muted">정답 기준 코멘트</div>
+                        <div style={{ marginTop: 4 }}>{item.correctionComment}</div>
+                      </div>
+                    )}
+                    {item.meaningComment && (
+                      <div>
+                        <div className="muted">의미 기준 코멘트</div>
+                        <div style={{ marginTop: 4 }}>{item.meaningComment}</div>
+                      </div>
+                    )}
                     <div>
                       <div className="muted">피드백</div>
                       <div style={{ marginTop: 4 }}>{item.feedback}</div>
@@ -5462,6 +6218,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   </div>
                 </div>
               ))}
+              {renderListControls("practiceHistory", practiceHistory.length)}
             </div>
           )}
         </section>
@@ -5471,7 +6228,9 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
             "ttsLibrary",
             "6. TTS 완료 표현 모아보기",
             "영어 음성까지 만들어진 표현만 따로 모아 빠르게 다시 듣고 확인할 수 있습니다.",
-            `TTS 완료 표현 ${completedTtsExpressions.length}개`,
+            ttsLibraryQuery.trim()
+              ? `검색 결과 ${filteredCompletedTtsExpressions.length}개 / 전체 ${completedTtsExpressions.length}개`
+              : `TTS 완료 표현 ${completedTtsExpressions.length}개`,
           )}
           {expandedSections.ttsLibrary && (
             <>
@@ -5539,7 +6298,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                       <button
                         className="button"
                         onClick={() => void startTtsLibraryPlayback()}
-                        disabled={!!loading || completedTtsExpressions.length === 0}
+                        disabled={!!loading || filteredCompletedTtsExpressions.length === 0}
                       >
                         {isTtsLibraryPreparing
                           ? "재생 준비 중..."
@@ -5569,8 +6328,25 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   </div>
 
                   <div className="grid" style={{ marginTop: 14 }}>
+                    <div className="mini-card">
+                      <div className="muted" style={{ marginBottom: 8 }}>표현 검색</div>
+                      <input
+                        className="input"
+                        type="search"
+                        value={ttsLibraryQuery}
+                        onChange={(event) => setTtsLibraryQuery(event.target.value)}
+                        placeholder="영어 표현 또는 한국어 문장으로 검색"
+                        disabled={isTtsLibraryPlaying || isTtsLibraryPreparing}
+                      />
+                      <div className="muted" style={{ marginTop: 8 }}>
+                        영어 표현과 한국어 원문을 함께 검색합니다.
+                      </div>
+                    </div>
                     {completedTtsExpressions.length === 0 && (
                       <div className="mini-card muted">아직 TTS 생성이 완료된 표현이 없습니다.</div>
+                    )}
+                    {completedTtsExpressions.length > 0 && filteredCompletedTtsExpressions.length === 0 && (
+                      <div className="mini-card muted">검색 결과가 없습니다.</div>
                     )}
                     {visibleCompletedTtsExpressions.map((expression, index) => (
                       <div key={`tts-library-${expression.id}`} className="mini-card">
@@ -5611,7 +6387,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                         </div>
                       </div>
                     ))}
-                    {renderListControls("ttsLibrary", completedTtsExpressions.length)}
+                    {renderListControls("ttsLibrary", filteredCompletedTtsExpressions.length)}
                   </div>
             </>
           )}
@@ -5630,11 +6406,11 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
         ))}
       </nav>
       <nav className="mobile-section-nav" aria-label="대시보드 섹션 이동">
-        {DASHBOARD_SECTION_TABS.map((tab) => (
+        {MOBILE_DASHBOARD_SECTION_TABS.map((tab) => (
           <button
             key={tab.id}
             type="button"
-            className="mobile-section-nav-button"
+            className={`mobile-section-nav-button ${activeSectionId === tab.id ? "active" : ""}`}
             onClick={() => scrollToDashboardSection(tab.id)}
           >
             {tab.label}

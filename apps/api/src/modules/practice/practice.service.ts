@@ -335,10 +335,6 @@ export class PracticeService {
     console.info(
       `[Practice STT] expression_id=${expressionId} user_id=${userId} file=${fileName} recognized_answer=${JSON.stringify(answer.slice(0, 200))}`,
     );
-    if (!answer) {
-      throw new NotFoundException('음성에서 영어 답변을 인식하지 못했습니다.');
-    }
-
     const responseLatencyMs =
       typeof promptReadyAtMs === 'number' && typeof responseStartedAtMs === 'number'
         ? Math.max(0, responseStartedAtMs - promptReadyAtMs)
@@ -346,6 +342,62 @@ export class PracticeService {
     const isResponseTimedOut = responseLatencyMs !== null && responseLatencyMs > RESPONSE_START_LIMIT_MS;
 
     const scoringTarget = promptTarget?.trim() || expression.englishBase;
+
+    if (!answer) {
+      const feedback = isResponseTimedOut
+        ? `답변 시작이 ${formatResponseStartLatency(responseLatencyMs ?? RESPONSE_START_LIMIT_MS)}로 3초 제한을 초과했고, 음성에서 영어 답변을 인식하지 못해 0점 처리했습니다.`
+        : '음성에서 영어 답변을 인식하지 못해 무응답으로 0점 처리했습니다.';
+
+      const strengthComment = '이번 답변에서는 인식된 영어 발화가 없어 평가할 내용을 찾지 못했습니다.';
+      const correctionComment = '정답 기준 문장을 한 번 들은 뒤, 더 또렷하게 짧게 말해보세요.';
+      const meaningComment = '핵심 의미를 전달한 영어 답변이 인식되지 않았습니다.';
+      const suggestedAnswerAlt = expression.englishNatural ?? expression.englishEasy ?? expression.englishBase;
+
+      const log = await this.createPracticeLogWithFallback({
+        userId,
+        expressionId,
+        target: scoringTarget,
+        answer: '',
+        audioKey,
+        mode: 'voice',
+        testType,
+        promptKorean: promptKorean?.trim() || expression.koreanText,
+        promptContext: promptContext?.trim() || undefined,
+        recognizedAnswer: '',
+        score: 0,
+        meaningScore: 0,
+        naturalnessScore: 0,
+        grammarScore: 0,
+        feedback,
+        strengthComment,
+        correctionComment,
+        meaningComment,
+        suggestedAnswer: scoringTarget,
+        suggestedAnswerAlt,
+      });
+
+      await this.learningAssetsService.promoteProgressFromPractice(userId, expressionId, 0);
+
+      return {
+        id: log.id,
+        score: 0,
+        meaningScore: 0,
+        naturalnessScore: 0,
+        grammarScore: 0,
+        feedback,
+        strengthComment,
+        correctionComment,
+        meaningComment,
+        suggestedAnswer: scoringTarget,
+        suggestedAnswerAlt,
+        target: scoringTarget,
+        answer: '',
+        audioUrl: await this.storage.createPresignedDownload(audioKey),
+        responseLatencyMs,
+        responseTimedOut: isResponseTimedOut,
+        responseLimitMs: RESPONSE_START_LIMIT_MS,
+      };
+    }
 
     const evaluation = await this.openai.evaluatePracticeAnswer({
       koreanPrompt: promptKorean?.trim() || expression.koreanText,

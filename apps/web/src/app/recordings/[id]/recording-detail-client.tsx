@@ -946,26 +946,42 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
       return;
     }
 
-    const playEnglish = async () => {
-      const player = audioRef.current;
-      if (!player) return;
-      player.src = target.ttsUrl!;
+    const player = audioRef.current;
+    if (!player) return;
+
+    const playUrl = async (url: string, errorMessage: string) => {
+      player.src = url;
       player.load();
-      await player.play();
+      await new Promise<void>((resolve, reject) => {
+        const handleEnded = () => {
+          cleanup();
+          resolve();
+        };
+        const handleError = () => {
+          cleanup();
+          reject(new Error(errorMessage));
+        };
+        const cleanup = () => {
+          player.onended = null;
+          player.onerror = null;
+        };
+
+        player.onended = handleEnded;
+        player.onerror = handleError;
+        player.play().catch((err) => {
+          cleanup();
+          reject(err instanceof Error ? err : new Error(errorMessage));
+        });
+      });
     };
 
     if (!target.koreanTtsUrl) {
-      await playEnglish();
+      await playUrl(target.ttsUrl, "영어 TTS 재생에 실패했습니다.");
       return;
     }
 
-    const koreanAudio = new Audio(target.koreanTtsUrl);
-    await new Promise<void>((resolve, reject) => {
-      koreanAudio.onended = () => resolve();
-      koreanAudio.onerror = () => reject(new Error("한국어 TTS 음성 파일을 재생하지 못했습니다."));
-      koreanAudio.play().catch((err) => reject(err instanceof Error ? err : new Error("한국어 TTS 재생에 실패했습니다.")));
-    });
-    await playEnglish();
+    await playUrl(target.koreanTtsUrl, "한국어 TTS 재생에 실패했습니다.");
+    await playUrl(target.ttsUrl, "영어 TTS 재생에 실패했습니다.");
   }
 
   async function handleGenerateExpressionsBulk(speakerScope: "mine" | "others") {

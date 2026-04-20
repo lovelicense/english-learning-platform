@@ -112,6 +112,21 @@ type PracticePromptResult = {
   patternDescription?: string;
 };
 
+type PracticePromptCandidate = {
+  promptKorean: string;
+  promptContext?: string;
+  tips?: string;
+  patternLabel?: string;
+  patternDescription?: string;
+  expectedAnswer?: string;
+  expectedAnswerAlt?: string;
+};
+
+type PatternPromptValidationResult = {
+  isValid: boolean;
+  reason: string;
+};
+
 @Injectable()
 export class OpenAiService {
   private readonly client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -395,20 +410,83 @@ export class OpenAiService {
     }
 
     const isPatternPrompt = input.testType === 'pattern';
+    if (!isPatternPrompt) {
+      const parsed = await this.createPracticePromptCandidate(input, false);
+      return {
+        testType: input.testType,
+        promptKorean: parsed.promptKorean,
+        promptContext: parsed.promptContext,
+        tips: parsed.tips,
+        target: input.englishBase,
+      };
+    }
 
-    const response = await this.client.responses.create({
+    const maxAttempts = 3;
+    let lastCandidate: PracticePromptCandidate | null = null;
+    let lastValidationReason = '';
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const candidate = await this.createPracticePromptCandidate(input, true);
+      lastCandidate = candidate;
+
+      const expectedAnswer = candidate.expectedAnswer?.trim();
+      if (!expectedAnswer) {
+        lastValidationReason = 'expectedAnswer missing';
+        continue;
+      }
+
+      const validation = await this.validatePatternPromptCandidate(input, {
+        promptKorean: candidate.promptKorean,
+        expectedAnswer,
+        expectedAnswerAlt: candidate.expectedAnswerAlt?.trim(),
+      });
+      if (validation.isValid) {
+        return {
+          testType: input.testType,
+          promptKorean: candidate.promptKorean,
+          promptContext: candidate.promptContext,
+          tips: candidate.tips,
+          patternLabel: candidate.patternLabel,
+          patternDescription: candidate.patternDescription,
+          target: expectedAnswer,
+          targetAlt: candidate.expectedAnswerAlt,
+          referenceTarget: input.englishBase,
+        };
+      }
+
+      lastValidationReason = validation.reason;
+      console.warn(
+        `[Pattern Prompt Retry] rejected pattern prompt attempt=${attempt} reason=${validation.reason} source=${JSON.stringify(input.koreanText)} target=${JSON.stringify(input.englishBase)} prompt=${JSON.stringify(candidate.promptKorean)} expected=${JSON.stringify(expectedAnswer)}`,
+      );
+    }
+
+    console.warn(
+      `[Pattern Prompt Fallback] using safe fallback after validation failures reason=${lastValidationReason} source=${JSON.stringify(input.koreanText)} target=${JSON.stringify(input.englishBase)} last_prompt=${JSON.stringify(lastCandidate?.promptKorean ?? '')} last_expected=${JSON.stringify(lastCandidate?.expectedAnswer ?? '')}`,
+    );
+    return this.buildSafePatternFallback(input);
+  }
+
+  private async createPracticePromptCandidate(
+    input: PracticePromptInput,
+    isPatternPrompt: boolean,
+  ): Promise<PracticePromptCandidate> {
+    const response = await this.client!.responses.create({
       model: process.env.OPENAI_LLM_MODEL ?? 'gpt-4.1-mini',
       input: [
         {
           role: 'system',
           content: [
-            'You create Korean situation prompts for English speaking practice.',
+            'You create Korean practice prompts for English speaking practice.',
             'Given a Korean source sentence and its English target, generate either a short Korean situation description or a pattern drill prompt.',
             'If testType is situation, create a short Korean situation description that helps the learner produce the target meaning, but do not reveal the exact answer.',
             'For situation prompts, never include the exact target English, a near-copy of it, or a pattern label that reveals the answer.',
             'For situation prompts, keep hints abstract and useful, but do not mention the exact target phrase or sentence structure verbatim.',
-            'If testType is pattern, extract the reusable English pattern, explain it in Korean, and generate a new Korean prompt that can be answered with the same pattern.',
-            'If testType is pattern, also generate expectedAnswer and expectedAnswerAlt for that new Korean prompt.',
+            'If testType is pattern, extract the reusable English pattern, explain it in Korean, and generate a NEW Korean prompt that can be answered with the same pattern.',
+            'For pattern prompts, promptKorean and expectedAnswer must describe the exact same event and meaning.',
+            'For pattern prompts, keep question type, tense, polarity, subject role, verb meaning, and object meaning aligned between Korean and English.',
+            'For pattern prompts, never drift between close but different verbs such as buy/prepare, bring/take, lend/borrow, give/take, come/go.',
+            'For pattern prompts, expectedAnswer must be a direct natural answer to promptKorean, not just another sentence with a similar grammar frame.',
+            'For pattern prompts, expectedAnswerAlt must preserve the same meaning as expectedAnswer.',
             'Return JSON only.',
           ].join(' '),
         },
@@ -420,6 +498,9 @@ export class OpenAiService {
             `기준 영어 표현: ${input.englishBase}`,
             input.englishNatural ? `자연형: ${input.englishNatural}` : null,
             input.note ? `설명: ${input.note}` : null,
+            isPatternPrompt
+              ? '중요: 새로 만드는 한국어 문제와 expectedAnswer는 반드시 같은 뜻이어야 합니다. 의미가 조금이라도 다르면 안 됩니다.'
+              : null,
           ]
             .filter(Boolean)
             .join('\n\n'),
@@ -454,17 +535,77 @@ export class OpenAiService {
     } as any);
 
     const raw = (response as any).output_text ?? '{}';
-    const parsed = JSON.parse(raw);
+    return JSON.parse(raw);
+  }
+
+  private async validatePatternPromptCandidate(
+    input: PracticePromptInput,
+    candidate: { promptKorean: string; expectedAnswer: string; expectedAnswerAlt?: string },
+  ): Promise<PatternPromptValidationResult> {
+    if (!this.client) {
+      return { isValid: true, reason: 'client unavailable' };
+    }
+
+    const response = await this.client.responses.create({
+      model: process.env.OPENAI_LLM_MODEL ?? 'gpt-4.1-mini',
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You validate whether a Korean practice question and an English answer express the same meaning.',
+            'Be strict.',
+            'Reject when event meaning differs even if grammar pattern is similar.',
+            'Check verb meaning, object meaning, tense, polarity, question type, and participant role.',
+            'Examples of mismatch: prepare vs buy, bring vs take, lend vs borrow, give vs take, who did it vs did they do it.',
+            'Return JSON only.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `원래 한국어 문장: ${input.koreanText}`,
+            `원래 기준 영어 표현: ${input.englishBase}`,
+            `새 한국어 문제: ${candidate.promptKorean}`,
+            `새 영어 정답: ${candidate.expectedAnswer}`,
+            candidate.expectedAnswerAlt ? `새 영어 대안 정답: ${candidate.expectedAnswerAlt}` : null,
+            '판정 기준: 새 한국어 문제를 보고 새 영어 정답을 말했을 때, 의미상 정확한 정답으로 볼 수 있는지 판단하세요.',
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'pattern_prompt_validation',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              isValid: { type: 'boolean' },
+              reason: { type: 'string' },
+            },
+            required: ['isValid', 'reason'],
+          },
+        },
+      },
+    } as any);
+
+    const raw = (response as any).output_text ?? '{}';
+    return JSON.parse(raw);
+  }
+
+  private buildSafePatternFallback(input: PracticePromptInput): PracticePromptResult {
     return {
-      testType: input.testType,
-      promptKorean: parsed.promptKorean,
-      promptContext: parsed.promptContext,
-      tips: parsed.tips,
-      patternLabel: isPatternPrompt ? parsed.patternLabel : undefined,
-      patternDescription: isPatternPrompt ? parsed.patternDescription : undefined,
-      target: isPatternPrompt ? parsed.expectedAnswer : input.englishBase,
-      targetAlt: isPatternPrompt ? parsed.expectedAnswerAlt : undefined,
-      referenceTarget: isPatternPrompt ? input.englishBase : undefined,
+      testType: 'pattern',
+      promptKorean: `${input.koreanText}와 비슷한 영어 틀로 다시 말해보세요.`,
+      promptContext: '새 패턴형 문제 생성 결과의 의미 일치가 불안정해서, 원래 문장의 의미를 유지하는 안전한 패턴 연습 문제로 바꿨습니다.',
+      target: input.englishBase,
+      targetAlt: input.englishNatural ?? input.englishEasy ?? input.englishBase,
+      referenceTarget: input.englishBase,
+      tips: '원래 문장의 핵심 의미를 유지하면서, 같은 문장 틀을 다시 말해보세요.',
+      patternLabel: '원문 기반 패턴 연습',
+      patternDescription: '새 변형 문제 대신 원래 문장의 의미를 유지한 채 핵심 영어 틀을 연습합니다.',
     };
   }
 

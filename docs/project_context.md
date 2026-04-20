@@ -147,9 +147,13 @@ Docker (PostgreSQL)
 
 
 # 실행 방법
-wsl
+
+ wsl
 cd ~/projects/english-learning-platform
 
+-Powershell에서 실행
+docker desktop start
+-wsl에서 실행
 docker compose -f infrastructure/docker/docker-compose.yml up -d
 
 pnpm dev:api
@@ -535,12 +539,6 @@ git push origin main
 
 
 
-
-
-# 새 대화 시작 문장
-영어학습앱 개발 이어서 진행할게. STT + diarization + TTS까지 구현했고, 프로젝트 개발 개요 및 진행상태, 구성 등은 project_context.md  파일 참고해. 
-
-
 # 2026-04-09 모바일 앱 아키텍처/작업 메모
 
 ## 결정한 모바일 아키텍처
@@ -612,3 +610,13 @@ git push origin main
 - 모바일 로그인은 별도 모바일 계정이 아니라 기존 웹/서비스 계정 사용
 - 웹 로그인 화면 기본 입력값은 `demo@example.com / password123`
 - 이 값은 기본 입력값일 뿐, 실제 DB 계정이 없으면 회원가입 필요
+
+
+
+
+
+
+# 새 대화 시작 문장
+영어학습앱 개발 이어서 진행할게. STT + diarization + TTS까지 구현했고, 프로젝트 개발 개요 및 진행상태, 구성 등은 project_context.md  파일 참고해. 
+
+

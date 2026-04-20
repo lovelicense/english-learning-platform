@@ -34,6 +34,34 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   return parseResponse<T>(response);
 }
 
+export async function downloadApiFile(path: string, fileName: string, init?: RequestInit): Promise<void> {
+  const token = getToken();
+  const headers = new Headers(init?.headers ?? {});
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  const response = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers,
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `파일 다운로드에 실패했습니다. (${response.status})`);
+  }
+
+  const blob = await response.blob();
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
 export type UploadTask = {
   promise: Promise<void>;
   cancel: () => void;
