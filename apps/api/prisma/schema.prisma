@@ -97,6 +97,28 @@ enum MatchSource {
   MANUAL
 }
 
+enum ConversationMode {
+  ENGLISH_AI
+  KOREAN_AI
+}
+
+enum ConversationStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum ConversationSpeaker {
+  USER
+  AI
+}
+
+enum ConversationLanguage {
+  EN
+  KO
+  MIXED
+}
+
 enum VocabularyPartOfSpeech {
   NOUN
   VERB
@@ -123,6 +145,9 @@ model User {
   savedSentences SavedSentence[]
   expressions  Expression[]
   practiceLogs PracticeLog[]
+  conversationSessions ConversationSession[]
+  conversationTurns ConversationTurn[]
+  dialoguePracticeSets DialoguePracticeSet[]
   patternProgresses UserPatternProgress[]
   vocabularyProgresses UserVocabularyProgress[]
 }
@@ -217,6 +242,7 @@ model Expression {
   englishBase String
   englishEasy String
   englishNatural String
+  thinkInEnglish String?
   situationPromptKorean String?
   situationPromptContext String?
   situationPromptTips String?
@@ -232,6 +258,7 @@ model Expression {
   utterance    Utterance?    @relation(fields: [utteranceId], references: [id])
   savedSentence SavedSentence? @relation(fields: [savedSentenceId], references: [id])
   practiceLogs PracticeLog[]
+  dialoguePracticeTurns DialoguePracticeTurn[]
   patternMatches ExpressionPatternMatch[]
   vocabularyMatches ExpressionVocabularyMatch[]
 }
@@ -290,6 +317,96 @@ model PracticeLog {
   createdAt    DateTime    @default(now())
   user         User        @relation(fields: [userId], references: [id])
   expression   Expression  @relation(fields: [expressionId], references: [id])
+}
+
+model ConversationSession {
+  id            String             @id @default(cuid())
+  userId        String
+  mode          ConversationMode
+  status        ConversationStatus @default(ACTIVE)
+  title         String?
+  topic         String?
+  scenario      String?
+  goal          String?
+  summary       String?
+  aiOutputMode  String?
+  userInputMode String?
+  completedAt   DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  turns         ConversationTurn[]
+  dialoguePracticeSets DialoguePracticeSet[]
+
+  @@index([userId, mode, createdAt])
+  @@index([userId, status, updatedAt])
+}
+
+model ConversationTurn {
+  id              String               @id @default(cuid())
+  sessionId       String
+  userId          String
+  turnIndex       Int
+  speaker         ConversationSpeaker
+  language        ConversationLanguage
+  originalText    String
+  correctedText   String?
+  naturalText     String?
+  correctionNote  String?
+  intent          String?
+  contextNote     String?
+  inputMode       String?
+  outputMode      String?
+  audioKey        String?
+  ttsKey          String?
+  dialogueAudioKey String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  session         ConversationSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, turnIndex])
+  @@index([userId, createdAt])
+  @@index([sessionId, speaker, createdAt])
+}
+
+model DialoguePracticeSet {
+  id                    String                @id @default(cuid())
+  userId                String
+  conversationSessionId String?
+  title                 String
+  topic                 String?
+  scenario              String?
+  source                String?               @default("ai_conversation")
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationSession   ConversationSession?  @relation(fields: [conversationSessionId], references: [id], onDelete: SetNull)
+  turns                 DialoguePracticeTurn[]
+
+  @@index([userId, createdAt])
+  @@index([conversationSessionId])
+}
+
+model DialoguePracticeTurn {
+  id                       String              @id @default(cuid())
+  practiceSetId            String
+  sequence                 Int
+  aiPrompt                 String
+  aiPromptTtsKey           String?
+  expectedUserAnswer       String
+  expectedUserAnswerAlt    String?
+  hint                     String?
+  explanation              String?
+  expressionId             String?
+  sourceConversationTurnId String?
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+  practiceSet              DialoguePracticeSet @relation(fields: [practiceSetId], references: [id], onDelete: Cascade)
+  expression               Expression?         @relation(fields: [expressionId], references: [id], onDelete: SetNull)
+
+  @@unique([practiceSetId, sequence])
+  @@index([sourceConversationTurnId])
 }
 
 model PatternCategory {

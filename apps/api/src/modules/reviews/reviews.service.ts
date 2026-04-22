@@ -74,7 +74,7 @@ export class ReviewsService {
         const hasVoiceHistory = recentLogs.some((log) => Boolean(log.audioKey));
         const hasRepeatedLowScores = recentLogs.filter((log) => log.score < 70).length >= 2;
 
-        let recommendedTestType: 'translation' | 'situation' = 'translation';
+        let recommendedTestType: 'translation' | 'situation' | 'think' = 'translation';
         let reviewReason = '핵심 표현을 먼저 정확히 익히는 번역형 연습이 좋습니다.';
 
         if (recentLogs.length === 0) {
@@ -83,6 +83,9 @@ export class ReviewsService {
         } else if (hasRepeatedLowScores) {
           recommendedTestType = 'translation';
           reviewReason = '최근 여러 번 핵심 표현이 흔들려서, 먼저 번역형으로 정확도를 다지는 것이 좋습니다.';
+        } else if (e.thinkInEnglish && averageRecentScore >= 80) {
+          recommendedTestType = 'think';
+          reviewReason = '표현의 사용 맥락을 영어 설명만 보고도 떠올릴 수 있게, think in english 복습을 해보는 것이 좋습니다.';
         } else if (averageRecentScore >= 85 && hasVoiceHistory) {
           recommendedTestType = 'situation';
           reviewReason = '최근 점수가 안정적이고 말하기 기록도 있어서, 상황형으로 응용 말하기를 해보는 것이 좋습니다.';

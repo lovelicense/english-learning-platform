@@ -30,6 +30,47 @@ function scoreTranscriptText(text: string) {
   return trimmed.length + uniqueChunkBonus + chunkCountBonus - duplicatePenalty;
 }
 
+function extractThinkInEnglishAnchors(koreanText: string) {
+  const anchors: string[] = [];
+  const quotedPattern = /["'“”‘’「」『』]([^"'“”‘’「」『』]{1,40})["'“”‘’「」『』]/g;
+  for (const match of koreanText.matchAll(quotedPattern)) {
+    const candidate = match[1]?.trim();
+    if (candidate && !anchors.includes(candidate)) {
+      anchors.push(candidate);
+    }
+  }
+
+  const englishWordPattern = /([^\s,.:;!?()]+?)(?:을|를)\s*영어로/g;
+  for (const match of koreanText.matchAll(englishWordPattern)) {
+    const candidate = match[1]?.trim();
+    if (candidate && !anchors.includes(candidate)) {
+      anchors.push(candidate);
+    }
+  }
+
+  return anchors;
+}
+
+function ensureThinkInEnglishAnchors(thinkInEnglish: string, koreanText: string) {
+  const anchors = extractThinkInEnglishAnchors(koreanText);
+  if (anchors.length === 0) {
+    return thinkInEnglish.trim();
+  }
+
+  const normalized = thinkInEnglish.toLowerCase();
+  const missingAnchors = anchors.filter((anchor) => !normalized.includes(anchor.toLowerCase()));
+  if (missingAnchors.length === 0) {
+    return thinkInEnglish.trim();
+  }
+
+  const anchorHint =
+    missingAnchors.length === 1
+      ? ` The key word here is '${missingAnchors[0]}'.`
+      : ` The key words here are ${missingAnchors.map((anchor) => `'${anchor}'`).join(', ')}.`;
+
+  return `${thinkInEnglish.trim()}${anchorHint}`;
+}
+
 type ExpressionContextTurn = {
   utteranceId?: string;
   speakerLabel: string;
@@ -67,7 +108,7 @@ type PracticeEvaluationInput = {
   targetEnglish: string;
   userAnswer: string;
   mode: 'text' | 'voice';
-  testType?: 'translation' | 'situation' | 'pattern' | 'shadowing';
+  testType?: 'translation' | 'situation' | 'pattern' | 'think' | 'shadowing';
   note?: string;
   easyAnswer?: string;
   naturalAnswer?: string;
@@ -76,6 +117,20 @@ type PracticeEvaluationInput = {
   conversationSummary?: string;
   currentIntent?: string;
   participantContext?: string;
+};
+
+type ThinkInEnglishInput = {
+  koreanText: string;
+  englishBase: string;
+  englishNatural?: string;
+  note?: string;
+};
+
+type ExpressionUsageNoteInput = {
+  koreanText: string;
+  englishBase: string;
+  englishNatural?: string;
+  thinkInEnglish?: string;
 };
 
 type PracticeEvaluationResult = {
@@ -96,12 +151,13 @@ type PracticePromptInput = {
   englishBase: string;
   englishEasy?: string;
   englishNatural?: string;
+  thinkInEnglish?: string;
   note?: string;
-  testType: 'translation' | 'situation' | 'pattern';
+  testType: 'translation' | 'situation' | 'pattern' | 'think';
 };
 
 type PracticePromptResult = {
-  testType: 'translation' | 'situation' | 'pattern';
+  testType: 'translation' | 'situation' | 'pattern' | 'think';
   promptKorean: string;
   promptContext?: string;
   target: string;
@@ -125,6 +181,37 @@ type PracticePromptCandidate = {
 type PatternPromptValidationResult = {
   isValid: boolean;
   reason: string;
+};
+
+type AiConversationMode = 'ENGLISH_AI' | 'KOREAN_AI';
+
+type ConversationReplyInput = {
+  mode: AiConversationMode;
+  history: Array<{ speaker: 'USER' | 'AI'; text: string }>;
+  userText: string;
+};
+
+type ConversationReplyResult = {
+  replyText: string;
+  correctedUserText: string;
+  naturalUserText: string;
+  correctionNote: string;
+};
+
+type EnglishConversationAssetInput = {
+  originalText: string;
+  correctedText?: string;
+  naturalText?: string;
+  correctionNote?: string;
+};
+
+type EnglishConversationAssetResult = {
+  koreanText: string;
+  englishBase: string;
+  englishEasy: string;
+  englishNatural: string;
+  thinkInEnglish: string;
+  note: string;
 };
 
 @Injectable()
@@ -263,14 +350,20 @@ export class OpenAiService {
             'If relationship, situation, or desired tone are provided, incorporate them.',
             'If conversation summary and current intent are provided, use them as high-priority guidance.',
             'The Korean source meaning is the top priority. Do not change semantic direction or viewpoint.',
-            'base, easy, natural, and note must all preserve the same core meaning and direction.',
-            'All four outputs must be mutually consistent. They must not disagree about who moves, who receives, or direction of action.',
+            'base, easy, natural, thinkInEnglish, and note must all preserve the same core meaning and direction.',
+            'All outputs must be mutually consistent. They must not disagree about who moves, who receives, or direction of action.',
             'Pay special attention to directional/confusable pairs such as take/bring, come/go, give/take, lend/borrow, and here/there.',
             'If the Korean is ambiguous, choose the most likely meaning from context, then keep all outputs consistent with that one choice.',
-            'Return JSON with base, easy, natural, note.',
+            'Return JSON with base, easy, natural, thinkInEnglish, note.',
             'base: the best core sentence for memorizing and speaking.',
             'easy: simpler and easier spoken English with the same meaning.',
             'natural: the most natural conversational phrasing.',
+            'thinkInEnglish: explain in simple natural English when this sentence is used and what kind of situation or feeling it fits.',
+            'thinkInEnglish should help the learner infer the target sentence from meaning, usage, and key anchors.',
+            'Include the concrete topic, object, or keyword from the Korean source when that anchor is necessary to infer the answer.',
+            'For example, if the sentence asks how to say a specific Korean word in English, mention that Korean word explicitly in thinkInEnglish.',
+            'For requests about names, items, places, or quoted words, include that specific item as a clue.',
+            'Avoid copying the full target sentence verbatim in thinkInEnglish unless necessary.',
             'note: explain the nuance and explicitly mention the key intent and context used in the interpretation.',
             'note must describe the same meaning used in base, easy, and natural, and must not introduce a different verb or direction.',
             'Keep note concise but concrete.',
@@ -292,16 +385,21 @@ export class OpenAiService {
               base: { type: 'string' },
               easy: { type: 'string' },
               natural: { type: 'string' },
+              thinkInEnglish: { type: 'string' },
               note: { type: 'string' },
             },
-            required: ['base', 'easy', 'natural', 'note'],
+            required: ['base', 'easy', 'natural', 'thinkInEnglish', 'note'],
           },
         },
       },
     } as any);
 
     const raw = (response as any).output_text ?? '{}';
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return {
+      ...parsed,
+      thinkInEnglish: ensureThinkInEnglishAnchors(parsed.thinkInEnglish, payload.koreanText),
+    };
   }
 
   async evaluatePracticeAnswer(input: PracticeEvaluationInput): Promise<PracticeEvaluationResult> {
@@ -339,7 +437,7 @@ export class OpenAiService {
           content: [
             `문제 유형: ${input.testType ?? 'translation'}`,
             `답변 방식: ${input.mode}`,
-            `한국어 문제: ${input.koreanPrompt}`,
+            `연습 문제: ${input.koreanPrompt}`,
             input.promptContext ? `문제 상황 설명: ${input.promptContext}` : null,
             input.participantContext ? input.participantContext : null,
             input.sourceContextNote ? `문장별 맥락 메모: ${input.sourceContextNote}` : null,
@@ -395,6 +493,263 @@ export class OpenAiService {
     return JSON.parse(raw);
   }
 
+  async generateConversationReply(input: ConversationReplyInput): Promise<ConversationReplyResult> {
+    if (!this.client) {
+      if (input.mode === 'ENGLISH_AI') {
+        return {
+          replyText: 'That sounds good. What happened next?',
+          correctedUserText: input.userText,
+          naturalUserText: input.userText,
+          correctionNote: 'OPENAI_API_KEY가 없어 목업 대화 응답을 반환했습니다.',
+        };
+      }
+      return {
+        replyText: '그랬구나. 그때 기분이 어땠는지 조금 더 말해줘.',
+        correctedUserText: input.userText,
+        naturalUserText: input.userText,
+        correctionNote: 'OPENAI_API_KEY가 없어 목업 대화 응답을 반환했습니다.',
+      };
+    }
+
+    const historyBlock = input.history
+      .slice(-8)
+      .map((turn, index) => `- turn_${index + 1} [${turn.speaker}] ${turn.text}`)
+      .join('\n');
+
+    const systemPrompt =
+      input.mode === 'ENGLISH_AI'
+        ? [
+            'You are a friendly English conversation partner and speaking coach.',
+            'Reply in natural spoken English and keep the conversation moving.',
+            'correctedUserText: grammar-correct version of the learner English.',
+            'naturalUserText: more natural conversational version with the same meaning.',
+            'correctionNote: short Korean note about the main correction point.',
+            'replyText: your next reply in English.',
+            'Return JSON only.',
+          ].join(' ')
+        : [
+            'You are a warm Korean conversation partner.',
+            'Reply in natural Korean and keep the conversation moving.',
+            'correctedUserText: cleaned-up Korean phrasing that preserves the meaning.',
+            'naturalUserText: more natural spoken Korean with the same meaning.',
+            'correctionNote: short Korean note about clarity or naturalness.',
+            'replyText: your next reply in Korean.',
+            'Return JSON only.',
+          ].join(' ');
+
+    const response = await this.client.responses.create({
+      model: process.env.OPENAI_LLM_MODEL ?? 'gpt-4.1-mini',
+      input: [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content: [
+            historyBlock ? `대화 기록:\n${historyBlock}` : '대화 기록: 없음',
+            `사용자 최신 발화: ${input.userText}`,
+          ].join('\n\n'),
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'conversation_reply',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              replyText: { type: 'string' },
+              correctedUserText: { type: 'string' },
+              naturalUserText: { type: 'string' },
+              correctionNote: { type: 'string' },
+            },
+            required: ['replyText', 'correctedUserText', 'naturalUserText', 'correctionNote'],
+          },
+        },
+      },
+    } as any);
+
+    const raw = (response as any).output_text ?? '{}';
+    return JSON.parse(raw);
+  }
+
+  async generateEnglishConversationAsset(input: EnglishConversationAssetInput): Promise<EnglishConversationAssetResult> {
+    const englishBase = input.correctedText?.trim() || input.originalText.trim();
+    const englishNatural = input.naturalText?.trim() || englishBase;
+    const englishEasy = input.originalText.trim() || englishBase;
+
+    if (!this.client) {
+      return {
+        koreanText: '영어 AI 대화에서 저장한 표현',
+        englishBase,
+        englishEasy,
+        englishNatural,
+        thinkInEnglish: `This is used when you want to say "${englishBase}" in a natural conversation.`,
+        note: '영어 AI 대화에서 나온 표현을 복습용 자산으로 정리한 설명입니다.',
+      };
+    }
+
+    const response = await this.client.responses.create({
+      model: process.env.OPENAI_LLM_MODEL ?? 'gpt-4.1-mini',
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You convert an English learner utterance into a reusable English expression asset.',
+            'Create a short Korean meaning label that preserves the speaker meaning.',
+            'base, easy, natural must stay semantically aligned.',
+            'thinkInEnglish should explain in simple English when this expression is used so the learner can recall it later.',
+            'note should be a concise Korean explanation of the saved expression usage, nuance, and when it fits.',
+            'note is for studying the final expression, not for listing the learner mistakes.',
+            'Do not copy the correctionNote directly into note.',
+            'If correctionNote exists, use it only as background context to understand the learner intent and the better final phrasing.',
+            'Return JSON only.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `원래 영어: ${input.originalText}`,
+            input.correctedText ? `교정 영어: ${input.correctedText}` : null,
+            input.naturalText ? `자연형 영어: ${input.naturalText}` : null,
+            input.correctionNote ? `교정 메모: ${input.correctionNote}` : null,
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'english_conversation_asset',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              koreanText: { type: 'string' },
+              englishBase: { type: 'string' },
+              englishEasy: { type: 'string' },
+              englishNatural: { type: 'string' },
+              thinkInEnglish: { type: 'string' },
+              note: { type: 'string' },
+            },
+            required: ['koreanText', 'englishBase', 'englishEasy', 'englishNatural', 'thinkInEnglish', 'note'],
+          },
+        },
+      },
+    } as any);
+
+    const raw = (response as any).output_text ?? '{}';
+    return JSON.parse(raw);
+  }
+
+  async generateThinkInEnglish(input: ThinkInEnglishInput): Promise<string> {
+    if (!this.client) {
+      return `Use this when you want to express the same idea in English. Include the key topic from the original Korean, so the target sentence is easier to infer.`;
+    }
+
+    const response = await this.client.responses.create({
+      model: process.env.OPENAI_LLM_MODEL ?? 'gpt-4.1-mini',
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You write a short "think in English" cue for an English learning app.',
+            'Explain in simple English when the target sentence is used and what nuance it carries.',
+            'Help the learner infer and recall the target expression from meaning, situation, and key anchors.',
+            'Include the concrete topic, object, or keyword from the Korean source when that anchor is needed to infer the answer.',
+            'If the sentence is about how to say a specific Korean word in English, mention that Korean word explicitly.',
+            'If a person, item, place, or quoted term is central to the sentence, include it as a clue.',
+            'Do not write in Korean.',
+            'Keep it to 1-3 sentences.',
+            'Avoid repeating the full target sentence verbatim unless necessary.',
+            'Return JSON only.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `한국어 의미: ${input.koreanText}`,
+            `기준 영어 표현: ${input.englishBase}`,
+            input.englishNatural ? `자연형: ${input.englishNatural}` : null,
+            input.note ? `표현 설명: ${input.note}` : null,
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'think_in_english',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              thinkInEnglish: { type: 'string' },
+            },
+            required: ['thinkInEnglish'],
+          },
+        },
+      },
+    } as any);
+
+    const raw = (response as any).output_text ?? '{}';
+    const parsed = JSON.parse(raw);
+    return ensureThinkInEnglishAnchors(parsed.thinkInEnglish, input.koreanText);
+  }
+
+  async generateExpressionUsageNote(input: ExpressionUsageNoteInput): Promise<string> {
+    if (!this.client) {
+      return '이 표현이 실제로 언제, 어떤 의도로 쓰이는지 이해하기 쉽게 정리한 설명입니다.';
+    }
+
+    const response = await this.client.responses.create({
+      model: process.env.OPENAI_LLM_MODEL ?? 'gpt-4.1-mini',
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You write a short Korean study note for an English expression.',
+            'Focus on when the final expression is used, what nuance it has, and why it sounds natural.',
+            'Do not talk about learner mistakes or correction history.',
+            'Do not mention source tracking or metadata.',
+            'Keep it concise, practical, and study-friendly.',
+            'Return JSON only.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `한국어 의미: ${input.koreanText}`,
+            `기준 영어 표현: ${input.englishBase}`,
+            input.englishNatural ? `자연형: ${input.englishNatural}` : null,
+            input.thinkInEnglish ? `Think in English: ${input.thinkInEnglish}` : null,
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'expression_usage_note',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              note: { type: 'string' },
+            },
+            required: ['note'],
+          },
+        },
+      },
+    } as any);
+
+    const raw = (response as any).output_text ?? '{}';
+    const parsed = JSON.parse(raw);
+    return parsed.note;
+  }
+
   async generatePracticePrompt(input: PracticePromptInput): Promise<PracticePromptResult> {
     if (!this.client) {
       return this.mockPracticePrompt(input);
@@ -406,6 +761,19 @@ export class OpenAiService {
         promptKorean: input.koreanText,
         target: input.englishBase,
         tips: '핵심 의미를 살려 자연스럽게 영어로 말해보세요.',
+      };
+    }
+
+    if (input.testType === 'think') {
+      return {
+        testType: 'think',
+        promptKorean:
+          input.thinkInEnglish?.trim() ||
+          `This is used when you want to say "${input.englishBase}" in a real conversation.`,
+        promptContext: '영어 설명을 읽고, 떠오르는 핵심 영어 문장을 그대로 말해보세요.',
+        target: input.englishBase,
+        targetAlt: input.englishNatural ?? input.englishEasy ?? input.englishBase,
+        tips: '설명 속 상황과 뉘앙스를 보고, 가장 어울리는 영어 문장을 떠올려 보세요.',
       };
     }
 
@@ -829,6 +1197,8 @@ export class OpenAiService {
         base: "You're too young to stay home alone.",
         easy: "You can't stay home by yourself yet.",
         natural: "You're not old enough to stay home alone.",
+        thinkInEnglish:
+          "This is used when someone is still too young to stay home without an adult. It sounds like care and protection, not just a hard rule.",
         note: '아이와 보호자 대화 맥락을 반영해, 단순 금지보다 아직 어려서 안 된다는 의미로 풀었습니다.',
       };
     }
@@ -837,6 +1207,8 @@ export class OpenAiService {
         base: "I'm on my way to pick up my kid.",
         easy: "I'm going to pick up my child now.",
         natural: "I'm heading out to pick up my kid.",
+        thinkInEnglish:
+          'This is often used when you are already moving to get your child. It sounds natural in a quick everyday update.',
         note: 'on my way와 pick up은 일상회화에서 자주 쓰는 표현입니다.',
       };
     }
@@ -844,6 +1216,7 @@ export class OpenAiService {
       base: 'Here is a natural English version of your sentence.',
       easy: 'This is an easier spoken version.',
       natural: 'This is a more natural conversational version.',
+      thinkInEnglish: 'This is used when you want to express the same idea in a natural everyday conversation.',
       note: 'OPENAI_API_KEY가 없어서 목업 응답을 반환했습니다.',
     };
   }
@@ -895,6 +1268,19 @@ export class OpenAiService {
         promptKorean: input.koreanText,
         target: input.englishBase,
         tips: '핵심 의미를 살려 자연스럽게 영어로 말해보세요.',
+      };
+    }
+
+    if (input.testType === 'think') {
+      return {
+        testType: 'think',
+        promptKorean:
+          input.thinkInEnglish?.trim() ||
+          `This is used when you want to say "${input.englishBase}" in a natural conversation.`,
+        promptContext: '영어 설명을 읽고 해당 영어 문장을 떠올려 말해보세요.',
+        target: input.englishBase,
+        targetAlt: input.englishNatural ?? input.englishEasy ?? input.englishBase,
+        tips: '설명만 보고 영어 표현을 복원하는 연습입니다.',
       };
     }
 

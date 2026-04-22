@@ -112,9 +112,36 @@ export class PracticeService {
     );
   }
 
-  async generatePrompt(userId: string, expressionId: string, testType: 'translation' | 'situation' | 'pattern') {
+  async generatePrompt(userId: string, expressionId: string, testType: 'translation' | 'situation' | 'pattern' | 'think') {
     const expression = await this.prisma.expression.findFirst({ where: { id: expressionId, userId } });
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
+
+    if (testType === 'think') {
+      const thinkInEnglish =
+        expression.thinkInEnglish?.trim() ||
+        (await this.openai.generateThinkInEnglish({
+          koreanText: expression.koreanText,
+          englishBase: expression.englishBase,
+          englishNatural: expression.englishNatural ?? undefined,
+          note: expression.note ?? undefined,
+        }));
+
+      if (!expression.thinkInEnglish?.trim()) {
+        await this.prisma.expression.update({
+          where: { id: expression.id },
+          data: { thinkInEnglish },
+        } as any);
+      }
+
+      return {
+        testType: 'think' as const,
+        promptKorean: thinkInEnglish,
+        promptContext: '영어 설명을 읽고 떠오르는 핵심 영어 문장을 말해보세요.',
+        tips: '설명 속 상황과 뉘앙스를 보고, 가장 어울리는 영어 문장을 복원해 보세요.',
+        target: expression.englishBase,
+        targetAlt: expression.englishNatural ?? expression.englishEasy ?? expression.englishBase,
+      };
+    }
 
     if (testType === 'situation') {
       const storedSituationPrompt = await this.prisma.$queryRaw<
@@ -176,7 +203,7 @@ export class PracticeService {
     userId: string,
     expressionId: string,
     answer: string,
-    testType: 'translation' | 'situation' | 'pattern' = 'translation',
+    testType: 'translation' | 'situation' | 'pattern' | 'think' = 'translation',
     promptKorean?: string,
     promptContext?: string,
     promptTarget?: string,
@@ -294,7 +321,7 @@ export class PracticeService {
     expressionId: string,
     audioKey: string,
     fileName: string,
-    testType: 'translation' | 'situation' | 'pattern' = 'translation',
+    testType: 'translation' | 'situation' | 'pattern' | 'think' = 'translation',
     promptKorean?: string,
     promptContext?: string,
     promptTarget?: string,
@@ -478,7 +505,7 @@ export class PracticeService {
     answer: string;
     audioKey?: string;
     mode: 'text' | 'voice';
-    testType: 'translation' | 'situation' | 'pattern';
+    testType: 'translation' | 'situation' | 'pattern' | 'think';
     promptKorean: string;
     promptContext?: string;
     recognizedAnswer: string;

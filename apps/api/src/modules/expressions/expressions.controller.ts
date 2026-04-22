@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { BackfillThinkInEnglishDto } from './dto/backfill-think-in-english.dto';
 import { GenerateExpressionDto } from './dto/generate-expression.dto';
 import { GenerateRecordingExpressionsDto } from './dto/generate-recording-expressions.dto';
 import { GenerateRecordingTtsDto } from './dto/generate-recording-tts.dto';
@@ -33,6 +34,11 @@ export class ExpressionsController {
     return this.expressionsService.generateTtsForRecording(userId, dto.recordingId, dto.onlyMissing ?? true);
   }
 
+  @Post('think-in-english/backfill')
+  backfillThinkInEnglish(@CurrentUser('userId') userId: string, @Body() dto: BackfillThinkInEnglishDto) {
+    return this.expressionsService.backfillThinkInEnglish(userId, dto.onlyMissing ?? true);
+  }
+
   @Post(':id/tts')
   generateTts(@CurrentUser('userId') userId: string, @Param('id') id: string) {
     return this.expressionsService.generateTts(userId, id);
@@ -41,6 +47,11 @@ export class ExpressionsController {
   @Patch(':id/memo')
   updateMemo(@CurrentUser('userId') userId: string, @Param('id') id: string, @Body() dto: UpdateExpressionMemoDto) {
     return this.expressionsService.updateMemo(userId, id, dto.userMemo);
+  }
+
+  @Post(':id/refresh-study-aids')
+  refreshStudyAids(@CurrentUser('userId') userId: string, @Param('id') id: string) {
+    return this.expressionsService.refreshStudyAids(userId, id);
   }
 
   @Get()

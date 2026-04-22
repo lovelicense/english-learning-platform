@@ -283,6 +283,7 @@ export class ExportsService {
         englishBase: expression.englishBase,
         englishEasy: expression.englishEasy,
         englishNatural: expression.englishNatural,
+        thinkInEnglish: expression.thinkInEnglish ?? null,
         note: expression.note ?? null,
         userMemo: expression.userMemo ?? null,
         sourceContextNote: expression.utterance?.contextNote ?? expression.savedSentence?.contextNote ?? null,

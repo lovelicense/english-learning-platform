@@ -281,6 +281,7 @@ export class ExpressionsService {
         englishBase: generated.base,
         englishEasy: generated.easy,
         englishNatural: generated.natural,
+        thinkInEnglish: generated.thinkInEnglish,
         note: generated.note,
       },
     } as any);
@@ -297,6 +298,7 @@ export class ExpressionsService {
       englishBase: string;
       englishEasy?: string;
       englishNatural?: string;
+      thinkInEnglish?: string;
       note?: string;
       promptContext?: string;
     },
@@ -311,6 +313,15 @@ export class ExpressionsService {
     if (!koreanText || !englishBase) {
       throw new NotFoundException('저장할 한국어 문장과 영어 표현이 필요합니다.');
     }
+
+    const thinkInEnglish =
+      input.thinkInEnglish?.trim() ||
+      (await this.openai.generateThinkInEnglish({
+        koreanText,
+        englishBase,
+        englishNatural,
+        note: note ?? undefined,
+      }));
 
     const savedSentence = await (this.prisma as any).savedSentence.create({
       data: {
@@ -328,6 +339,7 @@ export class ExpressionsService {
         englishBase,
         englishEasy,
         englishNatural,
+        thinkInEnglish,
         note,
       },
     } as any);
@@ -430,6 +442,7 @@ export class ExpressionsService {
           englishBase: generated.base,
           englishEasy: generated.easy,
           englishNatural: generated.natural,
+          thinkInEnglish: generated.thinkInEnglish,
           note: generated.note,
         },
       });
@@ -746,6 +759,72 @@ export class ExpressionsService {
       totalRequested: targets.length,
       expressions: generated,
     };
+  }
+
+  async backfillThinkInEnglish(userId: string, onlyMissing = true) {
+    const expressions = await this.prisma.expression.findMany({
+      where: {
+        userId,
+        ...(onlyMissing ? { OR: [{ thinkInEnglish: null }, { thinkInEnglish: '' }] } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+    } as any);
+
+    const updatedIds: string[] = [];
+
+    for (const expression of expressions) {
+      const thinkInEnglish = await this.openai.generateThinkInEnglish({
+        koreanText: expression.koreanText,
+        englishBase: expression.englishBase,
+        englishNatural: expression.englishNatural ?? undefined,
+        note: expression.note ?? undefined,
+      });
+
+      await this.prisma.expression.update({
+        where: { id: expression.id },
+        data: { thinkInEnglish },
+      } as any);
+
+      updatedIds.push(expression.id);
+    }
+
+    return {
+      updatedCount: updatedIds.length,
+      skippedCount: 0,
+      totalRequested: expressions.length,
+      expressionIds: updatedIds,
+    };
+  }
+
+  async refreshStudyAids(userId: string, expressionId: string) {
+    const expression = await this.prisma.expression.findFirst({
+      where: { id: expressionId, userId },
+    });
+    if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
+
+    const thinkInEnglish = await this.openai.generateThinkInEnglish({
+      koreanText: expression.koreanText,
+      englishBase: expression.englishBase,
+      englishNatural: expression.englishNatural ?? undefined,
+      note: expression.note ?? undefined,
+    });
+    const note = await this.openai.generateExpressionUsageNote({
+      koreanText: expression.koreanText,
+      englishBase: expression.englishBase,
+      englishNatural: expression.englishNatural ?? undefined,
+      thinkInEnglish,
+    });
+
+    await this.prisma.expression.update({
+      where: { id: expression.id },
+      data: {
+        thinkInEnglish,
+        note,
+        userMemo: null,
+      },
+    } as any);
+
+    return this.list(userId).then((items) => items.find((item) => item.id === expression.id));
   }
 
   async list(userId: string) {

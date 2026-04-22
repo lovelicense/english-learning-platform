@@ -62,6 +62,32 @@ Export 방향:
 - 다른 AI 서비스나 개인 워크플로우에서 다시 활용할 수 있는 구조를 목표로 함
 
 
+# AI 대화 자산화 확장 방향
+기능 트랙을 아래 2개로 분리해서 설계
+
+1. 영어 AI 대화 트랙 (`A + B + C`)
+   - AI와 영어 대화
+   - 대화 기록 저장
+   - 대화 -> 다이얼로그 연습 변환
+   - 내 영어 표현 자산 저장
+   - 저장된 영어 표현은 기존 테스트/복습에 합류
+
+2. 한국어 AI 대화 트랙 (`D`)
+   - AI와 한국어 대화
+   - 내 한국어 발화를 한국어 자산으로 저장
+   - 이후 흐름은 기존 `녹음파일 업로드 -> STT 이후`와 같은 레벨의 파이프라인으로 연결
+   - 즉 `한국어 자산화 -> 영어 표현 생성 -> TTS -> 테스트 -> 복습`
+
+핵심 원칙:
+- 영어 AI 대화는 `영어 자산화 채널`
+- 한국어 AI 대화는 `한국어 원천 데이터 수집 채널`
+- 대화 로그와 학습 자산은 분리해서 관리
+- 기존 `Expression`, `SavedSentence`, `Practice` 흐름과 반드시 통합
+
+상세 설계 문서:
+- [AI 대화 자산화 설계안](./ai_conversation_asset_plan.md)
+
+
 # 기술 스택
 Frontend:
 - Next.js (Web)
@@ -213,6 +239,7 @@ worker_ecr_repository_url = "574844118613.dkr.ecr.ap-northeast-2.amazonaws.com/e
 ./infrastructure/scripts/deploy-aws.sh
 
 참고:
+- Terraform provider를 아직 한 번도 받지 않은 환경이면 최초 1회는 `infrastructure/terraform`에서 `terraform init` 또는 `deploy-aws.sh` 실행 시 인터넷 연결이 필요
 - 로컬 DB에만 직접 넣어둔 데이터는 자동 복사되지 않음
 - 운영에 반영되는 것은 현재 코드 기준 `apps/api/prisma/seed.ts` 내용
 - 시드만 다시 넣고 싶으면 아래 명령으로 단독 실행 가능
@@ -227,6 +254,9 @@ worker_ecr_repository_url = "574844118613.dkr.ecr.ap-northeast-2.amazonaws.com/e
 - 다시 운영 확인이 필요하면 아래 배포 명령을 다시 실행하면 됨
 
 ./infrastructure/scripts/stop-aws.sh
+
+참고:
+- 이미 `infrastructure/terraform/.terraform` 아래 provider가 내려받아진 상태라면 스크립트가 이를 재사용해서 불필요한 registry 재조회 없이 동작
 
 # github 배포 방법
 git status
@@ -618,5 +648,3 @@ git push origin main
 
 # 새 대화 시작 문장
 영어학습앱 개발 이어서 진행할게. STT + diarization + TTS까지 구현했고, 프로젝트 개발 개요 및 진행상태, 구성 등은 project_context.md  파일 참고해. 
-
-

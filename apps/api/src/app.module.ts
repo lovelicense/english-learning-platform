@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './modules/auth/auth.module';
+import { AiConversationsModule } from './modules/ai-conversations/ai-conversations.module';
 import { DbModule } from './modules/db/db.module';
 import { ExpressionsModule } from './modules/expressions/expressions.module';
 import { ExportsModule } from './modules/exports/exports.module';
@@ -24,6 +25,7 @@ import { UsersModule } from './modules/users/users.module';
     PersonProfilesModule,
     UsersModule,
     AuthModule,
+    AiConversationsModule,
     HealthModule,
     RecordingSessionsModule,
     RecordingsModule,

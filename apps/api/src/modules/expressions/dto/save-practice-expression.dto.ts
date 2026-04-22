@@ -19,6 +19,10 @@ export class SavePracticeExpressionDto {
 
   @IsOptional()
   @IsString()
+  thinkInEnglish?: string;
+
+  @IsOptional()
+  @IsString()
   note?: string;
 
   @IsOptional()

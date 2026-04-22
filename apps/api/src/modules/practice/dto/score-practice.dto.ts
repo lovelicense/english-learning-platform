@@ -6,8 +6,8 @@ export class GeneratePracticePromptDto {
   expressionId!: string;
 
   @IsString()
-  @IsIn(['translation', 'situation', 'pattern'])
-  testType!: 'translation' | 'situation' | 'pattern';
+  @IsIn(['translation', 'situation', 'pattern', 'think'])
+  testType!: 'translation' | 'situation' | 'pattern' | 'think';
 }
 
 export class ScorePracticeDto {
@@ -20,8 +20,8 @@ export class ScorePracticeDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(['translation', 'situation', 'pattern'])
-  testType?: 'translation' | 'situation' | 'pattern';
+  @IsIn(['translation', 'situation', 'pattern', 'think'])
+  testType?: 'translation' | 'situation' | 'pattern' | 'think';
 
   @IsOptional()
   @IsString()
@@ -70,8 +70,8 @@ export class ScoreVoicePracticeDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(['translation', 'situation', 'pattern'])
-  testType?: 'translation' | 'situation' | 'pattern';
+  @IsIn(['translation', 'situation', 'pattern', 'think'])
+  testType?: 'translation' | 'situation' | 'pattern' | 'think';
 
   @IsOptional()
   @IsString()

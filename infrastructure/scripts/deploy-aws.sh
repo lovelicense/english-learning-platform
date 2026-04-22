@@ -24,8 +24,9 @@ if [[ ! -f "${TF_DIR}/terraform.tfvars" ]]; then
   exit 1
 fi
 
+"${ROOT_DIR}/infrastructure/scripts/terraform-ensure-init.sh" "${TF_DIR}"
+
 pushd "${TF_DIR}" >/dev/null
-terraform init
 terraform apply -auto-approve \
   -target=aws_ecr_repository.web \
   -target=aws_ecr_repository.api \

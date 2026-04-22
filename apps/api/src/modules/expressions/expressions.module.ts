@@ -7,5 +7,6 @@ import { LearningAssetsModule } from '../learning-assets/learning-assets.module'
   imports: [LearningAssetsModule],
   controllers: [ExpressionsController],
   providers: [ExpressionsService],
+  exports: [ExpressionsService],
 })
 export class ExpressionsModule {}

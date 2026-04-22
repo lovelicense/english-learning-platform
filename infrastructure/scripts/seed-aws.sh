@@ -15,8 +15,9 @@ if [[ ! -f "${TF_DIR}/terraform.tfvars" ]]; then
   exit 1
 fi
 
+"${ROOT_DIR}/infrastructure/scripts/terraform-ensure-init.sh" "${TF_DIR}"
+
 pushd "${TF_DIR}" >/dev/null
-terraform init >/dev/null
 
 CLUSTER_NAME="$(terraform output -raw ecs_cluster_name)"
 TASK_DEFINITION_ARN="$(terraform output -raw api_task_definition_arn)"
