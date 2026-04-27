@@ -3,6 +3,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AiConversationsService } from './ai-conversations.service';
+import { AssistConversationReplyDto } from './dto/assist-conversation-reply.dto';
 import { CreateConversationSessionDto } from './dto/create-session.dto';
 import { RespondConversationDto } from './dto/respond-conversation.dto';
 import { TranscribeConversationAudioDto } from './dto/transcribe-conversation-audio.dto';
@@ -51,6 +52,11 @@ export class AiConversationsController {
   @Post('respond')
   respond(@CurrentUser('userId') userId: string, @Body() dto: RespondConversationDto) {
     return this.aiConversationsService.respond(userId, dto);
+  }
+
+  @Post('assist-reply')
+  assistReply(@CurrentUser('userId') userId: string, @Body() dto: AssistConversationReplyDto) {
+    return this.aiConversationsService.assistReply(userId, dto);
   }
 
   @Post('transcribe')

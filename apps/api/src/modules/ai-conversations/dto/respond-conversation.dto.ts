@@ -16,4 +16,24 @@ export class RespondConversationDto {
 
   @IsString()
   text!: string;
+
+  @IsOptional()
+  @IsString()
+  userRole?: string;
+
+  @IsOptional()
+  @IsString()
+  aiRole?: string;
+
+  @IsOptional()
+  @IsString()
+  conversationTopic?: string;
+
+  @IsOptional()
+  @IsString()
+  situationDescription?: string;
+
+  @IsOptional()
+  @IsString()
+  userStartText?: string;
 }

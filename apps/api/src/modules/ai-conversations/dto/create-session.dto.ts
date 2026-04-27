@@ -45,6 +45,26 @@ export class CreateConversationSessionDto {
   goal?: string;
 
   @IsOptional()
+  @IsString()
+  userRole?: string;
+
+  @IsOptional()
+  @IsString()
+  aiRole?: string;
+
+  @IsOptional()
+  @IsString()
+  conversationTopic?: string;
+
+  @IsOptional()
+  @IsString()
+  situationDescription?: string;
+
+  @IsOptional()
+  @IsString()
+  userStartText?: string;
+
+  @IsOptional()
   @IsIn(['text', 'voice'])
   aiOutputMode?: 'text' | 'voice';
 

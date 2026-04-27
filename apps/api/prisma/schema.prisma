@@ -328,6 +328,11 @@ model ConversationSession {
   topic         String?
   scenario      String?
   goal          String?
+  userRole      String?
+  aiRole        String?
+  conversationTopic String?
+  situationDescription String?
+  userStartText String?
   summary       String?
   aiOutputMode  String?
   userInputMode String?
@@ -352,6 +357,7 @@ model ConversationTurn {
   originalText    String
   correctedText   String?
   naturalText     String?
+  meaningKo       String?
   correctionNote  String?
   intent          String?
   contextNote     String?
@@ -377,6 +383,11 @@ model DialoguePracticeSet {
   title                 String
   topic                 String?
   scenario              String?
+  userRole              String?
+  aiRole                String?
+  conversationTopic     String?
+  situationDescription  String?
+  userStartText         String?
   source                String?               @default("ai_conversation")
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt

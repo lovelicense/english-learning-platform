@@ -170,7 +170,7 @@ type ReviewItem = {
 };
 type ReviewStrategy = "system" | "low_score" | "stale" | "voice_gap" | "random";
 type ExpressionBrowserScope = "recording" | "all";
-type PracticeFlowMode = "single" | "review_once" | "review_series";
+type PracticeFlowMode = "single" | "review";
 type AiConversationTab = "english" | "korean";
 type AiOutputMode = "text" | "voice";
 type AiInputMode = "text" | "voice";
@@ -182,6 +182,7 @@ type AiConversationTurn = {
   originalText: string;
   correctedText?: string | null;
   naturalText?: string | null;
+  meaningKo?: string | null;
   correctionNote?: string | null;
   inputMode?: "text" | "voice" | null;
   outputMode?: "text" | "voice" | null;
@@ -193,6 +194,14 @@ type AiConversationSession = {
   mode: "ENGLISH_AI" | "KOREAN_AI";
   status: "ACTIVE" | "COMPLETED" | "ARCHIVED";
   title?: string | null;
+  topic?: string | null;
+  scenario?: string | null;
+  goal?: string | null;
+  userRole?: string | null;
+  aiRole?: string | null;
+  conversationTopic?: string | null;
+  situationDescription?: string | null;
+  userStartText?: string | null;
   aiOutputMode?: "text" | "voice" | null;
   userInputMode?: "text" | "voice" | null;
   turns: AiConversationTurn[];
@@ -206,6 +215,11 @@ type DialoguePracticeSet = {
   title: string;
   topic?: string | null;
   scenario?: string | null;
+  userRole?: string | null;
+  aiRole?: string | null;
+  conversationTopic?: string | null;
+  situationDescription?: string | null;
+  userStartText?: string | null;
   source?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -585,7 +599,8 @@ const DASHBOARD_SECTION_TABS = [
   { id: "recordingDetail", label: "녹음 상세" },
   { id: "expressions", label: "표현" },
   { id: "aiConversation", label: "AI 대화" },
-  { id: "practice", label: "연습" },
+  { id: "dialoguePractice", label: "다이얼로그 연습" },
+  { id: "practice", label: "표현 연습" },
   { id: "practiceHistory", label: "기록" },
   { id: "ttsLibrary", label: "TTS" },
 ] as const;
@@ -595,7 +610,8 @@ const MOBILE_DASHBOARD_SECTION_TABS = [
   { id: "recordings", label: "녹음" },
   { id: "expressions", label: "표현" },
   { id: "aiConversation", label: "AI 대화" },
-  { id: "practice", label: "연습" },
+  { id: "dialoguePractice", label: "다이얼로그" },
+  { id: "practice", label: "표현 연습" },
   { id: "practiceHistory", label: "기록" },
   { id: "ttsLibrary", label: "TTS" },
 ] as const;
@@ -725,6 +741,18 @@ export default function DashboardPage() {
   const [koreanAiOutputMode, setKoreanAiOutputMode] = useState<AiOutputMode>("text");
   const [koreanAiInputMode, setKoreanAiInputMode] = useState<AiInputMode>("text");
   const [englishAiDraftText, setEnglishAiDraftText] = useState("");
+  const [englishAiUserRoleDraft, setEnglishAiUserRoleDraft] = useState("");
+  const [englishAiRoleDraft, setEnglishAiRoleDraft] = useState("");
+  const [englishAiConversationTopicDraft, setEnglishAiConversationTopicDraft] = useState("");
+  const [englishAiSituationDescriptionDraft, setEnglishAiSituationDescriptionDraft] = useState("");
+  const [visibleAiMeaningTurnIds, setVisibleAiMeaningTurnIds] = useState<Record<string, boolean>>({});
+  const [showEnglishReplyAssist, setShowEnglishReplyAssist] = useState(false);
+  const [englishReplyAssistKoreanText, setEnglishReplyAssistKoreanText] = useState("");
+  const [englishReplyAssistResult, setEnglishReplyAssistResult] = useState<{
+    englishEasy: string;
+    englishNatural: string;
+    noteKo: string;
+  } | null>(null);
   const [englishAiVoiceFile, setEnglishAiVoiceFile] = useState<File | null>(null);
   const [englishAiTranscriptDraft, setEnglishAiTranscriptDraft] = useState("");
   const [englishAiSession, setEnglishAiSession] = useState<AiConversationSession | null>(null);
@@ -745,6 +773,7 @@ export default function DashboardPage() {
   const [koreanAiSessions, setKoreanAiSessions] = useState<AiConversationSessionSummary[]>([]);
   const [aiSessionTitleDrafts, setAiSessionTitleDrafts] = useState<Record<string, string>>({});
   const [dialogueTitleDrafts, setDialogueTitleDrafts] = useState<Record<string, string>>({});
+  const [activeDialogueTitleEditId, setActiveDialogueTitleEditId] = useState("");
   const [isAiConversationRecording, setIsAiConversationRecording] = useState(false);
   const [isDialogueRecording, setIsDialogueRecording] = useState(false);
   const [aiConversationRecordingTrack, setAiConversationRecordingTrack] = useState<AiConversationTab | null>(null);
@@ -797,10 +826,11 @@ export default function DashboardPage() {
     isActive: false,
   });
   const [failedManualChunks, setFailedManualChunks] = useState<FailedManualChunk[]>([]);
-  const [expandedSections, setExpandedSections] = useState<Record<"recordings" | "expressions" | "aiConversation" | "practice" | "practiceHistory" | "ttsLibrary", boolean>>({
+  const [expandedSections, setExpandedSections] = useState<Record<"recordings" | "expressions" | "aiConversation" | "dialoguePractice" | "practice" | "practiceHistory" | "ttsLibrary", boolean>>({
     recordings: true,
     expressions: true,
     aiConversation: true,
+    dialoguePractice: true,
     practice: true,
     practiceHistory: false,
     ttsLibrary: false,
@@ -832,6 +862,7 @@ export default function DashboardPage() {
   const recordingsSectionRef = useRef<HTMLElement | null>(null);
   const expressionsSectionRef = useRef<HTMLElement | null>(null);
   const aiConversationSectionRef = useRef<HTMLElement | null>(null);
+  const dialoguePracticeSectionRef = useRef<HTMLElement | null>(null);
   const practiceHistorySectionRef = useRef<HTMLElement | null>(null);
   const ttsLibrarySectionRef = useRef<HTMLElement | null>(null);
   const answerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -859,6 +890,10 @@ export default function DashboardPage() {
   const koreanAiConversationScrollRef = useRef<HTMLDivElement | null>(null);
   const englishAiConversationPanelRef = useRef<HTMLDivElement | null>(null);
   const koreanAiConversationPanelRef = useRef<HTMLDivElement | null>(null);
+  const englishAiTextInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const englishAiVoiceTranscriptRef = useRef<HTMLTextAreaElement | null>(null);
+  const koreanAiTextInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const koreanAiVoiceTranscriptRef = useRef<HTMLTextAreaElement | null>(null);
   const dialoguePlayerRef = useRef<HTMLDivElement | null>(null);
 
   const selectedExpression = useMemo(
@@ -1044,18 +1079,26 @@ export default function DashboardPage() {
     [dialoguePracticeSets, activeDialoguePracticeSetId],
   );
   const activeDialogueTurn = activeDialoguePracticeSet?.turns?.[activeDialogueTurnIndex] ?? null;
+  const currentAiConversationSessionId =
+    aiConversationTab === "english" ? englishAiSession?.id ?? null : koreanAiSession?.id ?? null;
+  const currentSessionDialoguePracticeSets = useMemo(
+    () =>
+      currentAiConversationSessionId
+        ? dialoguePracticeSets.filter((set) => set.conversationSessionId === currentAiConversationSessionId)
+        : [],
+    [currentAiConversationSessionId, dialoguePracticeSets],
+  );
+  const hasDialoguePracticeCandidate = useMemo(() => {
+    const turns = englishAiSession?.turns ?? [];
+    return turns.some((turn, index) => turn.speaker === "AI" && turns[index + 1]?.speaker === "USER");
+  }, [englishAiSession?.turns]);
   const activeReviewIndex = useMemo(
     () => (activeReviewExpressionId ? reviews.findIndex((item) => item.id === activeReviewExpressionId) : -1),
     [activeReviewExpressionId, reviews],
   );
   const activeReviewItem = activeReviewIndex >= 0 ? reviews[activeReviewIndex] ?? null : null;
   const nextReviewItem = activeReviewIndex >= 0 ? reviews[activeReviewIndex + 1] ?? null : null;
-  const practiceFocusLabel =
-    practiceFlowMode === "review_series"
-      ? "연속 복습"
-      : practiceFlowMode === "review_once"
-      ? "복습 1건"
-      : "단일 연습";
+  const practiceFocusLabel = practiceFlowMode === "review" ? "복습" : "표현 연습";
 
   const speakerOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -1192,6 +1235,24 @@ export default function DashboardPage() {
     const drafts = Object.fromEntries(dialoguePracticeSets.map((set) => [set.id, set.title?.trim() || ""]));
     setDialogueTitleDrafts((current) => ({ ...drafts, ...current }));
   }, [dialoguePracticeSets]);
+
+  useEffect(() => {
+    if (!englishAiSession?.id) {
+      return;
+    }
+    setEnglishAiUserRoleDraft(englishAiSession.userRole ?? "");
+    setEnglishAiRoleDraft(englishAiSession.aiRole ?? "");
+    setEnglishAiConversationTopicDraft(englishAiSession.conversationTopic ?? englishAiSession.topic ?? "");
+    setEnglishAiSituationDescriptionDraft(englishAiSession.situationDescription ?? englishAiSession.scenario ?? "");
+  }, [
+    englishAiSession?.id,
+    englishAiSession?.userRole,
+    englishAiSession?.aiRole,
+    englishAiSession?.conversationTopic,
+    englishAiSession?.topic,
+    englishAiSession?.situationDescription,
+    englishAiSession?.scenario,
+  ]);
 
   useEffect(() => {
     if (!recording?.id) {
@@ -1770,6 +1831,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
         ...current,
         [updated.id]: updated.title,
       }));
+      setActiveDialogueTitleEditId("");
       setMessage("다이얼로그 제목을 저장했습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "다이얼로그 제목 저장에 실패했습니다.");
@@ -1825,6 +1887,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       recordingDetail: recordingDetailRef,
       expressions: expressionsSectionRef,
       aiConversation: aiConversationSectionRef,
+      dialoguePractice: dialoguePracticeSectionRef,
       practice: testSectionRef,
       practiceHistory: practiceHistorySectionRef,
       ttsLibrary: ttsLibrarySectionRef,
@@ -1870,6 +1933,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       { id: "recordingDetail", ref: recordingDetailRef },
       { id: "expressions", ref: expressionsSectionRef },
       { id: "aiConversation", ref: aiConversationSectionRef },
+      { id: "dialoguePractice", ref: dialoguePracticeSectionRef },
       { id: "practice", ref: testSectionRef },
       { id: "practiceHistory", ref: practiceHistorySectionRef },
       { id: "ttsLibrary", ref: ttsLibrarySectionRef },
@@ -2148,6 +2212,87 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     setKoreanAiSession(session);
   }
 
+  function handleStartNewAiConversation(track: AiConversationTab) {
+    setAiConversationSession(track, null);
+    resetAiConversationDraft(track);
+    setAiConversationTab(track);
+    setMessage(track === "english" ? "새 영어 AI 대화를 시작합니다." : "새 한국어 AI 대화를 시작합니다.");
+    setError("");
+    if (track === "english") {
+      setVisibleAiMeaningTurnIds({});
+      setShowEnglishReplyAssist(false);
+      setEnglishReplyAssistKoreanText("");
+      setEnglishReplyAssistResult(null);
+    }
+    focusAiConversationInput(track);
+  }
+
+  function focusAiConversationInput(track: AiConversationTab) {
+    if (typeof window === "undefined") return;
+    window.setTimeout(() => {
+      const target =
+        track === "english"
+          ? englishAiInputMode === "voice"
+            ? englishAiVoiceTranscriptRef.current
+            : englishAiTextInputRef.current
+          : koreanAiInputMode === "voice"
+            ? koreanAiVoiceTranscriptRef.current
+            : koreanAiTextInputRef.current;
+
+      target?.focus({ preventScroll: true });
+    }, 0);
+  }
+
+  function toggleAiMeaning(turnId: string) {
+    setVisibleAiMeaningTurnIds((current) => ({ ...current, [turnId]: !current[turnId] }));
+  }
+
+  function closeEnglishReplyAssist() {
+    setShowEnglishReplyAssist(false);
+    setEnglishReplyAssistKoreanText("");
+    setEnglishReplyAssistResult(null);
+  }
+
+  async function handleGenerateEnglishReplyAssist() {
+    const koreanText = englishReplyAssistKoreanText.trim();
+    if (!koreanText) {
+      setError("한국어로 말하고 싶은 내용을 입력해 주세요.");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    setLoading("ai-reply-assist");
+    try {
+      const result = await apiFetch<{ englishEasy: string; englishNatural: string; noteKo: string }>("/ai-conversations/assist-reply", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: englishAiSession?.id,
+          koreanText,
+          userRole: englishAiUserRoleDraft,
+          aiRole: englishAiRoleDraft,
+          conversationTopic: englishAiConversationTopicDraft,
+          situationDescription: englishAiSituationDescriptionDraft,
+        }),
+      });
+      setEnglishReplyAssistResult(result);
+      setMessage("영어 답변 후보를 생성했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "영어 답변 도움 생성에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  function applyEnglishReplyAssist(text: string) {
+    if (englishAiInputMode === "voice") {
+      setEnglishAiTranscriptDraft(text);
+    } else {
+      setEnglishAiDraftText(text);
+    }
+    closeEnglishReplyAssist();
+  }
+
   async function handleTranscribeAiConversationVoice(track: AiConversationTab) {
     const file = track === "english" ? englishAiVoiceFile : koreanAiVoiceFile;
     if (!file) {
@@ -2208,11 +2353,21 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           aiOutputMode: track === "english" ? englishAiOutputMode : koreanAiOutputMode,
           userInputMode: inputMode,
           text,
+          ...(track === "english" && !getAiConversationSession(track)?.id
+            ? {
+                userRole: englishAiUserRoleDraft,
+                aiRole: englishAiRoleDraft,
+                conversationTopic: englishAiConversationTopicDraft,
+                situationDescription: englishAiSituationDescriptionDraft,
+                userStartText: text,
+              }
+            : {}),
         }),
       });
       setAiConversationSession(track, session);
       await refreshAiConversationSessions(track);
       resetAiConversationDraft(track);
+      focusAiConversationInput(track);
       setMessage(track === "english" ? "영어 AI 대화 응답을 생성했습니다." : "한국어 AI 대화 응답을 생성했습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "AI 대화 응답 생성에 실패했습니다.");
@@ -2293,7 +2448,10 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       setActiveDialogueTurnIndex(0);
       setDialogueAnswerDraft("");
       setDialogueRevealAnswer(false);
+      setExpandedSections((current) => ({ ...current, dialoguePractice: true }));
+      setActiveSectionId("dialoguePractice");
       setMessage(`다이얼로그 연습 세트를 만들었습니다. (${created.turns.length}개 turn)`);
+      window.setTimeout(() => focusDialoguePracticePlayer(), 120);
     } catch (err) {
       setError(err instanceof Error ? err.message : "다이얼로그 변환에 실패했습니다.");
     } finally {
@@ -2306,8 +2464,10 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     setActiveDialogueTurnIndex(0);
     setDialogueAnswerDraft("");
     setDialogueRevealAnswer(false);
+    setExpandedSections((current) => ({ ...current, dialoguePractice: true }));
+    setActiveSectionId("dialoguePractice");
     setMessage("다이얼로그 연습 세트를 불러왔습니다.");
-    focusDialoguePracticePlayer();
+    window.setTimeout(() => focusDialoguePracticePlayer(), 80);
   }
 
   function handleMoveDialogueTurn(direction: "prev" | "next") {
@@ -3881,16 +4041,23 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       clearReviewAutoAdvanceTimers();
       setPendingAutoReview(null);
     }
-    setPracticeFlowMode(enabled ? "review_series" : (activeReviewExpressionId ? "review_once" : "single"));
   }
 
-  function switchToSinglePracticeMode() {
+  async function handleStartExpressionPractice() {
+    if (!selectedExpression) {
+      setError("연습할 표현을 먼저 선택해 주세요.");
+      return;
+    }
+
     clearPracticeAutoStartCountdown();
     clearReviewAutoAdvanceTimers();
     setPracticeFlowMode("single");
     setReviewAutoAdvance(false);
     setPendingAutoReview(null);
-    setActiveReviewExpressionId(null);
+    await startPracticeForExpression(selectedExpression, practiceTestType, {
+      activeReviewExpressionId: null,
+      forceVoiceMode: false,
+    });
   }
 
   function triggerAutoAdvanceToReview(nextReview: ReviewItem) {
@@ -3908,20 +4075,19 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     }, 180);
   }
 
-  async function handleStartReviewFlow(mode: "review_once" | "review_series") {
+  async function handleStartReviewFlow() {
     if (reviews.length === 0) {
       setError("오늘의 복습 항목이 없습니다.");
       return;
     }
 
     const targetReview = activeReviewItem ?? reviews[0];
-    setPracticeFlowMode(mode);
-    setReviewAutoAdvance(mode === "review_series");
+    setPracticeFlowMode("review");
     setPendingAutoReview(null);
     await handleStartReviewPractice(
       targetReview,
-      mode === "review_series" ? "translation" : (targetReview.recommendedTestType ?? "translation"),
-      { autoAdvance: mode === "review_series" },
+      targetReview.recommendedTestType ?? "translation",
+      { autoAdvance: false },
     );
   }
 
@@ -3938,7 +4104,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
 
     setError("");
     setMessage("다음 복습 카드로 이동합니다.");
-    setPracticeFlowMode(reviewAutoAdvance ? "review_series" : "review_once");
+    setPracticeFlowMode("review");
     await handleStartReviewPractice(
       nextReviewItem,
       practiceTestType === "situation" ? "situation" : "translation",
@@ -4001,6 +4167,19 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     } finally {
       setLoading("");
     }
+  }
+
+  function handleTextAnswerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    if (loading || !selectedExpression || isPracticeQuestionPending) {
+      return;
+    }
+
+    void handleScore();
   }
 
   function handleStartVoicePractice() {
@@ -4245,10 +4424,9 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       return;
     }
 
-    setPracticeFlowMode(options?.autoAdvance ? "review_series" : "review_once");
+    setPracticeFlowMode("review");
     await startPracticeForExpression(expression, targetType, {
       activeReviewExpressionId: expression.id,
-      forceVoiceMode: true,
     });
   }
 
@@ -4511,6 +4689,265 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     } finally {
       setLoading("");
     }
+  }
+
+  function renderDialoguePracticeSetList(sets: DialoguePracticeSet[], emptyMessage: string, limit?: number) {
+    const visibleSets = typeof limit === "number" ? sets.slice(0, limit) : sets;
+
+    if (sets.length === 0) {
+      return <div className="muted" style={{ marginTop: 8 }}>{emptyMessage}</div>;
+    }
+
+    return (
+      <div className="ai-conversation-draft-list" style={{ marginTop: 12 }}>
+        {visibleSets.map((set) => (
+          <div
+            key={set.id}
+            className="ai-conversation-draft-item"
+            style={activeDialoguePracticeSetId === set.id ? { borderColor: "#60a5fa", background: "#eff6ff" } : undefined}
+          >
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <strong>{set.title}</strong>
+              <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                {activeDialoguePracticeSetId === set.id && <span className="tag tag-primary">현재 연습 중</span>}
+                <span className="tag tag-muted">{set.turns.length}개 turn</span>
+              </div>
+            </div>
+            <div className="muted" style={{ marginTop: 8 }}>
+              {recordingDateFormatter.format(new Date(set.createdAt))}
+            </div>
+            {renderDialogueContextSummary(set)}
+            {set.turns[0] && (
+              <div style={{ marginTop: 10 }}>
+                {set.userStartText && (
+                  <div><strong>나(대화시작문):</strong> {set.userStartText}</div>
+                )}
+                <div><strong>AI:</strong> {set.turns[0].aiPrompt}</div>
+                <div style={{ marginTop: 6 }}><strong>정답:</strong> {set.turns[0].expectedUserAnswer}</div>
+              </div>
+            )}
+            {set.turns[0]?.aiPromptTtsUrl && (
+              <audio controls className="audio-player" style={{ marginTop: 10 }} src={set.turns[0].aiPromptTtsUrl} />
+            )}
+            <div className="row" style={{ marginTop: 10 }}>
+              <button
+                className="button ghost"
+                type="button"
+                onClick={() => {
+                  updateDialogueTitleDraft(set.id, dialogueTitleDrafts[set.id] ?? set.title);
+                  setActiveDialogueTitleEditId(set.id);
+                }}
+                disabled={loading === `dialogue-title-${set.id}`}
+              >
+                제목 수정
+              </button>
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => handleStartDialoguePracticeSet(set.id)}
+              >
+                이 세트로 연습
+              </button>
+            </div>
+          </div>
+        ))}
+        {typeof limit === "number" && sets.length > limit && (
+          <div className="muted" style={{ marginTop: 8 }}>외 {sets.length - limit}개 세트는 다이얼로그 연습 섹션에서 확인할 수 있습니다.</div>
+        )}
+      </div>
+    );
+  }
+
+  function renderDialogueContextSummary(context: {
+    userRole?: string | null;
+    aiRole?: string | null;
+    conversationTopic?: string | null;
+    topic?: string | null;
+    situationDescription?: string | null;
+    scenario?: string | null;
+    userStartText?: string | null;
+  }) {
+    const items = [
+      context.userRole ? `나의 역할: ${context.userRole}` : null,
+      context.aiRole ? `AI 역할: ${context.aiRole}` : null,
+      (context.conversationTopic ?? context.topic) ? `대화 주제: ${context.conversationTopic ?? context.topic}` : null,
+      (context.situationDescription ?? context.scenario) ? `상황 설명: ${context.situationDescription ?? context.scenario}` : null,
+      context.userStartText ? `사용자 시작문: ${context.userStartText}` : null,
+    ].filter(Boolean);
+
+    if (items.length === 0) {
+      return null;
+    }
+
+    return (
+      <div style={{ marginTop: 12 }}>
+        <strong>대화 문맥</strong>
+        <div className="muted" style={{ marginTop: 8 }}>{items.join(" · ")}</div>
+      </div>
+    );
+  }
+
+  function renderDialoguePracticePlayer() {
+    if (!activeDialoguePracticeSet || !activeDialogueTurn) {
+      return null;
+    }
+
+    return (
+      <div ref={dialoguePlayerRef} tabIndex={-1} className="mini-card" style={{ marginTop: 14, borderColor: "#bfdbfe", background: "#f8fbff" }}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <strong>다이얼로그 플레이어</strong>
+          <span className="tag tag-primary">
+            {activeDialogueTurn.sequence}/{activeDialoguePracticeSet.turns.length}
+          </span>
+        </div>
+        <div style={{ marginTop: 10, fontSize: 17 }}>
+          현재 선택 세트: {activeDialoguePracticeSet.title}
+        </div>
+        {renderDialogueContextSummary(activeDialoguePracticeSet)}
+        {activeDialoguePracticeSet.userStartText && (
+          <div className="ai-conversation-bubble user" style={{ marginTop: 14 }}>
+            <strong>나(대화시작문)</strong>
+            <div style={{ marginTop: 8 }}>{activeDialoguePracticeSet.userStartText}</div>
+          </div>
+        )}
+        <div className="ai-conversation-bubble ai" style={{ marginTop: 14 }}>
+          <strong>AI 질문</strong>
+          <div style={{ marginTop: 8 }}>{activeDialogueTurn.aiPrompt}</div>
+          {activeDialogueTurn.aiPromptTtsUrl && (
+            <audio controls className="audio-player" style={{ marginTop: 10 }} src={activeDialogueTurn.aiPromptTtsUrl} />
+          )}
+        </div>
+        <div className="mini-card" style={{ marginTop: 12 }}>
+          <strong>내 답변 연습</strong>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className={`chip ${dialogueAnswerMode === "text" ? "selected" : ""}`}
+              onClick={() => setDialogueAnswerMode("text")}
+            >
+              텍스트 답변
+            </button>
+            <button
+              type="button"
+              className={`chip ${dialogueAnswerMode === "voice" ? "selected" : ""}`}
+              onClick={() => setDialogueAnswerMode("voice")}
+            >
+              음성 답변(STT)
+            </button>
+          </div>
+          {dialogueAnswerMode === "text" ? (
+            <textarea
+              className="textarea"
+              style={{ marginTop: 12 }}
+              placeholder="여기에 직접 답해보세요"
+              value={dialogueAnswerDraft}
+              onChange={(event) => setDialogueAnswerDraft(event.target.value)}
+            />
+          ) : (
+            <>
+              <div className="row" style={{ marginTop: 12 }}>
+                <button
+                  className="button"
+                  type="button"
+                  onClick={handleStartDialogueVoiceRecording}
+                  disabled={isDialogueRecording}
+                >
+                  {isDialogueRecording ? "녹음 중..." : "음성 녹음 시작"}
+                </button>
+                <button
+                  className="button ghost"
+                  type="button"
+                  onClick={handleStopDialogueVoiceRecording}
+                  disabled={!isDialogueRecording}
+                >
+                  녹음 종료
+                </button>
+                <button
+                  className="button ghost"
+                  type="button"
+                  onClick={handleCancelDialogueVoiceRecording}
+                  disabled={!isDialogueRecording}
+                >
+                  녹음 취소
+                </button>
+              </div>
+              <div className="muted" style={{ marginTop: 10 }}>
+                {dialogueVoiceFile ? `준비된 음성 파일: ${dialogueVoiceFile.name}` : "아직 녹음된 음성 답변이 없습니다."}
+              </div>
+              {dialogueVoiceFile && (
+                <audio controls className="audio-player" style={{ marginTop: 12 }} src={dialogueVoiceUrl || undefined} />
+              )}
+              <textarea
+                className="textarea"
+                style={{ marginTop: 12 }}
+                placeholder="STT 결과가 여기에 들어갑니다. 필요하면 수정할 수 있습니다."
+                value={dialogueTranscriptDraft}
+                onChange={(event) => {
+                  setDialogueTranscriptDraft(event.target.value);
+                  setDialogueAnswerDraft(event.target.value);
+                }}
+              />
+              <div className="row" style={{ marginTop: 12 }}>
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={() => void handleTranscribeDialogueVoice()}
+                  disabled={!dialogueVoiceFile || !!loading}
+                >
+                  {loading === "dialogue-transcribe" ? "음성을 텍스트로 변환 중..." : "음성을 텍스트로 변환"}
+                </button>
+              </div>
+            </>
+          )}
+          <div className="row" style={{ marginTop: 12 }}>
+            <button
+              className="button secondary"
+              type="button"
+              onClick={() => setDialogueRevealAnswer((current) => !current)}
+            >
+              {dialogueRevealAnswer ? "정답 숨기기" : "정답 보기"}
+            </button>
+            <button
+              className="button ghost"
+              type="button"
+              onClick={() => handleMoveDialogueTurn("prev")}
+              disabled={activeDialogueTurnIndex === 0}
+            >
+              이전 turn
+            </button>
+            <button
+              className="button"
+              type="button"
+              onClick={() => handleMoveDialogueTurn("next")}
+              disabled={activeDialogueTurnIndex >= activeDialoguePracticeSet.turns.length - 1}
+            >
+              다음 turn
+            </button>
+          </div>
+          {dialogueRevealAnswer && (
+            <div className="ai-conversation-draft-item" style={{ marginTop: 12 }}>
+              <strong>정답 기준</strong>
+              <div style={{ marginTop: 8 }}>{activeDialogueTurn.expectedUserAnswer}</div>
+              {activeDialogueTurn.expectedUserAnswerAlt && (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  다른 자연형: {activeDialogueTurn.expectedUserAnswerAlt}
+                </div>
+              )}
+              {activeDialogueTurn.hint && (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  힌트: {activeDialogueTurn.hint}
+                </div>
+              )}
+              {activeDialogueTurn.explanation && (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  설명: {activeDialogueTurn.explanation}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
   }
 
   if (!ready) {
@@ -6213,7 +6650,13 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                       key={expression.id}
                       className={`expression-item ${selectedExpressionId === expression.id ? "selected" : ""}`}
                       onClick={() => {
+                        clearPracticeAutoStartCountdown();
+                        clearReviewAutoAdvanceTimers();
                         setSelectedExpressionId(expression.id);
+                        setPracticeFlowMode("single");
+                        setReviewAutoAdvance(false);
+                        setPendingAutoReview(null);
+                        setActiveReviewExpressionId(null);
                         setPracticePromptReadyAtMs(Date.now());
                         setPracticeResponseStartedAtMs(null);
                         setScore(null);
@@ -6408,20 +6851,30 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                       {aiConversationTab === "english" ? "영어 자산화 트랙" : "한국어 수집 트랙"}
                     </span>
                   </div>
-                  <div className="practice-mode-row">
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 14 }}>
+                    <div className="practice-mode-row" style={{ marginTop: 0 }}>
+                      <button
+                        type="button"
+                        className={`chip ${aiConversationTab === "english" ? "selected" : ""}`}
+                        onClick={() => setAiConversationTab("english")}
+                      >
+                        영어 대화
+                      </button>
+                      <button
+                        type="button"
+                        className={`chip ${aiConversationTab === "korean" ? "selected" : ""}`}
+                        onClick={() => setAiConversationTab("korean")}
+                      >
+                        한국어 대화
+                      </button>
+                    </div>
                     <button
+                      className="button secondary"
                       type="button"
-                      className={`chip ${aiConversationTab === "english" ? "selected" : ""}`}
-                      onClick={() => setAiConversationTab("english")}
+                      onClick={() => handleStartNewAiConversation(aiConversationTab)}
+                      disabled={!!loading}
                     >
-                      영어 대화
-                    </button>
-                    <button
-                      type="button"
-                      className={`chip ${aiConversationTab === "korean" ? "selected" : ""}`}
-                      onClick={() => setAiConversationTab("korean")}
-                    >
-                      한국어 대화
+                      새 대화 시작
                     </button>
                   </div>
                 </div>
@@ -6461,6 +6914,49 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                           </div>
                         </div>
                       )}
+                      <div className="mini-card" style={{ marginTop: 12 }}>
+                        <strong>세션 문맥</strong>
+                        <div className="muted" style={{ marginTop: 8 }}>
+                          역할과 상황은 새 영어 대화를 시작할 때 저장되고, 다이얼로그 연습 세트에도 함께 남습니다.
+                        </div>
+                        <div className="grid two" style={{ marginTop: 12 }}>
+                          <input
+                            className="input"
+                            value={englishAiUserRoleDraft}
+                            onChange={(event) => setEnglishAiUserRoleDraft(event.target.value)}
+                            placeholder="나의 역할 예: 아빠"
+                            disabled={!!englishAiSession?.id}
+                          />
+                          <input
+                            className="input"
+                            value={englishAiRoleDraft}
+                            onChange={(event) => setEnglishAiRoleDraft(event.target.value)}
+                            placeholder="AI의 역할 예: 9살 딸"
+                            disabled={!!englishAiSession?.id}
+                          />
+                        </div>
+                        <input
+                          className="input"
+                          style={{ marginTop: 10 }}
+                          value={englishAiConversationTopicDraft}
+                          onChange={(event) => setEnglishAiConversationTopicDraft(event.target.value)}
+                          placeholder="대화 주제 예: 아침 등교 준비"
+                          disabled={!!englishAiSession?.id}
+                        />
+                        <textarea
+                          className="textarea"
+                          style={{ marginTop: 10 }}
+                          value={englishAiSituationDescriptionDraft}
+                          onChange={(event) => setEnglishAiSituationDescriptionDraft(event.target.value)}
+                          placeholder="상황 설명 예: 학교 가기 전 아침에 나누는 일상 대화"
+                          disabled={!!englishAiSession?.id}
+                        />
+                        {englishAiSession?.userStartText && (
+                          <div className="muted" style={{ marginTop: 10 }}>
+                            사용자 시작문: {englishAiSession.userStartText}
+                          </div>
+                        )}
+                      </div>
                       <div className="ai-conversation-mode-grid">
                         <div className="mini-card">
                           <strong>AI 응답 방식</strong>
@@ -6527,6 +7023,23 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                                 )}
                                 {turn.naturalText && turn.naturalText !== turn.correctedText && (
                                   <div className="muted" style={{ marginTop: 6 }}>자연형: {turn.naturalText}</div>
+                                )}
+                                {turn.speaker === "USER" && turn.meaningKo && (
+                                  <div className="muted" style={{ marginTop: 6 }}>의미: {turn.meaningKo}</div>
+                                )}
+                                {turn.speaker === "AI" && turn.meaningKo && (
+                                  <div style={{ marginTop: 10 }}>
+                                    <button
+                                      className="button ghost"
+                                      type="button"
+                                      onClick={() => toggleAiMeaning(turn.id)}
+                                    >
+                                      {visibleAiMeaningTurnIds[turn.id] ? "한국어 설명 숨기기" : "한국어 설명 보기"}
+                                    </button>
+                                    {visibleAiMeaningTurnIds[turn.id] && (
+                                      <div className="muted" style={{ marginTop: 8 }}>한국어 설명: {turn.meaningKo}</div>
+                                    )}
+                                  </div>
                                 )}
                                 {turn.correctionNote && <div className="muted" style={{ marginTop: 6 }}>메모: {turn.correctionNote}</div>}
                                 {turn.ttsUrl && (
@@ -6598,7 +7111,14 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                         {englishAiInputMode === "text" ? (
                           <>
                             <textarea
+                              ref={englishAiTextInputRef}
                               className="textarea"
+                              lang="en"
+                              inputMode="text"
+                              autoCapitalize="none"
+                              autoCorrect="off"
+                              spellCheck={false}
+                              autoComplete="off"
                               style={{ marginTop: 12 }}
                               placeholder="영어로 답변을 입력하세요"
                               value={englishAiDraftText}
@@ -6614,6 +7134,14 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                                 disabled={loading === "ai-respond-english"}
                               >
                                 {loading === "ai-respond-english" ? "응답 생성 중..." : "AI에게 보내기"}
+                              </button>
+                              <button
+                                className="button ghost"
+                                type="button"
+                                onClick={() => setShowEnglishReplyAssist(true)}
+                                disabled={!!loading}
+                              >
+                                도움 요청
                               </button>
                             </div>
                           </>
@@ -6657,7 +7185,14 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                               />
                             )}
                             <textarea
+                              ref={englishAiVoiceTranscriptRef}
                               className="textarea"
+                              lang="en"
+                              inputMode="text"
+                              autoCapitalize="none"
+                              autoCorrect="off"
+                              spellCheck={false}
+                              autoComplete="off"
                               style={{ marginTop: 12 }}
                               placeholder="STT 결과가 여기에 들어갑니다. 필요하면 직접 수정할 수 있습니다."
                               value={englishAiTranscriptDraft}
@@ -6681,6 +7216,14 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                                 disabled={loading === "ai-respond-english"}
                               >
                                 {loading === "ai-respond-english" ? "응답 생성 중..." : "AI에게 보내기"}
+                              </button>
+                              <button
+                                className="button ghost"
+                                type="button"
+                                onClick={() => setShowEnglishReplyAssist(true)}
+                                disabled={!!loading}
+                              >
+                                도움 요청
                               </button>
                             </div>
                           </>
@@ -6707,237 +7250,38 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                         </div>
                       </div>
                       <div className="row" style={{ marginTop: 14 }}>
-                        <button className="button secondary" type="button" onClick={() => void handleCreateDialoguePracticeSet()}>
+                        <button
+                          className="button secondary"
+                          type="button"
+                          onClick={() => void handleCreateDialoguePracticeSet()}
+                          disabled={loading === "ai-dialogue-transform" || !englishAiSession?.id || !hasDialoguePracticeCandidate}
+                          title={
+                            !englishAiSession?.id
+                              ? "먼저 영어 AI 대화 세션을 만들어 주세요."
+                              : !hasDialoguePracticeCandidate
+                                ? "AI 질문 다음에 내 답변이 있는 대화가 필요합니다."
+                                : undefined
+                          }
+                        >
                           {loading === "ai-dialogue-transform" ? "변환 중..." : "다이얼로그 변환"}
                         </button>
                       </div>
-                    </div>
-                      <div className="mini-card" style={{ marginTop: 14 }}>
-                        <strong>다이얼로그 연습 세트</strong>
-                        {dialoguePracticeSets.length === 0 ? (
-                          <div className="muted" style={{ marginTop: 8 }}>아직 변환된 다이얼로그 연습 세트가 없습니다.</div>
-                        ) : (
-                          <div className="ai-conversation-draft-list" style={{ marginTop: 12 }}>
-                            {dialoguePracticeSets.slice(0, 3).map((set) => (
-                              <div
-                                key={set.id}
-                                className="ai-conversation-draft-item"
-                                style={activeDialoguePracticeSetId === set.id ? { borderColor: "#60a5fa", background: "#eff6ff" } : undefined}
-                              >
-                                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                                  <strong>{set.title}</strong>
-                                  <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                                    {activeDialoguePracticeSetId === set.id && <span className="tag tag-primary">현재 연습 중</span>}
-                                    <span className="tag tag-muted">{set.turns.length}개 turn</span>
-                                  </div>
-                                </div>
-                                <div className="muted" style={{ marginTop: 8 }}>
-                                  {recordingDateFormatter.format(new Date(set.createdAt))}
-                                </div>
-                                <input
-                                  className="input"
-                                  style={{ marginTop: 10 }}
-                                  value={dialogueTitleDrafts[set.id] ?? ""}
-                                  onChange={(event) => updateDialogueTitleDraft(set.id, event.target.value)}
-                                  placeholder="다이얼로그 제목을 입력하세요"
-                                />
-                                {set.turns[0] && (
-                                  <div style={{ marginTop: 10 }}>
-                                    <div><strong>AI:</strong> {set.turns[0].aiPrompt}</div>
-                                    <div style={{ marginTop: 6 }}><strong>정답:</strong> {set.turns[0].expectedUserAnswer}</div>
-                                  </div>
-                                )}
-                                {set.turns[0]?.aiPromptTtsUrl && (
-                                  <audio controls className="audio-player" style={{ marginTop: 10 }} src={set.turns[0].aiPromptTtsUrl} />
-                                )}
-                                <div className="row" style={{ marginTop: 10 }}>
-                                  <button
-                                    className="button secondary"
-                                    type="button"
-                                    onClick={() => void handleSaveDialogueTitle(set.id)}
-                                    disabled={loading === `dialogue-title-${set.id}`}
-                                  >
-                                    {loading === `dialogue-title-${set.id}` ? "저장 중..." : "제목 저장"}
-                                  </button>
-                                  <button
-                                    className="button secondary"
-                                    type="button"
-                                    onClick={() => handleStartDialoguePracticeSet(set.id)}
-                                  >
-                                    이 세트로 연습
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      {activeDialoguePracticeSet && activeDialogueTurn && (
-                        <div ref={dialoguePlayerRef} tabIndex={-1} className="mini-card" style={{ marginTop: 14, borderColor: "#bfdbfe", background: "#f8fbff" }}>
-                          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                            <strong>다이얼로그 플레이어</strong>
-                            <span className="tag tag-primary">
-                              {activeDialogueTurn.sequence}/{activeDialoguePracticeSet.turns.length}
-                            </span>
-                          </div>
-                          <div className="muted" style={{ marginTop: 8 }}>
-                            현재 선택 세트: {activeDialoguePracticeSet.title}
-                          </div>
-                          <input
-                            className="input"
-                            style={{ marginTop: 10 }}
-                            value={dialogueTitleDrafts[activeDialoguePracticeSet.id] ?? ""}
-                            onChange={(event) => updateDialogueTitleDraft(activeDialoguePracticeSet.id, event.target.value)}
-                            placeholder="다이얼로그 제목을 입력하세요"
-                          />
-                          <div className="row" style={{ marginTop: 10 }}>
-                            <button
-                              className="button ghost"
-                              type="button"
-                              onClick={() => void handleSaveDialogueTitle(activeDialoguePracticeSet.id)}
-                              disabled={loading === `dialogue-title-${activeDialoguePracticeSet.id}`}
-                            >
-                              {loading === `dialogue-title-${activeDialoguePracticeSet.id}` ? "저장 중..." : "제목 저장"}
-                            </button>
-                          </div>
-                          <div className="ai-conversation-bubble ai" style={{ marginTop: 14 }}>
-                            <strong>AI 질문</strong>
-                            <div style={{ marginTop: 8 }}>{activeDialogueTurn.aiPrompt}</div>
-                            {activeDialogueTurn.aiPromptTtsUrl && (
-                              <audio controls className="audio-player" style={{ marginTop: 10 }} src={activeDialogueTurn.aiPromptTtsUrl} />
-                            )}
-                          </div>
-                          <div className="mini-card" style={{ marginTop: 12 }}>
-                            <strong>내 답변 연습</strong>
-                            <div className="row" style={{ marginTop: 12 }}>
-                              <button
-                                type="button"
-                                className={`chip ${dialogueAnswerMode === "text" ? "selected" : ""}`}
-                                onClick={() => setDialogueAnswerMode("text")}
-                              >
-                                텍스트 답변
-                              </button>
-                              <button
-                                type="button"
-                                className={`chip ${dialogueAnswerMode === "voice" ? "selected" : ""}`}
-                                onClick={() => setDialogueAnswerMode("voice")}
-                              >
-                                음성 답변(STT)
-                              </button>
-                            </div>
-                            {dialogueAnswerMode === "text" ? (
-                              <textarea
-                                className="textarea"
-                                style={{ marginTop: 12 }}
-                                placeholder="여기에 직접 답해보세요"
-                                value={dialogueAnswerDraft}
-                                onChange={(event) => setDialogueAnswerDraft(event.target.value)}
-                              />
-                            ) : (
-                              <>
-                                <div className="row" style={{ marginTop: 12 }}>
-                                  <button
-                                    className="button"
-                                    type="button"
-                                    onClick={handleStartDialogueVoiceRecording}
-                                    disabled={isDialogueRecording}
-                                  >
-                                    {isDialogueRecording ? "녹음 중..." : "음성 녹음 시작"}
-                                  </button>
-                                  <button
-                                    className="button ghost"
-                                    type="button"
-                                    onClick={handleStopDialogueVoiceRecording}
-                                    disabled={!isDialogueRecording}
-                                  >
-                                    녹음 종료
-                                  </button>
-                                  <button
-                                    className="button ghost"
-                                    type="button"
-                                    onClick={handleCancelDialogueVoiceRecording}
-                                    disabled={!isDialogueRecording}
-                                  >
-                                    녹음 취소
-                                  </button>
-                                </div>
-                                <div className="muted" style={{ marginTop: 10 }}>
-                                  {dialogueVoiceFile ? `준비된 음성 파일: ${dialogueVoiceFile.name}` : "아직 녹음된 음성 답변이 없습니다."}
-                                </div>
-                                {dialogueVoiceFile && (
-                                  <audio controls className="audio-player" style={{ marginTop: 12 }} src={dialogueVoiceUrl || undefined} />
-                                )}
-                                <textarea
-                                  className="textarea"
-                                  style={{ marginTop: 12 }}
-                                  placeholder="STT 결과가 여기에 들어갑니다. 필요하면 수정할 수 있습니다."
-                                  value={dialogueTranscriptDraft}
-                                  onChange={(event) => {
-                                    setDialogueTranscriptDraft(event.target.value);
-                                    setDialogueAnswerDraft(event.target.value);
-                                  }}
-                                />
-                                <div className="row" style={{ marginTop: 12 }}>
-                                  <button
-                                    className="button secondary"
-                                    type="button"
-                                    onClick={() => void handleTranscribeDialogueVoice()}
-                                    disabled={!dialogueVoiceFile || !!loading}
-                                  >
-                                    {loading === "dialogue-transcribe" ? "음성을 텍스트로 변환 중..." : "음성을 텍스트로 변환"}
-                                  </button>
-                                </div>
-                              </>
-                            )}
-                            <div className="row" style={{ marginTop: 12 }}>
-                              <button
-                                className="button secondary"
-                                type="button"
-                                onClick={() => setDialogueRevealAnswer((current) => !current)}
-                              >
-                                {dialogueRevealAnswer ? "정답 숨기기" : "정답 보기"}
-                              </button>
-                              <button
-                                className="button ghost"
-                                type="button"
-                                onClick={() => handleMoveDialogueTurn("prev")}
-                                disabled={activeDialogueTurnIndex === 0}
-                              >
-                                이전 turn
-                              </button>
-                              <button
-                                className="button"
-                                type="button"
-                                onClick={() => handleMoveDialogueTurn("next")}
-                                disabled={activeDialogueTurnIndex >= activeDialoguePracticeSet.turns.length - 1}
-                              >
-                                다음 turn
-                              </button>
-                            </div>
-                            {dialogueRevealAnswer && (
-                              <div className="ai-conversation-draft-item" style={{ marginTop: 12 }}>
-                                <strong>정답 기준</strong>
-                                <div style={{ marginTop: 8 }}>{activeDialogueTurn.expectedUserAnswer}</div>
-                                {activeDialogueTurn.expectedUserAnswerAlt && (
-                                  <div className="muted" style={{ marginTop: 8 }}>
-                                    다른 자연형: {activeDialogueTurn.expectedUserAnswerAlt}
-                                  </div>
-                                )}
-                                {activeDialogueTurn.hint && (
-                                  <div className="muted" style={{ marginTop: 8 }}>
-                                    힌트: {activeDialogueTurn.hint}
-                                  </div>
-                                )}
-                                {activeDialogueTurn.explanation && (
-                                  <div className="muted" style={{ marginTop: 8 }}>
-                                    설명: {activeDialogueTurn.explanation}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
+                      {englishAiSession?.id && !hasDialoguePracticeCandidate && (
+                        <div className="muted" style={{ marginTop: 8 }}>
+                          AI 질문 다음에 내 답변이 있는 대화가 생기면 변환할 수 있습니다.
                         </div>
                       )}
+                    </div>
+                      <div className="mini-card" style={{ marginTop: 14 }}>
+                        <strong>현재 세션 다이얼로그 연습 세트</strong>
+                        {renderDialoguePracticeSetList(
+                          currentSessionDialoguePracticeSets,
+                          currentAiConversationSessionId
+                            ? "현재 세션에서 만든 다이얼로그 연습 세트가 없습니다."
+                            : "현재 열려 있는 AI 대화 세션이 없습니다.",
+                          3,
+                        )}
+                      </div>
                     </div>
                       <div className="ai-conversation-panel">
                         <div className="practice-eyebrow">Recent Sessions</div>
@@ -7161,6 +7505,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                         {koreanAiInputMode === "text" ? (
                           <>
                             <textarea
+                              ref={koreanAiTextInputRef}
                               className="textarea"
                               style={{ marginTop: 12 }}
                               placeholder="한국어로 답변을 입력하세요"
@@ -7220,6 +7565,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                               />
                             )}
                             <textarea
+                              ref={koreanAiVoiceTranscriptRef}
                               className="textarea"
                               style={{ marginTop: 12 }}
                               placeholder="STT 결과가 여기에 들어갑니다. 필요하면 직접 수정할 수 있습니다."
@@ -7342,13 +7688,31 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           )}
         </section>
 
+        <section ref={dialoguePracticeSectionRef} data-section-id="dialoguePractice" className="card panel-lg">
+          {renderSectionIntro(
+            "dialoguePractice",
+            "4. 다이얼로그 연습",
+            "AI 대화에서 만든 모든 다이얼로그 세트를 모아 보고, 선택한 세트로 turn 단위 답변 연습을 진행합니다.",
+            `연습 세트 ${dialoguePracticeSets.length}개`,
+          )}
+          {expandedSections.dialoguePractice && (
+            <div className="grid" style={{ marginTop: 14 }}>
+              <div className="mini-card">
+                <strong>다이얼로그 연습 세트 목록</strong>
+                {renderDialoguePracticeSetList(dialoguePracticeSets, "아직 변환된 다이얼로그 연습 세트가 없습니다.")}
+              </div>
+              {renderDialoguePracticePlayer()}
+            </div>
+          )}
+        </section>
+
         <section ref={testSectionRef} className={`card panel-lg ${flowStepId === "complete" ? "section-highlight" : ""}`}>
           <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
             <div style={{ flex: 1 }}>
               {renderSectionIntro(
                 "practice",
-                "4. 연습 / 복습 플레이어",
-                "문제 하나에 집중해 풀고, 원하면 오늘의 복습을 같은 자리에서 한 건씩 또는 연속으로 이어서 진행합니다.",
+                "5. 표현 연습 / 복습 플레이어",
+                "문제 하나에 집중해 풀고, 원하면 오늘의 복습을 같은 자리에서 직접 또는 자동으로 이어서 진행합니다.",
                 `${practiceFocusLabel} · 선택 표현 ${selectedExpression ? 1 : 0}개 · 복습 대상 ${reviews.length}개`,
               )}
             </div>
@@ -7379,26 +7743,18 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                 <button
                   type="button"
                   className={`chip ${practiceFlowMode === "single" ? "selected" : ""}`}
-                  onClick={switchToSinglePracticeMode}
-                  disabled={!!loading}
+                  onClick={() => void handleStartExpressionPractice()}
+                  disabled={!!loading || !selectedExpression}
                 >
-                  단일 연습
+                  표현 연습
                 </button>
                 <button
                   type="button"
-                  className={`chip ${practiceFlowMode === "review_once" ? "selected" : ""}`}
-                  onClick={() => void handleStartReviewFlow("review_once")}
+                  className={`chip ${practiceFlowMode === "review" ? "selected" : ""}`}
+                  onClick={() => void handleStartReviewFlow()}
                   disabled={!!loading || reviews.length === 0}
                 >
-                  복습 1건
-                </button>
-                <button
-                  type="button"
-                  className={`chip ${practiceFlowMode === "review_series" ? "selected" : ""}`}
-                  onClick={() => void handleStartReviewFlow("review_series")}
-                  disabled={!!loading || reviews.length === 0}
-                >
-                  연속 복습
+                  복습 시작
                 </button>
                 <button
                   type="button"
@@ -7423,7 +7779,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   <div>
                     <strong>오늘의 복습 큐</strong>
                     <div className="muted" style={{ marginTop: 4 }}>
-                      카드를 눌러 바로 같은 플레이어에서 풉니다. 연속 복습 모드를 켜면 채점 후 자동으로 다음 카드로 이어집니다.
+                      카드를 눌러 바로 같은 플레이어에서 풉니다. 자동 이동을 켜면 채점 후 다음 카드로 이어집니다.
                     </div>
                   </div>
                   <span className="tag tag-muted">{reviews.length}개</span>
@@ -7573,6 +7929,12 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                       <textarea
                         ref={answerRef}
                         className="textarea"
+                        lang="en"
+                        inputMode="text"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        autoComplete="off"
                         value={answer}
                         onChange={(e) => {
                           const nextValue = e.target.value;
@@ -7583,6 +7945,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                           }
                           setAnswer(nextValue);
                         }}
+                        onKeyDown={handleTextAnswerKeyDown}
                         disabled={isPracticeQuestionPending}
                         placeholder="영어로 답변을 입력하세요"
                         style={{ marginTop: 12 }}
@@ -8131,6 +8494,92 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           )}
         </section>
       </div>
+      {showEnglishReplyAssist && (
+        <div className="modal-backdrop" onClick={closeEnglishReplyAssist}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <strong>영어 답변 도움 요청</strong>
+            <div className="muted" style={{ marginTop: 8 }}>
+              한국어로 말하고 싶은 내용을 입력하면 현재 세션 문맥에 맞는 영어 답변 후보를 만듭니다.
+            </div>
+            <textarea
+              className="textarea"
+              style={{ marginTop: 12 }}
+              value={englishReplyAssistKoreanText}
+              onChange={(event) => setEnglishReplyAssistKoreanText(event.target.value)}
+              placeholder="예: 8시야. 빨리 일어나."
+            />
+            <div className="modal-actions">
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => void handleGenerateEnglishReplyAssist()}
+                disabled={loading === "ai-reply-assist"}
+              >
+                {loading === "ai-reply-assist" ? "생성 중..." : "영어 표현 생성"}
+              </button>
+              <button className="button ghost" type="button" onClick={closeEnglishReplyAssist}>
+                닫기
+              </button>
+            </div>
+            {englishReplyAssistResult && (
+              <div className="grid" style={{ marginTop: 14 }}>
+                <div className="mini-card">
+                  <strong>쉬운 표현</strong>
+                  <div style={{ marginTop: 8 }}>{englishReplyAssistResult.englishEasy}</div>
+                  <button
+                    className="button secondary"
+                    type="button"
+                    style={{ marginTop: 10 }}
+                    onClick={() => applyEnglishReplyAssist(englishReplyAssistResult.englishEasy)}
+                  >
+                    입력창에 넣기
+                  </button>
+                </div>
+                <div className="mini-card">
+                  <strong>자연스러운 표현</strong>
+                  <div style={{ marginTop: 8 }}>{englishReplyAssistResult.englishNatural}</div>
+                  <button
+                    className="button secondary"
+                    type="button"
+                    style={{ marginTop: 10 }}
+                    onClick={() => applyEnglishReplyAssist(englishReplyAssistResult.englishNatural)}
+                  >
+                    입력창에 넣기
+                  </button>
+                </div>
+                <div className="muted">{englishReplyAssistResult.noteKo}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {activeDialogueTitleEditId && (
+        <div className="modal-backdrop" onClick={() => setActiveDialogueTitleEditId("")}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <strong>다이얼로그 제목 수정</strong>
+            <input
+              className="input"
+              style={{ marginTop: 12 }}
+              value={dialogueTitleDrafts[activeDialogueTitleEditId] ?? ""}
+              onChange={(event) => updateDialogueTitleDraft(activeDialogueTitleEditId, event.target.value)}
+              placeholder="다이얼로그 제목을 입력하세요"
+            />
+            <div className="modal-actions">
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => void handleSaveDialogueTitle(activeDialogueTitleEditId)}
+                disabled={loading === `dialogue-title-${activeDialogueTitleEditId}`}
+              >
+                {loading === `dialogue-title-${activeDialogueTitleEditId}` ? "저장 중..." : "저장"}
+              </button>
+              <button className="button ghost" type="button" onClick={() => setActiveDialogueTitleEditId("")}>
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <nav className="desktop-section-nav" aria-label="대시보드 섹션 이동">
         {DASHBOARD_SECTION_TABS.map((tab) => (
           <button

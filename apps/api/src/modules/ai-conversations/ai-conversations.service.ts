@@ -4,6 +4,7 @@ import { ExpressionsService } from '../expressions/expressions.service';
 import { LearningAssetsService } from '../learning-assets/learning-assets.service';
 import { OpenAiService } from '../openai/openai.service';
 import { StorageService } from '../storage/storage.service';
+import { AssistConversationReplyDto } from './dto/assist-conversation-reply.dto';
 import { CreateConversationSessionDto } from './dto/create-session.dto';
 import { RespondConversationDto } from './dto/respond-conversation.dto';
 
@@ -59,6 +60,7 @@ export class AiConversationsService {
         originalText: turn.originalText,
         correctedText: turn.correctedText ?? null,
         naturalText: turn.naturalText ?? null,
+        meaningKo: turn.meaningKo ?? null,
         correctionNote: turn.correctionNote ?? null,
         inputMode: turn.inputMode ?? null,
         outputMode: turn.outputMode ?? null,
@@ -77,6 +79,11 @@ export class AiConversationsService {
       topic: session.topic ?? null,
       scenario: session.scenario ?? null,
       goal: session.goal ?? null,
+      userRole: session.userRole ?? null,
+      aiRole: session.aiRole ?? null,
+      conversationTopic: session.conversationTopic ?? null,
+      situationDescription: session.situationDescription ?? null,
+      userStartText: session.userStartText ?? null,
       summary: session.summary ?? null,
       aiOutputMode: session.aiOutputMode ?? null,
       userInputMode: session.userInputMode ?? null,
@@ -112,6 +119,11 @@ export class AiConversationsService {
       title: set.title,
       topic: set.topic ?? null,
       scenario: set.scenario ?? null,
+      userRole: set.userRole ?? null,
+      aiRole: set.aiRole ?? null,
+      conversationTopic: set.conversationTopic ?? null,
+      situationDescription: set.situationDescription ?? null,
+      userStartText: set.userStartText ?? null,
       source: set.source ?? null,
       createdAt: set.createdAt,
       updatedAt: set.updatedAt,
@@ -178,6 +190,11 @@ export class AiConversationsService {
         topic: dto.topic?.trim() || null,
         scenario: dto.scenario?.trim() || null,
         goal: dto.goal?.trim() || null,
+        userRole: dto.userRole?.trim() || null,
+        aiRole: dto.aiRole?.trim() || null,
+        conversationTopic: dto.conversationTopic?.trim() || dto.topic?.trim() || null,
+        situationDescription: dto.situationDescription?.trim() || dto.scenario?.trim() || null,
+        userStartText: dto.userStartText?.trim() || null,
         aiOutputMode: dto.aiOutputMode ?? 'text',
         userInputMode: dto.userInputMode ?? 'text',
         turns: dto.turns?.length
@@ -222,6 +239,11 @@ export class AiConversationsService {
           aiOutputMode: dto.aiOutputMode,
           userInputMode: dto.userInputMode,
           title: autoTitle,
+          userRole: dto.userRole?.trim() || null,
+          aiRole: dto.aiRole?.trim() || null,
+          conversationTopic: dto.conversationTopic?.trim() || null,
+          situationDescription: dto.situationDescription?.trim() || null,
+          userStartText: dto.userStartText?.trim() || text,
         },
         include: { turns: { orderBy: { turnIndex: 'asc' } } },
       });
@@ -247,6 +269,11 @@ export class AiConversationsService {
         text: turn.originalText,
       })),
       userText: text,
+      userRole: session.userRole ?? dto.userRole?.trim() ?? null,
+      aiRole: session.aiRole ?? dto.aiRole?.trim() ?? null,
+      conversationTopic: session.conversationTopic ?? dto.conversationTopic?.trim() ?? null,
+      situationDescription: session.situationDescription ?? dto.situationDescription?.trim() ?? null,
+      userStartText: session.userStartText ?? dto.userStartText?.trim() ?? text,
     });
 
     let ttsKey: string | null = null;
@@ -261,6 +288,7 @@ export class AiConversationsService {
       data: {
         correctedText: reply.correctedUserText,
         naturalText: reply.naturalUserText,
+        meaningKo: reply.userMeaningKo,
         correctionNote: reply.correctionNote,
       },
     });
@@ -273,6 +301,7 @@ export class AiConversationsService {
         speaker: 'AI',
         language: dto.mode === 'ENGLISH_AI' ? 'EN' : 'KO',
         originalText: reply.replyText,
+        meaningKo: reply.replyMeaningKo,
         outputMode: dto.aiOutputMode,
         ttsKey,
       },
@@ -283,6 +312,7 @@ export class AiConversationsService {
       data: {
         aiOutputMode: dto.aiOutputMode,
         userInputMode: dto.userInputMode,
+        ...(session.userStartText ? {} : { userStartText: dto.userStartText?.trim() || text }),
         ...(this.isGenericSessionTitle(session.title, dto.mode)
           ? { title: this.buildAutoSessionTitle(dto.mode, text) }
           : {}),
@@ -300,6 +330,27 @@ export class AiConversationsService {
     }
     const result = await this.openai.transcribeAudio(file.buffer, file.originalname, false);
     return { text: result.utterances.map((utterance) => utterance.koreanText).join(' ').trim() };
+  }
+
+  async assistReply(userId: string, dto: AssistConversationReplyDto) {
+    const session = dto.sessionId
+      ? await (this.prisma as any).conversationSession.findFirst({
+          where: { id: dto.sessionId, userId, mode: 'ENGLISH_AI' },
+          include: { turns: { orderBy: { turnIndex: 'asc' } } },
+        })
+      : null;
+
+    return this.openai.generateConversationReplyAssist({
+      koreanText: dto.koreanText,
+      userRole: session?.userRole ?? dto.userRole?.trim() ?? null,
+      aiRole: session?.aiRole ?? dto.aiRole?.trim() ?? null,
+      conversationTopic: session?.conversationTopic ?? dto.conversationTopic?.trim() ?? null,
+      situationDescription: session?.situationDescription ?? dto.situationDescription?.trim() ?? null,
+      history: (session?.turns ?? []).map((turn: any) => ({
+        speaker: turn.speaker,
+        text: turn.originalText,
+      })),
+    });
   }
 
   async listDialoguePracticeSets(userId: string) {
@@ -361,33 +412,43 @@ export class AiConversationsService {
     });
     if (!session) throw new NotFoundException('영어 AI 대화 세션을 찾을 수 없습니다.');
 
-    const pairs = (session.turns ?? [])
+    const orderedTurns = session.turns ?? [];
+    const pairs = orderedTurns
       .filter((turn: any) => turn.speaker === 'AI')
       .map((aiTurn: any) => {
-        const userTurn = (session.turns ?? []).find(
+        const userTurn = orderedTurns.find(
           (turn: any) => turn.turnIndex === aiTurn.turnIndex + 1 && turn.speaker === 'USER',
         );
         if (!userTurn) return null;
-        return { aiTurn, userTurn };
+        return {
+          aiPrompt: aiTurn.originalText,
+          aiPromptTtsKey: aiTurn.ttsKey ?? null,
+          aiTurnId: aiTurn.id,
+          userTurn,
+        };
       })
-      .filter(Boolean) as Array<{ aiTurn: any; userTurn: any }>;
+      .filter(Boolean) as Array<{
+        aiPrompt: string;
+        aiPromptTtsKey: string | null;
+        aiTurnId: string;
+        userTurn: any;
+      }>;
 
     if (pairs.length === 0) {
       throw new BadRequestException('다이얼로그로 변환할 수 있는 AI 질문-사용자 답변 쌍이 없습니다.');
     }
 
     const dialogueTurns = await Promise.all(
-      pairs.map(async ({ aiTurn, userTurn }, index) => {
-        let aiPromptTtsKey: string | null = aiTurn.ttsKey ?? null;
+      pairs.map(async ({ aiPrompt, aiPromptTtsKey, aiTurnId, userTurn }, index) => {
         if (!aiPromptTtsKey) {
-          const audio = await this.openai.generateTts(aiTurn.originalText);
-          aiPromptTtsKey = `ai-conversations/dialogues/${session.id}-${aiTurn.id}.mp3`;
+          const audio = await this.openai.generateTts(aiPrompt);
+          aiPromptTtsKey = `ai-conversations/dialogues/${session.id}-${aiTurnId}.mp3`;
           await this.storage.uploadBuffer(aiPromptTtsKey, audio, 'audio/mpeg');
         }
 
         return {
           sequence: index + 1,
-          aiPrompt: aiTurn.originalText,
+          aiPrompt,
           aiPromptTtsKey,
           expectedUserAnswer: userTurn.correctedText?.trim() || userTurn.originalText,
           expectedUserAnswerAlt:
@@ -408,6 +469,11 @@ export class AiConversationsService {
         title: session.title?.trim() || `영어 AI 대화 다이얼로그 ${new Date(session.createdAt).toLocaleDateString('ko-KR')}`,
         topic: session.topic ?? null,
         scenario: session.scenario ?? null,
+        userRole: session.userRole ?? null,
+        aiRole: session.aiRole ?? null,
+        conversationTopic: session.conversationTopic ?? session.topic ?? null,
+        situationDescription: session.situationDescription ?? session.scenario ?? null,
+        userStartText: session.userStartText ?? null,
         turns: {
           create: dialogueTurns,
         },
@@ -437,7 +503,7 @@ export class AiConversationsService {
       originalText: turn.originalText,
       correctedText: turn.correctedText ?? undefined,
       naturalText: turn.naturalText ?? undefined,
-      correctionNote: turn.correctionNote ?? undefined,
+      correctionNote: [turn.meaningKo ? `의미: ${turn.meaningKo}` : null, turn.correctionNote ?? null].filter(Boolean).join('\n') || undefined,
     });
     const thinkInEnglish = await this.openai.generateThinkInEnglish({
       koreanText: asset.koreanText,

@@ -189,13 +189,35 @@ type ConversationReplyInput = {
   mode: AiConversationMode;
   history: Array<{ speaker: 'USER' | 'AI'; text: string }>;
   userText: string;
+  userRole?: string | null;
+  aiRole?: string | null;
+  conversationTopic?: string | null;
+  situationDescription?: string | null;
+  userStartText?: string | null;
 };
 
 type ConversationReplyResult = {
   replyText: string;
+  replyMeaningKo: string;
   correctedUserText: string;
   naturalUserText: string;
+  userMeaningKo: string;
   correctionNote: string;
+};
+
+type ConversationReplyAssistInput = {
+  koreanText: string;
+  userRole?: string | null;
+  aiRole?: string | null;
+  conversationTopic?: string | null;
+  situationDescription?: string | null;
+  history?: Array<{ speaker: 'USER' | 'AI'; text: string }>;
+};
+
+type ConversationReplyAssistResult = {
+  englishEasy: string;
+  englishNatural: string;
+  noteKo: string;
 };
 
 type EnglishConversationAssetInput = {
@@ -498,15 +520,19 @@ export class OpenAiService {
       if (input.mode === 'ENGLISH_AI') {
         return {
           replyText: 'That sounds good. What happened next?',
+          replyMeaningKo: '좋네요. 그 다음에는 무슨 일이 있었나요?',
           correctedUserText: input.userText,
           naturalUserText: input.userText,
+          userMeaningKo: `사용자가 "${input.userText}"라고 말하려는 의미입니다.`,
           correctionNote: 'OPENAI_API_KEY가 없어 목업 대화 응답을 반환했습니다.',
         };
       }
       return {
         replyText: '그랬구나. 그때 기분이 어땠는지 조금 더 말해줘.',
+        replyMeaningKo: '그랬구나. 그때 기분이 어땠는지 조금 더 말해줘.',
         correctedUserText: input.userText,
         naturalUserText: input.userText,
+        userMeaningKo: `사용자가 "${input.userText}"라고 말하려는 의미입니다.`,
         correctionNote: 'OPENAI_API_KEY가 없어 목업 대화 응답을 반환했습니다.',
       };
     }
@@ -515,14 +541,26 @@ export class OpenAiService {
       .slice(-8)
       .map((turn, index) => `- turn_${index + 1} [${turn.speaker}] ${turn.text}`)
       .join('\n');
+    const contextBlock = [
+      input.userRole ? `사용자 역할: ${input.userRole}` : null,
+      input.aiRole ? `AI 역할: ${input.aiRole}` : null,
+      input.conversationTopic ? `대화 주제: ${input.conversationTopic}` : null,
+      input.situationDescription ? `상황 설명: ${input.situationDescription}` : null,
+      input.userStartText ? `사용자 시작문: ${input.userStartText}` : null,
+    ].filter(Boolean).join('\n');
 
     const systemPrompt =
       input.mode === 'ENGLISH_AI'
         ? [
             'You are a friendly English conversation partner and speaking coach.',
+            'If roles, topic, and situation are provided, stay in that role-play context.',
             'Reply in natural spoken English and keep the conversation moving.',
             'correctedUserText: grammar-correct version of the learner English.',
             'naturalUserText: more natural conversational version with the same meaning.',
+            'userMeaningKo: natural Korean direct-speech translation of the learner utterance after correction.',
+            'For userMeaningKo, preserve the utterance force: commands stay commands, requests stay requests, questions stay questions.',
+            'For userMeaningKo, do not use reported speech or explanatory endings such as "~라고 하셨다", "~라는 뜻입니다", or "~하라고 했다".',
+            'replyMeaningKo: concise Korean meaning of your replyText.',
             'correctionNote: short Korean note about the main correction point.',
             'replyText: your next reply in English.',
             'Return JSON only.',
@@ -532,6 +570,8 @@ export class OpenAiService {
             'Reply in natural Korean and keep the conversation moving.',
             'correctedUserText: cleaned-up Korean phrasing that preserves the meaning.',
             'naturalUserText: more natural spoken Korean with the same meaning.',
+            'userMeaningKo: concise Korean meaning of the user utterance.',
+            'replyMeaningKo: concise Korean meaning of your replyText.',
             'correctionNote: short Korean note about clarity or naturalness.',
             'replyText: your next reply in Korean.',
             'Return JSON only.',
@@ -544,6 +584,7 @@ export class OpenAiService {
         {
           role: 'user',
           content: [
+            contextBlock ? `세션 문맥:\n${contextBlock}` : '세션 문맥: 없음',
             historyBlock ? `대화 기록:\n${historyBlock}` : '대화 기록: 없음',
             `사용자 최신 발화: ${input.userText}`,
           ].join('\n\n'),
@@ -558,11 +599,83 @@ export class OpenAiService {
             additionalProperties: false,
             properties: {
               replyText: { type: 'string' },
+              replyMeaningKo: { type: 'string' },
               correctedUserText: { type: 'string' },
               naturalUserText: { type: 'string' },
+              userMeaningKo: { type: 'string' },
               correctionNote: { type: 'string' },
             },
-            required: ['replyText', 'correctedUserText', 'naturalUserText', 'correctionNote'],
+            required: ['replyText', 'replyMeaningKo', 'correctedUserText', 'naturalUserText', 'userMeaningKo', 'correctionNote'],
+          },
+        },
+      },
+    } as any);
+
+    const raw = (response as any).output_text ?? '{}';
+    return JSON.parse(raw);
+  }
+
+  async generateConversationReplyAssist(input: ConversationReplyAssistInput): Promise<ConversationReplyAssistResult> {
+    const koreanText = input.koreanText.trim();
+    if (!koreanText) {
+      throw new BadRequestException('도움 요청 내용을 입력해 주세요.');
+    }
+
+    if (!this.client) {
+      return {
+        englishEasy: 'Please hurry up and get ready.',
+        englishNatural: 'Come on, hurry up and get ready.',
+        noteKo: 'OPENAI_API_KEY가 없어 목업 영어 표현을 반환했습니다.',
+      };
+    }
+
+    const contextBlock = [
+      input.userRole ? `사용자 역할: ${input.userRole}` : null,
+      input.aiRole ? `AI 역할: ${input.aiRole}` : null,
+      input.conversationTopic ? `대화 주제: ${input.conversationTopic}` : null,
+      input.situationDescription ? `상황 설명: ${input.situationDescription}` : null,
+    ].filter(Boolean).join('\n');
+    const historyBlock = (input.history ?? [])
+      .slice(-8)
+      .map((turn, index) => `- turn_${index + 1} [${turn.speaker}] ${turn.text}`)
+      .join('\n');
+
+    const response = await this.client.responses.create({
+      model: process.env.OPENAI_LLM_MODEL ?? 'gpt-4.1-mini',
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You help a Korean learner write an English reply for an ongoing role-play conversation.',
+            'Use the provided roles, topic, situation, and recent turns.',
+            'englishEasy should be simple and safe.',
+            'englishNatural should be the best natural spoken reply.',
+            'noteKo should briefly explain nuance or usage in Korean.',
+            'Return JSON only.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            contextBlock ? `세션 문맥:\n${contextBlock}` : '세션 문맥: 없음',
+            historyBlock ? `최근 대화:\n${historyBlock}` : '최근 대화: 없음',
+            `한국어로 말하고 싶은 내용: ${koreanText}`,
+          ].join('\n\n'),
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'conversation_reply_assist',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              englishEasy: { type: 'string' },
+              englishNatural: { type: 'string' },
+              noteKo: { type: 'string' },
+            },
+            required: ['englishEasy', 'englishNatural', 'noteKo'],
           },
         },
       },
