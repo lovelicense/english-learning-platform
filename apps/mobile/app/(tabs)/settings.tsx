@@ -1,6 +1,6 @@
 import { Link } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { API_BASE_URL } from "../../src/lib/config";
+import { API_BASE_URL, API_BASE_URL_SOURCE } from "../../src/lib/config";
 
 export default function SettingsScreen() {
   return (
@@ -12,6 +12,9 @@ export default function SettingsScreen() {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>API Base URL</Text>
         <Text style={styles.cardValue}>{API_BASE_URL}</Text>
+        <Text style={styles.description}>
+          source: {API_BASE_URL_SOURCE}
+        </Text>
       </View>
       <Link href="/(auth)/login" asChild>
         <Pressable style={styles.secondaryButton}>

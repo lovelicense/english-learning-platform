@@ -48,13 +48,6 @@ function buildParticipantContext(
     .join('\n\n');
 }
 
-const RESPONSE_START_LIMIT_MS = 3000;
-
-function formatResponseStartLatency(latencyMs: number) {
-  const seconds = latencyMs / 1000;
-  return `${seconds.toFixed(seconds < 10 ? 1 : 0)}초`;
-}
-
 @Injectable()
 export class PracticeService {
   constructor(
@@ -238,12 +231,6 @@ export class PracticeService {
     } as any) as any;
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
 
-    const responseLatencyMs =
-      typeof promptReadyAtMs === 'number' && typeof responseStartedAtMs === 'number'
-        ? Math.max(0, responseStartedAtMs - promptReadyAtMs)
-        : null;
-    const isResponseTimedOut = responseLatencyMs !== null && responseLatencyMs > RESPONSE_START_LIMIT_MS;
-
     const scoringTarget = promptTarget?.trim() || expression.englishBase;
 
     const evaluation = await this.openai.evaluatePracticeAnswer({
@@ -264,14 +251,6 @@ export class PracticeService {
       easyAnswer: expression.englishEasy,
       naturalAnswer: expression.englishNatural,
     });
-    const effectiveScore = isResponseTimedOut ? 0 : evaluation.score;
-    const effectiveMeaningScore = isResponseTimedOut ? 0 : evaluation.meaningScore;
-    const effectiveNaturalnessScore = isResponseTimedOut ? 0 : evaluation.naturalnessScore;
-    const effectiveGrammarScore = isResponseTimedOut ? 0 : evaluation.grammarScore;
-    const feedback = isResponseTimedOut
-      ? `답변 시작이 ${formatResponseStartLatency(responseLatencyMs ?? RESPONSE_START_LIMIT_MS)}로 3초 제한을 초과해 오답 처리했습니다.`
-      : evaluation.feedback;
-
     const log = await this.createPracticeLogWithFallback({
       userId,
       expressionId,
@@ -282,11 +261,11 @@ export class PracticeService {
       promptKorean: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
       recognizedAnswer: answer.trim(),
-      score: effectiveScore,
-      meaningScore: effectiveMeaningScore,
-      naturalnessScore: effectiveNaturalnessScore,
-      grammarScore: effectiveGrammarScore,
-      feedback,
+      score: evaluation.score,
+      meaningScore: evaluation.meaningScore,
+      naturalnessScore: evaluation.naturalnessScore,
+      grammarScore: evaluation.grammarScore,
+      feedback: evaluation.feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
       meaningComment: evaluation.meaningComment,
@@ -294,15 +273,15 @@ export class PracticeService {
       suggestedAnswerAlt: evaluation.suggestedAnswerAlt,
     });
 
-    await this.learningAssetsService.promoteProgressFromPractice(userId, expressionId, effectiveScore);
+    await this.learningAssetsService.promoteProgressFromPractice(userId, expressionId, evaluation.score);
 
     return {
       id: log.id,
-      score: effectiveScore,
-      meaningScore: effectiveMeaningScore,
-      naturalnessScore: effectiveNaturalnessScore,
-      grammarScore: effectiveGrammarScore,
-      feedback,
+      score: evaluation.score,
+      meaningScore: evaluation.meaningScore,
+      naturalnessScore: evaluation.naturalnessScore,
+      grammarScore: evaluation.grammarScore,
+      feedback: evaluation.feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
       meaningComment: evaluation.meaningComment,
@@ -310,9 +289,9 @@ export class PracticeService {
       suggestedAnswerAlt: evaluation.suggestedAnswerAlt,
       target: scoringTarget,
       answer,
-      responseLatencyMs,
-      responseTimedOut: isResponseTimedOut,
-      responseLimitMs: RESPONSE_START_LIMIT_MS,
+      responseLatencyMs: null,
+      responseTimedOut: false,
+      responseLimitMs: null,
     };
   }
 
@@ -362,18 +341,10 @@ export class PracticeService {
     console.info(
       `[Practice STT] expression_id=${expressionId} user_id=${userId} file=${fileName} recognized_answer=${JSON.stringify(answer.slice(0, 200))}`,
     );
-    const responseLatencyMs =
-      typeof promptReadyAtMs === 'number' && typeof responseStartedAtMs === 'number'
-        ? Math.max(0, responseStartedAtMs - promptReadyAtMs)
-        : null;
-    const isResponseTimedOut = responseLatencyMs !== null && responseLatencyMs > RESPONSE_START_LIMIT_MS;
-
     const scoringTarget = promptTarget?.trim() || expression.englishBase;
 
     if (!answer) {
-      const feedback = isResponseTimedOut
-        ? `답변 시작이 ${formatResponseStartLatency(responseLatencyMs ?? RESPONSE_START_LIMIT_MS)}로 3초 제한을 초과했고, 음성에서 영어 답변을 인식하지 못해 0점 처리했습니다.`
-        : '음성에서 영어 답변을 인식하지 못해 무응답으로 0점 처리했습니다.';
+      const feedback = '음성에서 영어 답변을 인식하지 못해 무응답으로 0점 처리했습니다.';
 
       const strengthComment = '이번 답변에서는 인식된 영어 발화가 없어 평가할 내용을 찾지 못했습니다.';
       const correctionComment = '정답 기준 문장을 한 번 들은 뒤, 더 또렷하게 짧게 말해보세요.';
@@ -420,9 +391,9 @@ export class PracticeService {
         target: scoringTarget,
         answer: '',
         audioUrl: await this.storage.createPresignedDownload(audioKey),
-        responseLatencyMs,
-        responseTimedOut: isResponseTimedOut,
-        responseLimitMs: RESPONSE_START_LIMIT_MS,
+        responseLatencyMs: null,
+        responseTimedOut: false,
+        responseLimitMs: null,
       };
     }
 
@@ -444,14 +415,6 @@ export class PracticeService {
       easyAnswer: expression.englishEasy,
       naturalAnswer: expression.englishNatural,
     });
-    const effectiveScore = isResponseTimedOut ? 0 : evaluation.score;
-    const effectiveMeaningScore = isResponseTimedOut ? 0 : evaluation.meaningScore;
-    const effectiveNaturalnessScore = isResponseTimedOut ? 0 : evaluation.naturalnessScore;
-    const effectiveGrammarScore = isResponseTimedOut ? 0 : evaluation.grammarScore;
-    const feedback = isResponseTimedOut
-      ? `답변 시작이 ${formatResponseStartLatency(responseLatencyMs ?? RESPONSE_START_LIMIT_MS)}로 3초 제한을 초과해 오답 처리했습니다.`
-      : evaluation.feedback;
-
     const log = await this.createPracticeLogWithFallback({
       userId,
       expressionId,
@@ -463,11 +426,11 @@ export class PracticeService {
       promptKorean: promptKorean?.trim() || expression.koreanText,
       promptContext: promptContext?.trim() || undefined,
       recognizedAnswer: answer,
-      score: effectiveScore,
-      meaningScore: effectiveMeaningScore,
-      naturalnessScore: effectiveNaturalnessScore,
-      grammarScore: effectiveGrammarScore,
-      feedback,
+      score: evaluation.score,
+      meaningScore: evaluation.meaningScore,
+      naturalnessScore: evaluation.naturalnessScore,
+      grammarScore: evaluation.grammarScore,
+      feedback: evaluation.feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
       meaningComment: evaluation.meaningComment,
@@ -475,15 +438,15 @@ export class PracticeService {
       suggestedAnswerAlt: evaluation.suggestedAnswerAlt,
     });
 
-    await this.learningAssetsService.promoteProgressFromPractice(userId, expressionId, effectiveScore);
+    await this.learningAssetsService.promoteProgressFromPractice(userId, expressionId, evaluation.score);
 
     return {
       id: log.id,
-      score: effectiveScore,
-      meaningScore: effectiveMeaningScore,
-      naturalnessScore: effectiveNaturalnessScore,
-      grammarScore: effectiveGrammarScore,
-      feedback,
+      score: evaluation.score,
+      meaningScore: evaluation.meaningScore,
+      naturalnessScore: evaluation.naturalnessScore,
+      grammarScore: evaluation.grammarScore,
+      feedback: evaluation.feedback,
       strengthComment: evaluation.strengthComment,
       correctionComment: evaluation.correctionComment,
       meaningComment: evaluation.meaningComment,
@@ -492,9 +455,9 @@ export class PracticeService {
       target: scoringTarget,
       answer,
       audioUrl: await this.storage.createPresignedDownload(audioKey),
-      responseLatencyMs,
-      responseTimedOut: isResponseTimedOut,
-      responseLimitMs: RESPONSE_START_LIMIT_MS,
+      responseLatencyMs: null,
+      responseTimedOut: false,
+      responseLimitMs: null,
     };
   }
 

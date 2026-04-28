@@ -593,6 +593,7 @@ git push origin main
 
 ## 모바일에서 작업한 내용
 - `docs/android_mobile_plan.md` 문서 추가
+- `docs/mobile_mvp_tickets.md` 문서 추가
 - `apps/mobile` 스캐폴딩 추가
 - Expo Router 기반 기본 탭 구조 추가
 - 로그인 화면, 홈 화면, 녹음/표현/복습/설정 placeholder 화면 추가
@@ -612,6 +613,13 @@ git push origin main
   - 세션 상태 polling
   - 업로드 파트 목록 표시
   - 작업(job) 큐 목록 표시
+- 모바일 `record` 화면에 실제 Expo 음성 녹음 시작/종료, 권한 요청, 경과 시간 표시, 로컬 파일 정보 표시 추가
+- 모바일 `record` 화면에 `presign -> S3 업로드 -> part complete -> finalize -> process` 연결 추가
+- 모바일 `recording/[id]` 화면에 STT/diarization 결과 조회, 화자 목록, 문장 목록 상세 표시 추가
+- 모바일 `recording/[id]` 화면에 문장 수정/삭제, 내 화자 선택 API 연결 추가
+- 모바일 `recording/[id]` 화면에 문장별 영어 표현 생성, 표현 TTS 생성/재생 연결 추가
+- 모바일 `expressions` 탭 목록 조회, `expression/[id]` 상세 조회, TTS 재생, 메모 저장 연결 추가
+- 모바일 `reviews` 탭에 복습 카드 목록, 문제 생성, 텍스트 답변 채점, 최근 연습 기록 조회 연결 추가
 - 타입 체크 확인:
   - `pnpm --filter @elp/mobile exec tsc --noEmit` 통과
 
@@ -628,9 +636,8 @@ git push origin main
 - 말하기 테스트 채점 시 한국어 원문 우선, 대화 요약/발화 의도까지 참고하도록 개선
 
 ## 모바일 관련 할 작업
-- 모바일에서 실제 Expo 오디오 녹음 붙이기
-- 녹음 파일을 파트 단위로 `presign -> upload -> complete` 연결
-- 모바일에서 `finalize -> process -> polling`을 실제 업로드 결과와 연결
+- 모바일 우선 개발 티켓 정리:
+  - `docs/mobile_mvp_tickets.md`
 - 세션 처리 완료 후 STT 결과 목록/상세 화면 설계
 - 모바일 로그인 UX 다듬기
 - 안드로이드 실기기 기준으로 녹음/업로드 안정성 확인

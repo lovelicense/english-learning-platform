@@ -7,6 +7,15 @@ export type RecordingSessionCreateResponse = {
   maxDurationMs: number;
 };
 
+export type RecordingSessionPartPresignResponse = {
+  sessionId: string;
+  partId: string;
+  partNumber: number;
+  audioKey: string;
+  uploadUrl: string;
+  expiresInSeconds: number;
+};
+
 export type RecordingSessionStatusResponse = {
   id: string;
   status: string;
@@ -51,6 +60,41 @@ export async function createRecordingSession(title?: string) {
 
 export async function fetchRecordingSession(sessionId: string) {
   return apiFetch<RecordingSessionStatusResponse>(`/recording-sessions/${sessionId}`);
+}
+
+export async function createRecordingSessionPartPresign(
+  sessionId: string,
+  input: {
+    partNumber: number;
+    fileName: string;
+    contentType?: string;
+    sizeBytes?: number;
+  },
+) {
+  return apiFetch<RecordingSessionPartPresignResponse>(`/recording-sessions/${sessionId}/parts/presign`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function completeRecordingSessionPart(
+  sessionId: string,
+  partId: string,
+  input: {
+    durationMs?: number;
+    sizeBytes?: number;
+  },
+) {
+  return apiFetch<{
+    sessionId: string;
+    partId: string;
+    recordingId: string;
+    status: string;
+    uploadedPartCount: number;
+  }>(`/recording-sessions/${sessionId}/parts/${partId}/complete`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function finalizeRecordingSession(sessionId: string, expectedPartCount?: number, totalDurationMs?: number) {

@@ -760,12 +760,18 @@ export default function DashboardPage() {
   const [dialoguePracticeSets, setDialoguePracticeSets] = useState<DialoguePracticeSet[]>([]);
   const [activeDialoguePracticeSetId, setActiveDialoguePracticeSetId] = useState("");
   const [activeDialogueTurnIndex, setActiveDialogueTurnIndex] = useState(0);
-  const [dialogueAnswerMode, setDialogueAnswerMode] = useState<"text" | "voice">("text");
+  const [isDialoguePracticeStarted, setIsDialoguePracticeStarted] = useState(false);
+  const [dialogueAnswerMode, setDialogueAnswerMode] = useState<"text" | "voice">("voice");
   const [dialogueAnswerDraft, setDialogueAnswerDraft] = useState("");
   const [dialogueVoiceFile, setDialogueVoiceFile] = useState<File | null>(null);
   const [dialogueVoiceUrl, setDialogueVoiceUrl] = useState("");
   const [dialogueTranscriptDraft, setDialogueTranscriptDraft] = useState("");
   const [dialogueRevealAnswer, setDialogueRevealAnswer] = useState(false);
+  const [dialogueShowAiPrompt, setDialogueShowAiPrompt] = useState(false);
+  const [dialogueAutoRecordAfterPrompt, setDialogueAutoRecordAfterPrompt] = useState(false);
+  const [dialogueAutoStartCountdown, setDialogueAutoStartCountdown] = useState<number | null>(null);
+  const [dialogueTurnDrafts, setDialogueTurnDrafts] = useState<Record<string, string>>({});
+  const [dialogueTurnTranscriptDrafts, setDialogueTurnTranscriptDrafts] = useState<Record<string, string>>({});
   const [koreanAiDraftText, setKoreanAiDraftText] = useState("");
   const [koreanAiVoiceFile, setKoreanAiVoiceFile] = useState<File | null>(null);
   const [koreanAiTranscriptDraft, setKoreanAiTranscriptDraft] = useState("");
@@ -877,6 +883,8 @@ export default function DashboardPage() {
   const reviewQuestionSpeechRef = useRef<SpeechSynthesisUtterance | null>(null);
   const aiConversationRecordingSessionRef = useRef<RecordingSession | null>(null);
   const dialogueRecordingSessionRef = useRef<RecordingSession | null>(null);
+  const dialogueAutoStartTimeoutRef = useRef<number | null>(null);
+  const dialogueAutoStartIntervalRef = useRef<number | null>(null);
   const uploadTaskRef = useRef<ReturnType<typeof createPresignedUploadTask> | null>(null);
   const abortControllersRef = useRef<AbortController[]>([]);
   const userCancelledRef = useRef(false);
@@ -895,6 +903,7 @@ export default function DashboardPage() {
   const koreanAiTextInputRef = useRef<HTMLTextAreaElement | null>(null);
   const koreanAiVoiceTranscriptRef = useRef<HTMLTextAreaElement | null>(null);
   const dialoguePlayerRef = useRef<HTMLDivElement | null>(null);
+  const dialoguePracticeTimelineRef = useRef<HTMLDivElement | null>(null);
 
   const selectedExpression = useMemo(
     () => expressions.find((item) => item.id === selectedExpressionId) ?? expressions[0] ?? null,
@@ -1237,6 +1246,25 @@ export default function DashboardPage() {
   }, [dialoguePracticeSets]);
 
   useEffect(() => {
+    return () => {
+      if (dialogueAutoStartTimeoutRef.current) {
+        window.clearTimeout(dialogueAutoStartTimeoutRef.current);
+      }
+      if (dialogueAutoStartIntervalRef.current) {
+        window.clearInterval(dialogueAutoStartIntervalRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const container = dialoguePracticeTimelineRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+  }, [activeDialoguePracticeSetId, activeDialogueTurnIndex]);
+
+  useEffect(() => {
     if (!englishAiSession?.id) {
       return;
     }
@@ -1304,7 +1332,9 @@ export default function DashboardPage() {
       }
       stopReviewQuestionSpeech();
       for (const objectUrl of ttsLibraryAudioCacheRef.current.values()) {
-        URL.revokeObjectURL(objectUrl);
+        if (objectUrl.startsWith("blob:")) {
+          URL.revokeObjectURL(objectUrl);
+        }
       }
       ttsLibraryAudioCacheRef.current.clear();
     };
@@ -1367,7 +1397,10 @@ export default function DashboardPage() {
       setDialogueRevealAnswer(false);
       setDialogueVoiceFile(null);
       setDialogueTranscriptDraft("");
-      setDialogueAnswerMode("text");
+      setDialogueAnswerMode("voice");
+      setIsDialoguePracticeStarted(false);
+      setDialogueTurnDrafts({});
+      setDialogueTurnTranscriptDrafts({});
       return;
     }
 
@@ -1562,6 +1595,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
   }
 
   function startVoicePracticeRecording() {
+    const isRetryAttempt = Boolean(voiceAnswerFile || score);
     userCancelledRef.current = false;
     stopReviewQuestionSpeech();
     clearPracticeAutoStartCountdown();
@@ -1569,6 +1603,9 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     setMessage("영어 말하기 테스트 녹음을 시작했습니다. 말이 끝나면 종료 버튼을 누르면 자동으로 채점합니다.");
     setVoiceAnswerFile(null);
     setScore(null);
+    if (isRetryAttempt) {
+      setPracticePromptReadyAtMs(Date.now());
+    }
     setPracticeResponseStartedAtMs(Date.now());
 
     const session = startRecordedAudioSession({ durationMs: 15000 });
@@ -1997,7 +2034,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     return () => URL.revokeObjectURL(objectUrl);
   }, [dialogueVoiceFile]);
 
-  function selectExpressionForPractice(expression: Expression) {
+  function selectExpressionForPractice(expression: Expression, options?: { scrollToPractice?: boolean }) {
     clearPracticeAutoStartCountdown();
     setPracticeFlowMode("single");
     setReviewAutoAdvance(false);
@@ -2008,7 +2045,9 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     setPracticeResponseStartedAtMs(null);
     setScore(null);
     setTtsUrl(expression.ttsUrl ?? "");
-    scrollToDashboardSection("practice");
+    if (options?.scrollToPractice) {
+      scrollToDashboardSection("practice");
+    }
   }
 
   async function handlePlayPracticeReferenceTts() {
@@ -2460,9 +2499,19 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
   }
 
   function handleStartDialoguePracticeSet(setId: string) {
+    const targetSet = dialoguePracticeSets.find((set) => set.id === setId);
+    clearDialogueAutoStartCountdown();
     setActiveDialoguePracticeSetId(setId);
     setActiveDialogueTurnIndex(0);
-    setDialogueAnswerDraft("");
+    setIsDialoguePracticeStarted(false);
+    if (targetSet?.turns[0]) {
+      loadDialogueTurnState(targetSet.turns[0].id);
+    } else {
+      setDialogueAnswerDraft("");
+      setDialogueVoiceFile(null);
+      setDialogueTranscriptDraft("");
+      setDialogueAnswerMode("voice");
+    }
     setDialogueRevealAnswer(false);
     setExpandedSections((current) => ({ ...current, dialoguePractice: true }));
     setActiveSectionId("dialoguePractice");
@@ -2470,20 +2519,85 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     window.setTimeout(() => focusDialoguePracticePlayer(), 80);
   }
 
+  function handleBeginDialoguePractice() {
+    if (!activeDialoguePracticeSet?.turns?.[0]) {
+      setError("시작할 다이얼로그 turn이 없습니다.");
+      return;
+    }
+
+    clearDialogueAutoStartCountdown();
+    setError("");
+    setMessage("첫 번째 AI 질문을 재생하면서 다이얼로그 연습을 시작합니다.");
+    setIsDialoguePracticeStarted(true);
+    const firstTurn = activeDialoguePracticeSet.turns[0];
+    loadDialogueTurnState(firstTurn.id);
+
+    if (firstTurn.aiPromptTtsUrl) {
+      window.setTimeout(() => {
+        const audio = new Audio(firstTurn.aiPromptTtsUrl ?? "");
+        if (dialogueAutoRecordAfterPrompt) {
+          audio.onended = () => scheduleDialogueAutoRecording();
+        }
+        void audio.play().catch(() => undefined);
+      }, 120);
+    }
+  }
+
   function handleMoveDialogueTurn(direction: "prev" | "next") {
-    if (!activeDialoguePracticeSet) return;
-    setActiveDialogueTurnIndex((current) => {
-      if (direction === "prev") {
-        return Math.max(0, current - 1);
+    if (!activeDialoguePracticeSet || !isDialoguePracticeStarted) return;
+    clearDialogueAutoStartCountdown();
+    persistCurrentDialogueTurnState();
+    const nextIndex =
+      direction === "prev"
+        ? Math.max(0, activeDialogueTurnIndex - 1)
+        : Math.min(activeDialoguePracticeSet.turns.length - 1, activeDialogueTurnIndex + 1);
+    setActiveDialogueTurnIndex(nextIndex);
+    const nextTurn = activeDialoguePracticeSet.turns[nextIndex];
+    if (nextTurn) {
+      loadDialogueTurnState(nextTurn.id);
+      if (direction === "next" && nextTurn.aiPromptTtsUrl) {
+        window.setTimeout(() => {
+          const audio = new Audio(nextTurn.aiPromptTtsUrl ?? "");
+          if (dialogueAutoRecordAfterPrompt) {
+            audio.onended = () => scheduleDialogueAutoRecording();
+          }
+          void audio.play().catch(() => undefined);
+        }, 120);
       }
-      return Math.min(activeDialoguePracticeSet.turns.length - 1, current + 1);
-    });
-    setDialogueAnswerDraft("");
-    setDialogueRevealAnswer(false);
+    }
+  }
+
+  function clearDialogueAutoStartCountdown() {
+    if (dialogueAutoStartTimeoutRef.current) {
+      window.clearTimeout(dialogueAutoStartTimeoutRef.current);
+      dialogueAutoStartTimeoutRef.current = null;
+    }
+    if (dialogueAutoStartIntervalRef.current) {
+      window.clearInterval(dialogueAutoStartIntervalRef.current);
+      dialogueAutoStartIntervalRef.current = null;
+    }
+    setDialogueAutoStartCountdown(null);
+  }
+
+  function scheduleDialogueAutoRecording() {
+    clearDialogueAutoStartCountdown();
+    setDialogueAutoStartCountdown(3);
+    setMessage("AI 질문 음성이 끝났습니다. 3초 뒤에 다이얼로그 음성 녹음을 자동으로 시작합니다.");
+    dialogueAutoStartIntervalRef.current = window.setInterval(() => {
+      setDialogueAutoStartCountdown((current) => {
+        if (current === null || current <= 1) return current;
+        return current - 1;
+      });
+    }, 1000);
+    dialogueAutoStartTimeoutRef.current = window.setTimeout(() => {
+      clearDialogueAutoStartCountdown();
+      handleStartDialogueVoiceRecording();
+    }, 3000);
   }
 
   function handleStartDialogueVoiceRecording() {
     if (isDialogueRecording) return;
+    clearDialogueAutoStartCountdown();
     setError("");
     setMessage("");
     setIsDialogueRecording(true);
@@ -2494,9 +2608,10 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     dialogueRecordingSessionRef.current = session;
 
     void session.promise
-      .then((file) => {
+      .then(async (file) => {
         setDialogueVoiceFile(file);
-        setMessage(`다이얼로그 답변 녹음이 완료되었습니다: ${file.name}`);
+        setMessage(`다이얼로그 답변 녹음이 완료되었습니다: ${file.name}. 자동으로 텍스트 변환을 시작합니다.`);
+        await handleTranscribeDialogueVoice(file);
       })
       .catch((err) => {
         if (!(err instanceof Error) || err.message !== "사용자가 녹음을 취소했습니다.") {
@@ -2510,17 +2625,24 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
   }
 
   function handleStopDialogueVoiceRecording() {
+    if (dialogueAutoStartCountdown !== null) {
+      clearDialogueAutoStartCountdown();
+      setMessage("다이얼로그 자동 녹음 시작을 취소했습니다.");
+      return;
+    }
     dialogueRecordingSessionRef.current?.stop();
   }
 
   function handleCancelDialogueVoiceRecording() {
+    clearDialogueAutoStartCountdown();
     dialogueRecordingSessionRef.current?.cancel();
     dialogueRecordingSessionRef.current = null;
     setIsDialogueRecording(false);
   }
 
-  async function handleTranscribeDialogueVoice() {
-    if (!dialogueVoiceFile) {
+  async function handleTranscribeDialogueVoice(preparedFile?: File) {
+    const file = preparedFile instanceof File ? preparedFile : dialogueVoiceFile;
+    if (!file) {
       setError("먼저 다이얼로그 음성 답변을 녹음해 주세요.");
       return;
     }
@@ -2530,7 +2652,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     setLoading("dialogue-transcribe");
     try {
       const formData = new FormData();
-      formData.append("file", dialogueVoiceFile);
+      formData.append("file", file);
       formData.append("language", "en");
       const result = await apiFetch<{ text: string }>("/ai-conversations/transcribe", {
         method: "POST",
@@ -2538,6 +2660,11 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       });
       setDialogueTranscriptDraft(result.text);
       setDialogueAnswerDraft(result.text);
+      setDialogueRevealAnswer(true);
+      if (activeDialogueTurn) {
+        updateDialogueTurnTranscriptDraft(activeDialogueTurn.id, result.text);
+        updateDialogueTurnDraft(activeDialogueTurn.id, result.text);
+      }
       setMessage("다이얼로그 음성 답변을 STT로 전사했습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "다이얼로그 음성 전사에 실패했습니다.");
@@ -2681,14 +2808,8 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       throw new Error("TTS 재생 URL이 없습니다.");
     }
 
-    const response = await fetch(targetUrl);
-    if (!response.ok) {
-      throw new Error("TTS 음성 파일을 불러오지 못했습니다.");
-    }
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    ttsLibraryAudioCacheRef.current.set(cacheKey, objectUrl);
-    return objectUrl;
+    ttsLibraryAudioCacheRef.current.set(cacheKey, targetUrl);
+    return targetUrl;
   }
 
   async function playTtsLibraryPlanStep(plan: TtsLibraryPlaybackPlan) {
@@ -2723,6 +2844,10 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
   function handleTtsLibraryAudioEnded() {
     const plan = ttsLibraryPlaybackPlanRef.current;
     if (!plan) return;
+    if (ttsLibraryPlaybackTimeoutRef.current) {
+      window.clearTimeout(ttsLibraryPlaybackTimeoutRef.current);
+      ttsLibraryPlaybackTimeoutRef.current = null;
+    }
 
     const isLastTrack = plan.trackIndex + 1 >= plan.tracks.length;
 
@@ -2740,6 +2865,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     const delayMs = nextPlan.gapMs;
     if (delayMs > 0) {
       ttsLibraryPlaybackTimeoutRef.current = window.setTimeout(() => {
+        ttsLibraryPlaybackTimeoutRef.current = null;
         playTtsLibraryPlanStep(nextPlan).catch(() => undefined);
       }, delayMs);
     } else {
@@ -4205,8 +4331,8 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       setError("채점할 표현을 먼저 선택해 주세요.");
       return;
     }
-    const file = preparedFile instanceof File ? preparedFile : voiceAnswerFile;
-    if (!file) {
+    const rawFile = preparedFile instanceof File ? preparedFile : voiceAnswerFile;
+    if (!rawFile) {
       setError("먼저 영어 답변을 녹음해 주세요.");
       return;
     }
@@ -4215,6 +4341,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     setMessage("");
     setLoading("score-voice");
     try {
+      const file = await normalizeAudioFileForUpload(rawFile);
       const promptReadyAtMs = practicePromptReadyAtMs ?? Date.now();
       const responseStartedAtMs = practiceResponseStartedAtMs ?? promptReadyAtMs;
       const presign = await runWithTimeout("score-voice", (signal) =>
@@ -4787,10 +4914,44 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     );
   }
 
+  function updateDialogueTurnDraft(turnId: string, value: string) {
+    setDialogueTurnDrafts((current) => ({
+      ...current,
+      [turnId]: value,
+    }));
+  }
+
+  function updateDialogueTurnTranscriptDraft(turnId: string, value: string) {
+    setDialogueTurnTranscriptDrafts((current) => ({
+      ...current,
+      [turnId]: value,
+    }));
+  }
+
+  function loadDialogueTurnState(turnId: string) {
+    setDialogueAnswerDraft(dialogueTurnDrafts[turnId] ?? "");
+    setDialogueTranscriptDraft(dialogueTurnTranscriptDrafts[turnId] ?? "");
+    setDialogueVoiceFile(null);
+    setDialogueAnswerMode("voice");
+    setDialogueRevealAnswer(false);
+  }
+
+  function persistCurrentDialogueTurnState() {
+    if (!activeDialogueTurn) {
+      return;
+    }
+    updateDialogueTurnDraft(activeDialogueTurn.id, dialogueAnswerDraft);
+    updateDialogueTurnTranscriptDraft(activeDialogueTurn.id, dialogueTranscriptDraft);
+  }
+
   function renderDialoguePracticePlayer() {
     if (!activeDialoguePracticeSet || !activeDialogueTurn) {
       return null;
     }
+
+    const visibleTurns = isDialoguePracticeStarted
+      ? activeDialoguePracticeSet.turns.slice(0, activeDialogueTurnIndex + 1)
+      : [];
 
     return (
       <div ref={dialoguePlayerRef} tabIndex={-1} className="mini-card" style={{ marginTop: 14, borderColor: "#bfdbfe", background: "#f8fbff" }}>
@@ -4804,148 +4965,244 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           현재 선택 세트: {activeDialoguePracticeSet.title}
         </div>
         {renderDialogueContextSummary(activeDialoguePracticeSet)}
+        <div className="row" style={{ marginTop: 12 }}>
+          <button
+            type="button"
+            className={`chip ${!dialogueShowAiPrompt ? "selected" : ""}`}
+            onClick={() => setDialogueShowAiPrompt(false)}
+          >
+            AI 질문 숨기기
+          </button>
+          <button
+            type="button"
+            className={`chip ${dialogueShowAiPrompt ? "selected" : ""}`}
+            onClick={() => setDialogueShowAiPrompt(true)}
+          >
+            AI 질문 보기
+          </button>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button
+            type="button"
+            className={`chip ${!dialogueAutoRecordAfterPrompt ? "selected" : ""}`}
+            onClick={() => {
+              clearDialogueAutoStartCountdown();
+              setDialogueAutoRecordAfterPrompt(false);
+            }}
+          >
+            자동 녹음 끄기
+          </button>
+          <button
+            type="button"
+            className={`chip ${dialogueAutoRecordAfterPrompt ? "selected" : ""}`}
+            onClick={() => setDialogueAutoRecordAfterPrompt(true)}
+          >
+            질문 음성 후 3초 뒤 자동 녹음
+          </button>
+        </div>
         {activeDialoguePracticeSet.userStartText && (
           <div className="ai-conversation-bubble user" style={{ marginTop: 14 }}>
             <strong>나(대화시작문)</strong>
             <div style={{ marginTop: 8 }}>{activeDialoguePracticeSet.userStartText}</div>
           </div>
         )}
-        <div className="ai-conversation-bubble ai" style={{ marginTop: 14 }}>
-          <strong>AI 질문</strong>
-          <div style={{ marginTop: 8 }}>{activeDialogueTurn.aiPrompt}</div>
-          {activeDialogueTurn.aiPromptTtsUrl && (
-            <audio controls className="audio-player" style={{ marginTop: 10 }} src={activeDialogueTurn.aiPromptTtsUrl} />
-          )}
-        </div>
-        <div className="mini-card" style={{ marginTop: 12 }}>
-          <strong>내 답변 연습</strong>
-          <div className="row" style={{ marginTop: 12 }}>
-            <button
-              type="button"
-              className={`chip ${dialogueAnswerMode === "text" ? "selected" : ""}`}
-              onClick={() => setDialogueAnswerMode("text")}
-            >
-              텍스트 답변
-            </button>
-            <button
-              type="button"
-              className={`chip ${dialogueAnswerMode === "voice" ? "selected" : ""}`}
-              onClick={() => setDialogueAnswerMode("voice")}
-            >
-              음성 답변(STT)
-            </button>
-          </div>
-          {dialogueAnswerMode === "text" ? (
-            <textarea
-              className="textarea"
-              style={{ marginTop: 12 }}
-              placeholder="여기에 직접 답해보세요"
-              value={dialogueAnswerDraft}
-              onChange={(event) => setDialogueAnswerDraft(event.target.value)}
-            />
-          ) : (
-            <>
-              <div className="row" style={{ marginTop: 12 }}>
-                <button
-                  className="button"
-                  type="button"
-                  onClick={handleStartDialogueVoiceRecording}
-                  disabled={isDialogueRecording}
-                >
-                  {isDialogueRecording ? "녹음 중..." : "음성 녹음 시작"}
-                </button>
-                <button
-                  className="button ghost"
-                  type="button"
-                  onClick={handleStopDialogueVoiceRecording}
-                  disabled={!isDialogueRecording}
-                >
-                  녹음 종료
-                </button>
-                <button
-                  className="button ghost"
-                  type="button"
-                  onClick={handleCancelDialogueVoiceRecording}
-                  disabled={!isDialogueRecording}
-                >
-                  녹음 취소
-                </button>
-              </div>
-              <div className="muted" style={{ marginTop: 10 }}>
-                {dialogueVoiceFile ? `준비된 음성 파일: ${dialogueVoiceFile.name}` : "아직 녹음된 음성 답변이 없습니다."}
-              </div>
-              {dialogueVoiceFile && (
-                <audio controls className="audio-player" style={{ marginTop: 12 }} src={dialogueVoiceUrl || undefined} />
-              )}
-              <textarea
-                className="textarea"
-                style={{ marginTop: 12 }}
-                placeholder="STT 결과가 여기에 들어갑니다. 필요하면 수정할 수 있습니다."
-                value={dialogueTranscriptDraft}
-                onChange={(event) => {
-                  setDialogueTranscriptDraft(event.target.value);
-                  setDialogueAnswerDraft(event.target.value);
-                }}
-              />
-              <div className="row" style={{ marginTop: 12 }}>
-                <button
-                  className="button secondary"
-                  type="button"
-                  onClick={() => void handleTranscribeDialogueVoice()}
-                  disabled={!dialogueVoiceFile || !!loading}
-                >
-                  {loading === "dialogue-transcribe" ? "음성을 텍스트로 변환 중..." : "음성을 텍스트로 변환"}
-                </button>
-              </div>
-            </>
-          )}
-          <div className="row" style={{ marginTop: 12 }}>
-            <button
-              className="button secondary"
-              type="button"
-              onClick={() => setDialogueRevealAnswer((current) => !current)}
-            >
-              {dialogueRevealAnswer ? "정답 숨기기" : "정답 보기"}
-            </button>
-            <button
-              className="button ghost"
-              type="button"
-              onClick={() => handleMoveDialogueTurn("prev")}
-              disabled={activeDialogueTurnIndex === 0}
-            >
-              이전 turn
-            </button>
-            <button
-              className="button"
-              type="button"
-              onClick={() => handleMoveDialogueTurn("next")}
-              disabled={activeDialogueTurnIndex >= activeDialoguePracticeSet.turns.length - 1}
-            >
-              다음 turn
-            </button>
-          </div>
-          {dialogueRevealAnswer && (
-            <div className="ai-conversation-draft-item" style={{ marginTop: 12 }}>
-              <strong>정답 기준</strong>
-              <div style={{ marginTop: 8 }}>{activeDialogueTurn.expectedUserAnswer}</div>
-              {activeDialogueTurn.expectedUserAnswerAlt && (
-                <div className="muted" style={{ marginTop: 8 }}>
-                  다른 자연형: {activeDialogueTurn.expectedUserAnswerAlt}
-                </div>
-              )}
-              {activeDialogueTurn.hint && (
-                <div className="muted" style={{ marginTop: 8 }}>
-                  힌트: {activeDialogueTurn.hint}
-                </div>
-              )}
-              {activeDialogueTurn.explanation && (
-                <div className="muted" style={{ marginTop: 8 }}>
-                  설명: {activeDialogueTurn.explanation}
-                </div>
-              )}
+        {!isDialoguePracticeStarted && (
+          <div className="mini-card" style={{ marginTop: 14 }}>
+            <strong>다이얼로그 시작</strong>
+            <div className="muted" style={{ marginTop: 8 }}>
+              시작 버튼을 누르면 첫 번째 AI 질문 영어 음성을 재생하면서 연습을 시작합니다.
             </div>
-          )}
+            <div className="row" style={{ marginTop: 12 }}>
+              <button className="button" type="button" onClick={handleBeginDialoguePractice}>
+                시작
+              </button>
+            </div>
+          </div>
+        )}
+        {isDialoguePracticeStarted && (
+        <div ref={dialoguePracticeTimelineRef} className="ai-conversation-scroll" style={{ marginTop: 14 }}>
+          {visibleTurns.map((turn, index) => {
+            const isCurrentTurn = index === activeDialogueTurnIndex;
+            const savedAnswer = dialogueTurnDrafts[turn.id]?.trim() ?? "";
+
+            return (
+              <div key={turn.id} className="ai-conversation-timeline">
+                <div className="ai-conversation-turn ai">
+                  <div className="ai-conversation-turn-card ai">
+                    <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <strong>AI 질문</strong>
+                      <span className="tag tag-muted">{turn.sequence} turn</span>
+                    </div>
+                    {dialogueShowAiPrompt ? (
+                      <div style={{ marginTop: 8 }}>{turn.aiPrompt}</div>
+                    ) : (
+                      <div className="muted" style={{ marginTop: 8 }}>
+                        AI 질문 영어 문장은 현재 숨김 상태입니다.
+                      </div>
+                    )}
+                    {turn.aiPromptTtsUrl && (
+                      <audio controls className="audio-player" style={{ marginTop: 10 }} src={turn.aiPromptTtsUrl} />
+                    )}
+                  </div>
+                </div>
+
+                {isCurrentTurn ? (
+                  <div className="ai-conversation-turn user">
+                    <div className="ai-conversation-turn-card user">
+                      <strong>내 답변 연습</strong>
+                      <div className="row" style={{ marginTop: 12 }}>
+                        <button
+                          type="button"
+                          className={`chip ${dialogueAnswerMode === "text" ? "selected" : ""}`}
+                          onClick={() => setDialogueAnswerMode("text")}
+                        >
+                          텍스트 답변
+                        </button>
+                        <button
+                          type="button"
+                          className={`chip ${dialogueAnswerMode === "voice" ? "selected" : ""}`}
+                          onClick={() => setDialogueAnswerMode("voice")}
+                        >
+                          음성 답변(STT)
+                        </button>
+                      </div>
+                      {dialogueAnswerMode === "text" ? (
+                        <textarea
+                          className="textarea"
+                          style={{ marginTop: 12 }}
+                          placeholder="여기에 직접 답해보세요"
+                          value={dialogueAnswerDraft}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setDialogueAnswerDraft(nextValue);
+                            updateDialogueTurnDraft(turn.id, nextValue);
+                          }}
+                        />
+                      ) : (
+                        <>
+                          {dialogueAutoStartCountdown !== null && (
+                            <div className="muted" style={{ marginTop: 12 }}>
+                              AI 질문 뒤 {dialogueAutoStartCountdown}초 후 자동으로 녹음을 시작합니다.
+                            </div>
+                          )}
+                          <div className="row" style={{ marginTop: 12 }}>
+                            <button
+                              className="button"
+                              type="button"
+                              onClick={handleStartDialogueVoiceRecording}
+                              disabled={isDialogueRecording}
+                            >
+                              {isDialogueRecording ? "녹음 중..." : dialogueAutoStartCountdown !== null ? "지금 바로 녹음 시작" : "음성 녹음 시작"}
+                            </button>
+                            <button
+                              className="button ghost"
+                              type="button"
+                              onClick={handleStopDialogueVoiceRecording}
+                              disabled={!isDialogueRecording && dialogueAutoStartCountdown === null}
+                            >
+                              {dialogueAutoStartCountdown !== null ? "자동 시작 취소" : "녹음 종료"}
+                            </button>
+                            <button
+                              className="button ghost"
+                              type="button"
+                              onClick={handleCancelDialogueVoiceRecording}
+                              disabled={!isDialogueRecording}
+                            >
+                              녹음 취소
+                            </button>
+                          </div>
+                          <div className="muted" style={{ marginTop: 10 }}>
+                            {dialogueVoiceFile ? `준비된 음성 파일: ${dialogueVoiceFile.name}` : "아직 녹음된 음성 답변이 없습니다."}
+                          </div>
+                          {dialogueVoiceFile && (
+                            <audio controls className="audio-player" style={{ marginTop: 12 }} src={dialogueVoiceUrl || undefined} />
+                          )}
+                          <textarea
+                            className="textarea"
+                            style={{ marginTop: 12 }}
+                            placeholder="STT 결과가 여기에 들어갑니다. 필요하면 수정할 수 있습니다."
+                            value={dialogueTranscriptDraft}
+                            onChange={(event) => {
+                              const nextValue = event.target.value;
+                              setDialogueTranscriptDraft(nextValue);
+                              setDialogueAnswerDraft(nextValue);
+                              updateDialogueTurnTranscriptDraft(turn.id, nextValue);
+                              updateDialogueTurnDraft(turn.id, nextValue);
+                            }}
+                          />
+                          <div className="row" style={{ marginTop: 12 }}>
+                            <button
+                              className="button secondary"
+                              type="button"
+                              onClick={() => void handleTranscribeDialogueVoice()}
+                              disabled={!dialogueVoiceFile || !!loading}
+                            >
+                              {loading === "dialogue-transcribe" ? "음성을 텍스트로 변환 중..." : "음성을 텍스트로 변환"}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                      <div className="row" style={{ marginTop: 12 }}>
+                        <button
+                          className="button secondary"
+                          type="button"
+                          onClick={() => setDialogueRevealAnswer((current) => !current)}
+                        >
+                          {dialogueRevealAnswer ? "정답 숨기기" : "정답 보기"}
+                        </button>
+                        <button
+                          className="button"
+                          type="button"
+                          onClick={() => handleMoveDialogueTurn("next")}
+                          disabled={activeDialogueTurnIndex >= activeDialoguePracticeSet.turns.length - 1}
+                        >
+                          다음 turn
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="ai-conversation-turn user">
+                    <div className="ai-conversation-turn-card user">
+                      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <strong>내 연습 답변</strong>
+                        <span className="tag tag-primary">완료한 turn</span>
+                      </div>
+                      <div style={{ marginTop: 8 }}>
+                        {savedAnswer || "이 turn에서 저장된 연습 답변이 없습니다."}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {isCurrentTurn && dialogueRevealAnswer && (
+                  <div className="ai-conversation-turn system">
+                    <div className="ai-conversation-turn-card system">
+                      <strong>정답 기준</strong>
+                      <div style={{ marginTop: 8 }}>{turn.expectedUserAnswer}</div>
+                      {turn.expectedUserAnswerAlt && (
+                        <div className="muted" style={{ marginTop: 8 }}>
+                          다른 자연형: {turn.expectedUserAnswerAlt}
+                        </div>
+                      )}
+                      {turn.hint && (
+                        <div className="muted" style={{ marginTop: 8 }}>
+                          힌트: {turn.hint}
+                        </div>
+                      )}
+                      {turn.explanation && (
+                        <div className="muted" style={{ marginTop: 8 }}>
+                          설명: {turn.explanation}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
+        )}
       </div>
     );
   }
@@ -7900,7 +8157,11 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   {practicePrompt?.tips && (
                     <div className="muted" style={{ marginTop: 8 }}>힌트: {practicePrompt.tips}</div>
                   )}
-                  <div className="muted" style={{ marginTop: 10 }}>답변은 문제 제시 후 3초 안에 시작해야 통과합니다.</div>
+                  <div className="muted" style={{ marginTop: 10 }}>
+                    {testMode === "voice"
+                      ? "음성 답변은 문제 제시 후 3초 뒤 자동으로 녹음을 시작합니다. 이 대기 시간은 채점 점수에 반영하지 않습니다."
+                      : "텍스트 답변은 시간 제한 없이 채점합니다."}
+                  </div>
                 </div>
 
                 <div className="practice-answer-card">
@@ -8465,12 +8726,12 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                           <button
                             className="button secondary"
                             onClick={() => {
-                              selectExpressionForPractice(expression);
+                              selectExpressionForPractice(expression, { scrollToPractice: true });
                               window.setTimeout(() => audioRef.current?.load(), 50);
                             }}
                             disabled={!!loading}
                           >
-                            선택
+                            표현연습 이동
                           </button>
                           <button
                             className="button ghost"
