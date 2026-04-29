@@ -451,6 +451,13 @@ type PracticePrompt = {
   patternDescription?: string;
 };
 
+type PracticeContextSnapshot = {
+  expressionId: string | null;
+  activeReviewExpressionId: string | null;
+  testType: "translation" | "situation" | "pattern" | "think";
+  prompt: PracticePrompt | null;
+};
+
 function buildTranslationPracticePrompt(expression: Expression): PracticePrompt {
   return {
     testType: "translation",
@@ -586,6 +593,7 @@ const LIST_INCREMENT_LARGE = 20;
 const MANUAL_RECORDING_CHUNK_MS = BROWSER_RECORDING_MAX_MS;
 const MANUAL_RECORDING_MAX_MS = BROWSER_RECORDING_MAX_MS;
 const MANUAL_RECORDING_IOS_SAFARI_MAX_MS = BROWSER_RECORDING_MAX_MS;
+const AI_CONVERSATION_RECORDING_MAX_MS = 40 * 1000;
 const MANUAL_RECORDING_RETRY_DELAYS = [2000, 5000, 10000];
 const MANUAL_UPLOAD_STT_CHUNK_MS = 10 * 60 * 1000;
 const DASHBOARD_SECTION_TABS = [
@@ -745,6 +753,7 @@ export default function DashboardPage() {
   const [englishAiRoleDraft, setEnglishAiRoleDraft] = useState("");
   const [englishAiConversationTopicDraft, setEnglishAiConversationTopicDraft] = useState("");
   const [englishAiSituationDescriptionDraft, setEnglishAiSituationDescriptionDraft] = useState("");
+  const [showEnglishAiReplyText, setShowEnglishAiReplyText] = useState(false);
   const [visibleAiMeaningTurnIds, setVisibleAiMeaningTurnIds] = useState<Record<string, boolean>>({});
   const [showEnglishReplyAssist, setShowEnglishReplyAssist] = useState(false);
   const [englishReplyAssistKoreanText, setEnglishReplyAssistKoreanText] = useState("");
@@ -781,6 +790,7 @@ export default function DashboardPage() {
   const [dialogueTitleDrafts, setDialogueTitleDrafts] = useState<Record<string, string>>({});
   const [activeDialogueTitleEditId, setActiveDialogueTitleEditId] = useState("");
   const [isAiConversationRecording, setIsAiConversationRecording] = useState(false);
+  const [aiConversationRecordingRemainingMs, setAiConversationRecordingRemainingMs] = useState(0);
   const [isDialogueRecording, setIsDialogueRecording] = useState(false);
   const [aiConversationRecordingTrack, setAiConversationRecordingTrack] = useState<AiConversationTab | null>(null);
   const [reviewAutoAdvance, setReviewAutoAdvance] = useState(false);
@@ -889,6 +899,12 @@ export default function DashboardPage() {
   const abortControllersRef = useRef<AbortController[]>([]);
   const userCancelledRef = useRef(false);
   const sessionPollTimeoutRef = useRef<number | null>(null);
+  const practiceContextRef = useRef<PracticeContextSnapshot>({
+    expressionId: null,
+    activeReviewExpressionId: null,
+    testType: "translation",
+    prompt: null,
+  });
   const recordingContextRef = useRef<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
   const ttsLibraryPlaybackPlanRef = useRef<TtsLibraryPlaybackPlan | null>(null);
   const ttsLibraryPlaybackTimeoutRef = useRef<number | null>(null);
@@ -898,6 +914,7 @@ export default function DashboardPage() {
   const koreanAiConversationScrollRef = useRef<HTMLDivElement | null>(null);
   const englishAiConversationPanelRef = useRef<HTMLDivElement | null>(null);
   const koreanAiConversationPanelRef = useRef<HTMLDivElement | null>(null);
+  const englishAiUserRoleInputRef = useRef<HTMLInputElement | null>(null);
   const englishAiTextInputRef = useRef<HTMLTextAreaElement | null>(null);
   const englishAiVoiceTranscriptRef = useRef<HTMLTextAreaElement | null>(null);
   const koreanAiTextInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1217,6 +1234,15 @@ export default function DashboardPage() {
   useEffect(() => {
     setSavedPatternExpression(null);
   }, [practicePrompt?.testType, practicePrompt?.promptKorean, practicePrompt?.target, score?.id]);
+
+  useEffect(() => {
+    practiceContextRef.current = {
+      expressionId: selectedExpression?.id ?? null,
+      activeReviewExpressionId,
+      testType: practiceTestType,
+      prompt: practicePrompt,
+    };
+  }, [activeReviewExpressionId, practicePrompt, practiceTestType, selectedExpression?.id]);
 
   useEffect(() => {
     const container = aiConversationTab === "english" ? englishAiConversationScrollRef.current : koreanAiConversationScrollRef.current;
@@ -2263,7 +2289,18 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       setEnglishReplyAssistKoreanText("");
       setEnglishReplyAssistResult(null);
     }
-    focusAiConversationInput(track);
+    focusAiConversationSessionContext(track);
+  }
+
+  function focusAiConversationSessionContext(track: AiConversationTab) {
+    if (typeof window === "undefined") return;
+    window.setTimeout(() => {
+      if (track === "english" && englishAiUserRoleInputRef.current) {
+        englishAiUserRoleInputRef.current.focus({ preventScroll: true });
+        return;
+      }
+      focusAiConversationInput(track);
+    }, 0);
   }
 
   function focusAiConversationInput(track: AiConversationTab) {
@@ -2280,6 +2317,15 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
 
       target?.focus({ preventScroll: true });
     }, 0);
+  }
+
+  function playAiConversationTurnTts(turn?: AiConversationTurn | null) {
+    if (typeof window === "undefined" || !turn?.ttsUrl) {
+      return;
+    }
+
+    const audio = new Audio(turn.ttsUrl);
+    void audio.play().catch(() => undefined);
   }
 
   function toggleAiMeaning(turnId: string) {
@@ -2407,6 +2453,10 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       await refreshAiConversationSessions(track);
       resetAiConversationDraft(track);
       focusAiConversationInput(track);
+      if ((track === "english" ? englishAiOutputMode : koreanAiOutputMode) === "voice") {
+        const latestAiTurn = [...session.turns].reverse().find((turn) => turn.speaker === "AI");
+        playAiConversationTurnTts(latestAiTurn);
+      }
       setMessage(track === "english" ? "영어 AI 대화 응답을 생성했습니다." : "한국어 AI 대화 응답을 생성했습니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "AI 대화 응답 생성에 실패했습니다.");
@@ -2679,7 +2729,13 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     setMessage("");
     setIsAiConversationRecording(true);
     setAiConversationRecordingTrack(track);
-    const session = startRecordedAudioSession({ durationMs: 20000 });
+    setAiConversationRecordingRemainingMs(AI_CONVERSATION_RECORDING_MAX_MS);
+    const session = startRecordedAudioSession({
+      durationMs: AI_CONVERSATION_RECORDING_MAX_MS,
+      onTick: (remainingMs) => {
+        setAiConversationRecordingRemainingMs(remainingMs);
+      },
+    });
     aiConversationRecordingSessionRef.current = session;
 
     void session.promise
@@ -2704,6 +2760,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
         aiConversationRecordingSessionRef.current = null;
         setIsAiConversationRecording(false);
         setAiConversationRecordingTrack(null);
+        setAiConversationRecordingRemainingMs(0);
       });
   }
 
@@ -2716,6 +2773,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
     aiConversationRecordingSessionRef.current = null;
     setIsAiConversationRecording(false);
     setAiConversationRecordingTrack(null);
+    setAiConversationRecordingRemainingMs(0);
   }
 
   function setRecordingWithDrafts(nextRecording: RecordingResponse | null) {
@@ -4239,7 +4297,8 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
   }
 
   async function handleScore() {
-    if (!selectedExpression) {
+    const practiceContext = practiceContextRef.current;
+    if (!practiceContext.expressionId) {
       setError("채점할 표현을 먼저 선택해 주세요.");
       return;
     }
@@ -4256,26 +4315,26 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       const result = await runWithTimeout("score", (signal) => apiFetch<PracticeScore>("/practice/score", {
         method: "POST",
         body: JSON.stringify({
-          expressionId: selectedExpression.id,
+          expressionId: practiceContext.expressionId,
           answer,
-          testType: practiceTestType,
-          promptKorean: practicePrompt?.promptKorean,
-          promptContext: practicePrompt?.promptContext,
-          promptTarget: practicePrompt?.target,
+          testType: practiceContext.testType,
+          promptKorean: practiceContext.prompt?.promptKorean,
+          promptContext: practiceContext.prompt?.promptContext,
+          promptTarget: practiceContext.prompt?.target,
           promptReadyAtMs,
           responseStartedAtMs,
         }),
         signal,
       }));
-      const currentReviewId = activeReviewExpressionId;
+      const currentReviewId = practiceContext.activeReviewExpressionId;
       const currentReviewIndex = currentReviewId ? reviews.findIndex((item) => item.id === currentReviewId) : -1;
       const nextReview = reviewAutoAdvance && currentReviewIndex >= 0 ? reviews[currentReviewIndex + 1] ?? null : null;
 
       setScore(result);
-      if (selectedExpression?.id === activeReviewExpressionId) {
-        setActiveReviewExpressionId(selectedExpression.id);
+      if (practiceContext.expressionId === practiceContext.activeReviewExpressionId) {
+        setActiveReviewExpressionId(practiceContext.expressionId);
       }
-      await refreshLists(selectedExpression.id);
+      await refreshLists(practiceContext.expressionId);
       if (currentReviewId && reviewAutoAdvance) {
         if (nextReview) {
           setMessage("말하기 테스트를 채점했습니다. 다음 복습 카드로 자동 이동합니다.");
@@ -4327,7 +4386,8 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
   }
 
   async function handleScoreVoice(preparedFile?: File) {
-    if (!selectedExpression) {
+    const practiceContext = practiceContextRef.current;
+    if (!practiceContext.expressionId) {
       setError("채점할 표현을 먼저 선택해 주세요.");
       return;
     }
@@ -4372,13 +4432,13 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
         apiFetch<PracticeScore>("/practice/score-voice", {
           method: "POST",
           body: JSON.stringify({
-            expressionId: selectedExpression.id,
+            expressionId: practiceContext.expressionId,
             audioKey: presign.key,
             fileName: file.name,
-            testType: practiceTestType,
-            promptKorean: practicePrompt?.promptKorean,
-            promptContext: practicePrompt?.promptContext,
-            promptTarget: practicePrompt?.target,
+            testType: practiceContext.testType,
+            promptKorean: practiceContext.prompt?.promptKorean,
+            promptContext: practiceContext.prompt?.promptContext,
+            promptTarget: practiceContext.prompt?.target,
             promptReadyAtMs,
             responseStartedAtMs,
           }),
@@ -4386,13 +4446,13 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
         }),
       );
 
-      const currentReviewId = activeReviewExpressionId;
+      const currentReviewId = practiceContext.activeReviewExpressionId;
       const currentReviewIndex = currentReviewId ? reviews.findIndex((item) => item.id === currentReviewId) : -1;
       const nextReview = reviewAutoAdvance && currentReviewIndex >= 0 ? reviews[currentReviewIndex + 1] ?? null : null;
 
       setScore(result);
       setAnswer(result.answer);
-      await refreshLists(selectedExpression.id);
+      await refreshLists(practiceContext.expressionId);
       if (currentReviewId && reviewAutoAdvance) {
         if (nextReview) {
           setMessage("음성 답변을 채점했습니다. 다음 복습 카드로 자동 이동합니다.");
@@ -7178,6 +7238,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                         </div>
                         <div className="grid two" style={{ marginTop: 12 }}>
                           <input
+                            ref={englishAiUserRoleInputRef}
                             className="input"
                             value={englishAiUserRoleDraft}
                             onChange={(event) => setEnglishAiUserRoleDraft(event.target.value)}
@@ -7235,6 +7296,28 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                           </div>
                         </div>
                         <div className="mini-card">
+                          <strong>AI 영문 표시</strong>
+                          <div className="row" style={{ marginTop: 10 }}>
+                            <button
+                              type="button"
+                              className={`chip ${!showEnglishAiReplyText ? "selected" : ""}`}
+                              onClick={() => setShowEnglishAiReplyText(false)}
+                            >
+                              기본 숨기기
+                            </button>
+                            <button
+                              type="button"
+                              className={`chip ${showEnglishAiReplyText ? "selected" : ""}`}
+                              onClick={() => setShowEnglishAiReplyText(true)}
+                            >
+                              영문 보이기
+                            </button>
+                          </div>
+                          <div className="muted" style={{ marginTop: 8 }}>
+                            AI 음성으로 듣는 데 집중하고 싶으면 영문을 숨긴 채로 사용할 수 있습니다.
+                          </div>
+                        </div>
+                        <div className="mini-card">
                           <strong>내 답변 방식</strong>
                           <div className="row" style={{ marginTop: 10 }}>
                             <button
@@ -7271,10 +7354,16 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                                         : "AI 텍스트"
                                       : turn.inputMode === "voice"
                                         ? "음성(STT)"
-                                        : "텍스트"}
+                                      : "텍스트"}
                                   </span>
                                 </div>
-                                <div style={{ marginTop: 8 }}>{turn.originalText}</div>
+                                {turn.speaker === "AI" && !showEnglishAiReplyText ? (
+                                  <div className="muted" style={{ marginTop: 8 }}>
+                                    영문 응답은 숨김 상태입니다. 듣기에 집중하거나 아래에서 한국어 설명만 확인할 수 있습니다.
+                                  </div>
+                                ) : (
+                                  <div style={{ marginTop: 8 }}>{turn.originalText}</div>
+                                )}
                                 {turn.correctedText && turn.correctedText !== turn.originalText && (
                                   <div className="muted" style={{ marginTop: 8 }}>교정: {turn.correctedText}</div>
                                 )}
@@ -7324,7 +7413,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                                 <strong>AI</strong>
                                 <div style={{ marginTop: 8 }}>
                                   {englishAiOutputMode === "voice"
-                                    ? "음성으로 질문을 들려주고, 같은 문장을 텍스트로도 함께 표시합니다."
+                                    ? "음성으로 질문을 들려줍니다. 필요하면 위의 AI 영문 표시 옵션으로 문장을 함께 볼 수 있습니다."
                                     : "What did you do after work today?"}
                                 </div>
                               </div>
@@ -7430,6 +7519,11 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                                 녹음 취소
                               </button>
                             </div>
+                            {isAiConversationRecording && aiConversationRecordingTrack === "english" && (
+                              <div className="muted" style={{ marginTop: 10 }}>
+                                남은 시간 {Math.max(0, Math.ceil(aiConversationRecordingRemainingMs / 1000))}초 / 최대 40초
+                              </div>
+                            )}
                             <div className="muted" style={{ marginTop: 10 }}>
                               {englishAiVoiceFile ? `준비된 음성 파일: ${englishAiVoiceFile.name}` : "아직 녹음된 음성 답변이 없습니다."}
                             </div>
@@ -7810,6 +7904,11 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                                 녹음 취소
                               </button>
                             </div>
+                            {isAiConversationRecording && aiConversationRecordingTrack === "korean" && (
+                              <div className="muted" style={{ marginTop: 10 }}>
+                                남은 시간 {Math.max(0, Math.ceil(aiConversationRecordingRemainingMs / 1000))}초 / 최대 40초
+                              </div>
+                            )}
                             <div className="muted" style={{ marginTop: 10 }}>
                               {koreanAiVoiceFile ? `준비된 음성 파일: ${koreanAiVoiceFile.name}` : "아직 녹음된 음성 답변이 없습니다."}
                             </div>
@@ -8159,7 +8258,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   )}
                   <div className="muted" style={{ marginTop: 10 }}>
                     {testMode === "voice"
-                      ? "음성 답변은 문제 제시 후 3초 뒤 자동으로 녹음을 시작합니다. 이 대기 시간은 채점 점수에 반영하지 않습니다."
+                      ? "음성 답변은 문제 제시 후 3초 뒤 자동으로 녹음을 시작합니다."
                       : "텍스트 답변은 시간 제한 없이 채점합니다."}
                   </div>
                 </div>

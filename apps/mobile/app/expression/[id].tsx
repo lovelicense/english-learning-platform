@@ -197,6 +197,11 @@ export default function ExpressionDetailScreen() {
         <Pressable style={styles.secondaryButton} onPress={() => router.back()}>
           <Text style={styles.secondaryButtonText}>뒤로</Text>
         </Pressable>
+        {expression ? (
+          <Pressable style={styles.primaryButton} onPress={() => router.push(`/expression/${expression.id}/practice`)}>
+            <Text style={styles.primaryButtonText}>표현 연습</Text>
+          </Pressable>
+        ) : null}
         <Pressable style={[styles.secondaryButton, refreshing && styles.buttonDisabled]} onPress={() => void loadExpression(true)} disabled={refreshing}>
           {refreshing ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>새로고침</Text>}
         </Pressable>

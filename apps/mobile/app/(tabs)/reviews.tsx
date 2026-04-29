@@ -1,12 +1,16 @@
 import { Audio } from "expo-av";
+import * as FileSystem from "expo-file-system";
+import * as Speech from "expo-speech";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect } from "expo-router";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { listExpressions, type ExpressionResponse } from "../../src/lib/api/expressions";
 import {
+  createPracticeVoicePresign,
   generatePracticePrompt,
   listPracticeLogs,
   scorePracticeAnswer,
+  scorePracticeVoiceAnswer,
   type PracticeHistoryResponse,
   type PracticePromptResponse,
   type PracticeScoreResponse,
@@ -15,6 +19,13 @@ import { listTodayReviews, type ReviewItemResponse } from "../../src/lib/api/rev
 
 type ReviewStrategy = "system" | "low_score" | "stale" | "voice_gap" | "random";
 type PracticeTestType = "translation" | "situation" | "pattern" | "think";
+type PracticeAnswerMode = "voice" | "text";
+type RecordedClip = {
+  uri: string;
+  durationMs: number;
+  fileName: string;
+  contentType?: string | null;
+};
 
 export default function ReviewsScreen() {
   const [loading, setLoading] = useState(true);
@@ -22,6 +33,8 @@ export default function ReviewsScreen() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [strategy, setStrategy] = useState<ReviewStrategy>("system");
+  const [answerMode, setAnswerMode] = useState<PracticeAnswerMode>("voice");
+  const [selectedTestType, setSelectedTestType] = useState<PracticeTestType>("translation");
   const [reviews, setReviews] = useState<ReviewItemResponse[]>([]);
   const [expressions, setExpressions] = useState<ExpressionResponse[]>([]);
   const [practiceLogs, setPracticeLogs] = useState<PracticeHistoryResponse[]>([]);
@@ -30,10 +43,25 @@ export default function ReviewsScreen() {
   const [answerDraft, setAnswerDraft] = useState("");
   const [score, setScore] = useState<PracticeScoreResponse | null>(null);
   const [promptLoading, setPromptLoading] = useState(false);
-  const [scoring, setScoring] = useState(false);
-  const [playing, setPlaying] = useState(false);
+  const [scoringMode, setScoringMode] = useState<PracticeAnswerMode | null>(null);
+  const [playingKey, setPlayingKey] = useState<string | null>(null);
+  const [recordingBusy, setRecordingBusy] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingPermission, setRecordingPermission] = useState<"unknown" | "granted" | "denied">("unknown");
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
+  const [recordedClip, setRecordedClip] = useState<RecordedClip | null>(null);
+  const [voiceUploadPercent, setVoiceUploadPercent] = useState(0);
+  const [reviewSessionCompleted, setReviewSessionCompleted] = useState(false);
 
   const soundRef = useRef<Audio.Sound | null>(null);
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  const activeRecordingRef = useRef<Audio.Recording | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoRecordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reviewsRef = useRef<ReviewItemResponse[]>([]);
+  const selectedReviewIdRef = useRef("");
+  const practiceSectionYRef = useRef(0);
 
   const selectedReview = useMemo(
     () => reviews.find((item) => item.id === selectedReviewId) ?? reviews[0] ?? null,
@@ -43,6 +71,22 @@ export default function ReviewsScreen() {
     () => expressions.find((item) => item.id === selectedReview?.id) ?? null,
     [expressions, selectedReview?.id],
   );
+  const nextReview = useMemo(() => {
+    const currentIndex = reviews.findIndex((item) => item.id === selectedReviewId);
+    return currentIndex >= 0 ? reviews[currentIndex + 1] ?? null : reviews[0] ?? null;
+  }, [reviews, selectedReviewId]);
+  const clipDurationLabel = useMemo(
+    () => formatDurationMs(isRecording ? recordingElapsedMs : recordedClip?.durationMs),
+    [isRecording, recordingElapsedMs, recordedClip?.durationMs],
+  );
+
+  useEffect(() => {
+    reviewsRef.current = reviews;
+  }, [reviews]);
+
+  useEffect(() => {
+    selectedReviewIdRef.current = selectedReviewId;
+  }, [selectedReviewId]);
 
   const loadAll = useCallback(async (showRefreshing = false, nextStrategy?: ReviewStrategy) => {
     if (showRefreshing) {
@@ -80,42 +124,69 @@ export default function ReviewsScreen() {
 
   useEffect(() => {
     return () => {
+      stopRecordingTimer();
+      clearAutoRecordTimeout();
+      void Speech.stop();
       void stopPlayback();
+      void releaseActiveRecording();
     };
   }, []);
 
   useEffect(() => {
+    clearAutoRecordTimeout();
+    void Speech.stop();
     setPrompt(null);
     setScore(null);
     setAnswerDraft("");
+    setRecordedClip(null);
+    setRecordingElapsedMs(0);
+    setVoiceUploadPercent(0);
+    setAnswerMode("voice");
   }, [selectedReviewId]);
 
   async function handleRefresh(nextStrategy?: ReviewStrategy) {
     if (nextStrategy) {
       setStrategy(nextStrategy);
     }
+    setReviewSessionCompleted(false);
     await loadAll(true, nextStrategy);
   }
 
-  async function handleGeneratePrompt(testType?: PracticeTestType) {
-    if (!selectedReview) return;
+  function scrollToPracticeSection(animated = true) {
+    const y = Math.max(0, practiceSectionYRef.current - 12);
+    scrollViewRef.current?.scrollTo({ x: 0, y, animated });
+  }
 
-    const nextType = testType ?? (selectedReview.recommendedTestType as PracticeTestType);
+  async function generatePromptForReview(review: ReviewItemResponse, testType?: PracticeTestType) {
+    const nextType = testType ?? (review.recommendedTestType as PracticeTestType);
     setPromptLoading(true);
     setError("");
     setMessage("");
     setScore(null);
+    setReviewSessionCompleted(false);
 
     try {
-      const created = await generatePracticePrompt(selectedReview.id, nextType);
+      const created = await generatePracticePrompt(review.id, nextType);
       setPrompt(created);
       setAnswerDraft("");
-      setMessage("복습 문제를 준비했습니다.");
+      setRecordedClip(null);
+      setVoiceUploadPercent(0);
+      if (answerMode === "voice") {
+        setMessage("복습 문제를 준비했고 질문을 읽어준 뒤 3초 후 자동으로 녹음을 시작합니다.");
+      } else {
+        setMessage("복습 문제를 준비했습니다.");
+      }
+      await maybeSpeakPromptAndAutoRecord(created);
     } catch (err) {
       setError(err instanceof Error ? err.message : "복습 문제 생성에 실패했습니다.");
     } finally {
       setPromptLoading(false);
     }
+  }
+
+  async function handleGeneratePrompt(testType?: PracticeTestType) {
+    if (!selectedReview) return;
+    await generatePromptForReview(selectedReview, testType);
   }
 
   async function handleScoreAnswer() {
@@ -127,7 +198,7 @@ export default function ReviewsScreen() {
       return;
     }
 
-    setScoring(true);
+    setScoringMode("text");
     setError("");
     setMessage("");
 
@@ -140,40 +211,99 @@ export default function ReviewsScreen() {
         promptContext: prompt.promptContext,
         promptTarget: prompt.target,
       });
-      setScore(result);
-      setMessage("채점이 완료되었습니다.");
-      const historyList = await listPracticeLogs(20);
-      setPracticeLogs(historyList);
-      setReviews((current) =>
-        current.map((item) =>
-          item.id === selectedReview.id
-            ? {
-                ...item,
-                mastery: result.score,
-                practiceAnswer: result.answer,
-                lastReviewedAt: new Date().toISOString(),
-              }
-            : item,
-        ),
-      );
+      const autoPlayed = await applyScoredResult(result);
+      setMessage(autoPlayed ? "텍스트 채점이 완료되어 정답 TTS를 자동 재생합니다. 확인 후 다음 문제로 이동해 주세요." : "텍스트 채점이 완료되었습니다. 확인 후 다음 문제로 이동해 주세요.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "채점에 실패했습니다.");
     } finally {
-      setScoring(false);
+      setScoringMode(null);
     }
   }
 
-  async function handlePlayReferenceTts() {
-    if (!selectedExpression?.ttsUrl) {
-      setError("정답 TTS가 아직 없습니다.");
+  async function scoreVoiceAnswerFromClip(clip: RecordedClip, autoStarted = false) {
+    if (!selectedReview || !prompt) return;
+    setScoringMode("voice");
+    setVoiceUploadPercent(1);
+    setError("");
+    setMessage(autoStarted ? "녹음 종료 후 자동으로 음성 채점을 진행하고 있습니다." : "");
+
+    try {
+      const uploadPayload = await getRecordedClipUploadPayload(clip);
+      const contentType = uploadPayload.contentType || guessAudioContentType(clip.fileName);
+      const fileName = ensureAudioFileName(clip.fileName, contentType);
+      const presign = await createPracticeVoicePresign({
+        fileName,
+        contentType,
+      });
+
+      await uploadRecordedClipToPresignedUrl(presign.uploadUrl, uploadPayload, contentType, setVoiceUploadPercent);
+
+      const result = await scorePracticeVoiceAnswer({
+        expressionId: selectedReview.id,
+        audioKey: presign.key,
+        fileName,
+        testType: prompt.testType,
+        promptKorean: prompt.promptKorean,
+        promptContext: prompt.promptContext,
+        promptTarget: prompt.target,
+      });
+      const autoPlayed = await applyScoredResult(result);
+      setMessage(autoPlayed ? "음성 답변 채점이 완료되어 정답 TTS를 자동 재생합니다. 확인 후 다음 문제로 이동해 주세요." : "음성 답변 채점이 완료되었습니다. 확인 후 다음 문제로 이동해 주세요.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "음성 채점에 실패했습니다.");
+    } finally {
+      setScoringMode(null);
+    }
+  }
+
+  async function handleScoreVoiceAnswer() {
+    if (!recordedClip) {
+      setError("먼저 영어 답변을 녹음해 주세요.");
       return;
     }
 
-    setError("");
-    setMessage("");
+    await scoreVoiceAnswerFromClip(recordedClip);
+  }
+
+  async function applyScoredResult(result: PracticeScoreResponse) {
+    const referenceTtsUrl = selectedExpression?.ttsUrl ?? null;
+    setScore(result);
+    if (answerMode === "text") {
+      setAnswerDraft(result.answer);
+    }
+    const historyList = await listPracticeLogs(20);
+    setPracticeLogs(historyList);
+    setReviews((current) =>
+      current.map((item) =>
+        item.id === selectedReview?.id
+          ? {
+              ...item,
+              mastery: result.score,
+              practiceAnswer: result.answer,
+              lastReviewedAt: new Date().toISOString(),
+            }
+          : item,
+        ),
+    );
+    if (referenceTtsUrl) {
+      await playAudio("reference-tts", referenceTtsUrl, false);
+      return true;
+    }
+    return false;
+  }
+
+  async function handlePlayAudio(key: string, uri: string) {
+    await playAudio(key, uri, true);
+  }
+
+  async function playAudio(key: string, uri: string, clearFeedback: boolean) {
+    if (clearFeedback) {
+      setError("");
+      setMessage("");
+    }
 
     try {
-      if (playing) {
+      if (playingKey === key) {
         await stopPlayback();
         return;
       }
@@ -183,29 +313,109 @@ export default function ReviewsScreen() {
         playsInSilentModeIOS: true,
       });
       const { sound } = await Audio.Sound.createAsync(
-        { uri: selectedExpression.ttsUrl },
+        { uri },
         { shouldPlay: true },
         (status) => {
           if (!status.isLoaded) return;
           if (status.didJustFinish) {
-            setPlaying(false);
+            setPlayingKey(null);
             void sound.unloadAsync();
             soundRef.current = null;
           }
         },
       );
       soundRef.current = sound;
-      setPlaying(true);
+      setPlayingKey(key);
     } catch (err) {
-      setPlaying(false);
-      setError(err instanceof Error ? err.message : "정답 TTS 재생에 실패했습니다.");
+      setPlayingKey(null);
+      setError(err instanceof Error ? err.message : "오디오 재생에 실패했습니다.");
     }
+  }
+
+  async function advanceToNextReview(nextTestType?: PracticeTestType) {
+    const currentReviews = reviewsRef.current;
+    const currentId = selectedReviewIdRef.current;
+    const currentIndex = currentReviews.findIndex((item) => item.id === currentId);
+    const targetReview = currentIndex >= 0 ? currentReviews[currentIndex + 1] ?? null : currentReviews[0] ?? null;
+
+    if (!targetReview || targetReview.id === currentId) {
+      setReviewSessionCompleted(true);
+      setPrompt(null);
+      setRecordedClip(null);
+      setVoiceUploadPercent(0);
+      setMessage("오늘 복습 카드 학습을 모두 마쳤습니다.");
+      return;
+    }
+
+    setReviewSessionCompleted(false);
+    setSelectedTestType(nextTestType ?? selectedTestType);
+    setSelectedReviewId(targetReview.id);
+    setMessage("다음 복습 카드로 이동했습니다.");
+    await generatePromptForReview(targetReview, nextTestType);
+    setTimeout(() => {
+      scrollToPracticeSection(true);
+    }, 40);
+  }
+
+  async function maybeSpeakPromptAndAutoRecord(nextPrompt: PracticePromptResponse) {
+    if (answerMode !== "voice") return;
+    const promptText = nextPrompt.promptKorean.trim();
+    if (!promptText) {
+      scheduleAutoRecordingStart();
+      return;
+    }
+
+    clearAutoRecordTimeout();
+    await Speech.stop();
+
+    Speech.speak(promptText, {
+      language: "ko-KR",
+      pitch: 1,
+      rate: 0.95,
+      onDone: () => {
+        scheduleAutoRecordingStart();
+      },
+      onStopped: () => {
+        clearAutoRecordTimeout();
+      },
+      onError: () => {
+        scheduleAutoRecordingStart();
+      },
+    });
+  }
+
+  function scheduleAutoRecordingStart() {
+    clearAutoRecordTimeout();
+    setMessage("질문 읽기가 끝났습니다. 3초 뒤 자동으로 녹음을 시작합니다.");
+    autoRecordTimeoutRef.current = setTimeout(() => {
+      autoRecordTimeoutRef.current = null;
+      void handleStartRecording();
+    }, 3000);
+  }
+
+  function clearAutoRecordTimeout() {
+    if (!autoRecordTimeoutRef.current) return;
+    clearTimeout(autoRecordTimeoutRef.current);
+    autoRecordTimeoutRef.current = null;
+  }
+
+  async function handleRestartCompletedSession() {
+    const firstReview = reviews[0] ?? null;
+    if (!firstReview) {
+      setError("다시 시작할 복습 카드가 없습니다.");
+      return;
+    }
+
+    setReviewSessionCompleted(false);
+    setSelectedReviewId(firstReview.id);
+    await generatePromptForReview(firstReview, firstReview.recommendedTestType as PracticeTestType);
+    setMessage("오늘 복습을 처음 카드부터 다시 시작했습니다.");
   }
 
   async function stopPlayback() {
     const sound = soundRef.current;
     soundRef.current = null;
-    setPlaying(false);
+    setPlayingKey(null);
     if (!sound) return;
 
     try {
@@ -220,6 +430,138 @@ export default function ReviewsScreen() {
     }
   }
 
+  async function handleStartRecording() {
+    if (recordingBusy || isRecording) return;
+
+    clearAutoRecordTimeout();
+    await Speech.stop();
+    setRecordingBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const permission = await ensureRecordingPermission();
+      if (!permission) {
+        setRecordingPermission("denied");
+        setError("마이크 권한이 필요합니다. 기기 설정에서 권한을 허용해 주세요.");
+        return;
+      }
+
+      await releaseActiveRecording();
+      setRecordedClip(null);
+      setRecordingElapsedMs(0);
+      setScore(null);
+      setVoiceUploadPercent(0);
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      activeRecordingRef.current = recording;
+      recordingStartedAtRef.current = Date.now();
+      setIsRecording(true);
+      startRecordingTimer();
+      setMessage("영어 답변 녹음을 시작했습니다.");
+    } catch (err) {
+      await releaseActiveRecording();
+      setError(err instanceof Error ? err.message : "녹음 시작에 실패했습니다.");
+    } finally {
+      setRecordingBusy(false);
+    }
+  }
+
+  async function handleStopRecording() {
+    if (recordingBusy || !activeRecordingRef.current) return;
+
+    setRecordingBusy(true);
+    setError("");
+    let nextClip: RecordedClip | null = null;
+
+    try {
+      const recording = activeRecordingRef.current;
+      await recording.stopAndUnloadAsync();
+      const status = await recording.getStatusAsync();
+      const uri = recording.getURI();
+
+      if (!uri) {
+        throw new Error("녹음 파일 경로를 확인할 수 없습니다.");
+      }
+
+      const durationMs = getDurationFromStatus(status, recordingStartedAtRef.current);
+      const fileName = getFileNameFromUri(uri);
+
+      nextClip = {
+        uri,
+        durationMs,
+        fileName,
+        contentType: "mediaType" in status && typeof status.mediaType === "string" ? status.mediaType : null,
+      };
+      setRecordedClip(nextClip);
+      setRecordingElapsedMs(durationMs);
+      setMessage("영어 답변 녹음이 저장되었습니다. 자동으로 음성 채점을 시작합니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "녹음 종료에 실패했습니다.");
+    } finally {
+      stopRecordingTimer();
+      setIsRecording(false);
+      recordingStartedAtRef.current = null;
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+      });
+      await releaseActiveRecording();
+      setRecordingBusy(false);
+    }
+
+    if (nextClip && answerMode === "voice" && prompt && selectedReview) {
+      await scoreVoiceAnswerFromClip(nextClip, true);
+    }
+  }
+
+  async function ensureRecordingPermission() {
+    const current = await Audio.getPermissionsAsync();
+    if (current.granted) {
+      setRecordingPermission("granted");
+      return true;
+    }
+
+    const requested = await Audio.requestPermissionsAsync();
+    setRecordingPermission(requested.granted ? "granted" : "denied");
+    return requested.granted;
+  }
+
+  function startRecordingTimer() {
+    stopRecordingTimer();
+    recordingTimerRef.current = setInterval(() => {
+      const startedAt = recordingStartedAtRef.current;
+      if (!startedAt) {
+        setRecordingElapsedMs(0);
+        return;
+      }
+      setRecordingElapsedMs(Date.now() - startedAt);
+    }, 250);
+  }
+
+  function stopRecordingTimer() {
+    if (!recordingTimerRef.current) return;
+    clearInterval(recordingTimerRef.current);
+    recordingTimerRef.current = null;
+  }
+
+  async function releaseActiveRecording() {
+    const recording = activeRecordingRef.current;
+    activeRecordingRef.current = null;
+    if (!recording) return;
+
+    try {
+      await recording.stopAndUnloadAsync();
+    } catch {
+      // Best effort cleanup.
+    }
+  }
+
   if (loading) {
     return (
       <View style={styles.centered}>
@@ -230,9 +572,9 @@ export default function ReviewsScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView ref={scrollViewRef} contentContainerStyle={styles.container}>
       <Text style={styles.title}>Reviews</Text>
-      <Text style={styles.description}>추천 복습 카드에서 문제를 만들고 바로 답해보는 모바일 연습 플레이어입니다.</Text>
+      <Text style={styles.description}>추천 복습 카드에서 문제를 만들고, 텍스트나 음성으로 바로 답해보는 모바일 연습 플레이어입니다.</Text>
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>전략 / 새로고침</Text>
@@ -276,7 +618,13 @@ export default function ReviewsScreen() {
             <Pressable
               key={item.id}
               style={[styles.reviewCard, selectedReview?.id === item.id && styles.reviewCardSelected]}
-              onPress={() => setSelectedReviewId(item.id)}
+              onPress={() => {
+                setSelectedTestType(item.recommendedTestType as PracticeTestType);
+                setSelectedReviewId(item.id);
+                setTimeout(() => {
+                  scrollToPracticeSection(true);
+                }, 40);
+              }}
             >
               <Text style={styles.reviewKorean}>{item.korean}</Text>
               <Text style={styles.reviewEnglish}>{item.english}</Text>
@@ -289,7 +637,27 @@ export default function ReviewsScreen() {
         )}
       </View>
 
-      <View style={styles.card}>
+      {reviewSessionCompleted ? (
+        <View style={styles.completionCard}>
+          <Text style={styles.completionTitle}>오늘 복습 완료</Text>
+          <Text style={styles.completionText}>정답 듣기까지 포함한 자동 복습 흐름을 모두 마쳤습니다.</Text>
+          <View style={styles.row}>
+            <Pressable style={styles.primaryButton} onPress={() => void handleRestartCompletedSession()}>
+              <Text style={styles.primaryButtonText}>처음부터 다시 시작</Text>
+            </Pressable>
+            <Pressable style={styles.secondaryButton} onPress={() => void handleRefresh()}>
+              <Text style={styles.secondaryButtonText}>목록 새로고침</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      <View
+        style={styles.card}
+        onLayout={(event) => {
+          practiceSectionYRef.current = event.nativeEvent.layout.y;
+        }}
+      >
         <Text style={styles.cardTitle}>현재 연습</Text>
         {selectedReview ? (
           <>
@@ -297,26 +665,25 @@ export default function ReviewsScreen() {
             <Text style={styles.metaText}>정답 기준: {selectedReview.english}</Text>
             <View style={styles.row}>
               {(["translation", "situation", "think"] as const).map((type) => (
-                <Pressable
-                  key={type}
-                  style={[styles.chip, prompt?.testType === type && styles.chipSelected]}
-                  onPress={() => void handleGeneratePrompt(type)}
-                  disabled={promptLoading}
-                >
-                  <Text style={[styles.chipText, prompt?.testType === type && styles.chipTextSelected]}>{formatTestType(type)}</Text>
+                <Pressable key={type} style={[styles.chip, selectedTestType === type && styles.chipSelected]} onPress={() => setSelectedTestType(type)}>
+                  <Text style={[styles.chipText, selectedTestType === type && styles.chipTextSelected]}>{formatTestType(type)}</Text>
                 </Pressable>
               ))}
             </View>
             <View style={styles.row}>
-              <Pressable style={[styles.primaryButton, promptLoading && styles.buttonDisabled]} onPress={() => void handleGeneratePrompt()} disabled={promptLoading}>
-                {promptLoading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>문제 생성</Text>}
+              <Pressable
+                style={[styles.primaryButton, (!selectedReview || promptLoading) && styles.buttonDisabled]}
+                onPress={() => void handleGeneratePrompt(selectedTestType)}
+                disabled={!selectedReview || promptLoading}
+              >
+                {promptLoading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>문제 생성(시작)</Text>}
               </Pressable>
               <Pressable
                 style={[styles.secondaryButton, !selectedExpression?.ttsUrl && styles.buttonDisabled]}
-                onPress={() => void handlePlayReferenceTts()}
+                onPress={() => selectedExpression?.ttsUrl ? void handlePlayAudio("reference-tts", selectedExpression.ttsUrl) : undefined}
                 disabled={!selectedExpression?.ttsUrl}
               >
-                <Text style={styles.secondaryButtonText}>{playing ? "정답 TTS 정지" : "정답 TTS 재생"}</Text>
+                <Text style={styles.secondaryButtonText}>{playingKey === "reference-tts" ? "정답 TTS 정지" : "정답 TTS 재생"}</Text>
               </Pressable>
             </View>
 
@@ -332,31 +699,112 @@ export default function ReviewsScreen() {
               <Text style={styles.metaText}>먼저 문제 생성을 눌러 주세요.</Text>
             )}
 
-            <TextInput
-              style={styles.answerInput}
-              multiline
-              placeholder="영어 답변을 입력해 보세요"
-              value={answerDraft}
-              onChangeText={setAnswerDraft}
-            />
-            <Pressable
-              style={[styles.primaryButton, (!prompt || scoring) && styles.buttonDisabled]}
-              onPress={() => void handleScoreAnswer()}
-              disabled={!prompt || scoring}
-            >
-              {scoring ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>채점하기</Text>}
-            </Pressable>
+            <View style={styles.row}>
+              <Pressable
+                style={[styles.chip, answerMode === "voice" && styles.chipSelected]}
+                onPress={() => setAnswerMode("voice")}
+              >
+                <Text style={[styles.chipText, answerMode === "voice" && styles.chipTextSelected]}>음성 답변(STT)</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.chip, answerMode === "text" && styles.chipSelected]}
+                onPress={() => setAnswerMode("text")}
+              >
+                <Text style={[styles.chipText, answerMode === "text" && styles.chipTextSelected]}>텍스트 답변</Text>
+              </Pressable>
+            </View>
+
+            {answerMode === "text" ? (
+              <>
+                <TextInput
+                  style={styles.answerInput}
+                  multiline
+                  placeholder="영어 답변을 입력해 보세요"
+                  value={answerDraft}
+                  onChangeText={setAnswerDraft}
+                />
+                <Pressable
+                  style={[styles.primaryButton, (!prompt || scoringMode !== null) && styles.buttonDisabled]}
+                  onPress={() => void handleScoreAnswer()}
+                  disabled={!prompt || scoringMode !== null}
+                >
+                  {scoringMode === "text" ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>텍스트 채점하기</Text>}
+                </Pressable>
+              </>
+            ) : (
+              <View style={styles.voiceCard}>
+                <Text style={styles.metaText}>권한 상태: {formatPermissionLabel(recordingPermission)}</Text>
+                <Text style={styles.recordingValue}>{clipDurationLabel}</Text>
+                <Text style={styles.metaText}>
+                  {isRecording ? "영어로 또렷하게 답한 뒤 녹음을 종료해 주세요." : "모바일에서는 음성 답변을 STT로 변환해 바로 채점할 수 있습니다."}
+                </Text>
+                <View style={styles.row}>
+                  <Pressable
+                    style={[styles.primaryButton, (recordingBusy || isRecording || !prompt || scoringMode !== null) && styles.buttonDisabled]}
+                    onPress={() => void handleStartRecording()}
+                    disabled={recordingBusy || isRecording || !prompt || scoringMode !== null}
+                  >
+                    {recordingBusy && !isRecording ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>음성 녹음 시작</Text>}
+                  </Pressable>
+                  <Pressable
+                    style={[styles.secondaryButton, (!isRecording || recordingBusy) && styles.buttonDisabled]}
+                    onPress={() => void handleStopRecording()}
+                    disabled={!isRecording || recordingBusy}
+                  >
+                    {recordingBusy && isRecording ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>녹음 종료</Text>}
+                  </Pressable>
+                </View>
+                <View style={styles.row}>
+                  <Pressable
+                    style={[styles.secondaryButton, (!recordedClip || scoringMode !== null) && styles.buttonDisabled]}
+                    onPress={() => recordedClip ? void handlePlayAudio("local-answer", recordedClip.uri) : undefined}
+                    disabled={!recordedClip || scoringMode !== null}
+                  >
+                    <Text style={styles.secondaryButtonText}>{playingKey === "local-answer" ? "방금 녹음 정지" : "방금 녹음 듣기"}</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.uploadButton, (!recordedClip || !prompt || scoringMode !== null || isRecording) && styles.buttonDisabled]}
+                    onPress={() => void handleScoreVoiceAnswer()}
+                    disabled={!recordedClip || !prompt || scoringMode !== null || isRecording}
+                  >
+                    {scoringMode === "voice" ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>음성 채점하기</Text>}
+                  </Pressable>
+                </View>
+                {recordedClip ? (
+                  <View style={styles.clipCard}>
+                    <Text style={styles.partTitle}>저장된 음성</Text>
+                    <Text style={styles.partMeta}>file: {recordedClip.fileName}</Text>
+                    <Text style={styles.partMeta}>duration: {formatDurationMs(recordedClip.durationMs)}</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.metaText}>아직 저장된 음성 답변이 없습니다.</Text>
+                )}
+                {scoringMode === "voice" ? <Text style={styles.metaText}>업로드 진행률: {voiceUploadPercent}%</Text> : null}
+              </View>
+            )}
 
             {score ? (
               <View style={styles.scoreCard}>
                 <Text style={styles.scoreTitle}>총점 {score.score}</Text>
                 <Text style={styles.metaText}>의미 {score.meaningScore} · 자연스러움 {score.naturalnessScore} · 문법 {score.grammarScore}</Text>
+                {score.recognizedAnswer ? <Text style={styles.feedbackText}>STT 인식: {score.recognizedAnswer}</Text> : null}
                 <Text style={styles.feedbackText}>feedback: {score.feedback}</Text>
                 <Text style={styles.feedbackText}>강점: {score.strengthComment}</Text>
                 <Text style={styles.feedbackText}>교정: {score.correctionComment}</Text>
                 {score.meaningComment ? <Text style={styles.feedbackText}>의미 코멘트: {score.meaningComment}</Text> : null}
                 <Text style={styles.feedbackText}>추천 답변: {score.suggestedAnswer}</Text>
                 {score.suggestedAnswerAlt ? <Text style={styles.feedbackText}>대안 답변: {score.suggestedAnswerAlt}</Text> : null}
+                {score.audioUrl ? (
+                  <Pressable style={styles.secondaryButton} onPress={() => void handlePlayAudio("scored-answer", score.audioUrl!)}>
+                    <Text style={styles.secondaryButtonText}>{playingKey === "scored-answer" ? "채점 음성 정지" : "채점된 음성 다시 듣기"}</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  style={styles.primaryButton}
+                  onPress={() => void advanceToNextReview(prompt?.testType)}
+                >
+                  <Text style={styles.primaryButtonText}>{nextReview ? "다음 문제" : "복습 완료 보기"}</Text>
+                </Pressable>
               </View>
             ) : null}
           </>
@@ -375,6 +823,7 @@ export default function ReviewsScreen() {
                 {formatTestType(log.testType)} · {log.mode} · 점수 {log.score}
               </Text>
               <Text style={styles.metaText}>내 답: {log.answer || "(비어 있음)"}</Text>
+              {log.recognizedAnswer ? <Text style={styles.metaText}>STT: {log.recognizedAnswer}</Text> : null}
             </View>
           ))
         ) : (
@@ -392,12 +841,157 @@ function formatTestType(value: PracticeTestType | "translation" | "situation" | 
   return "패턴형";
 }
 
+function getDurationFromStatus(status: Awaited<ReturnType<Audio.Recording["getStatusAsync"]>>, startedAt: number | null) {
+  if ("durationMillis" in status && typeof status.durationMillis === "number" && status.durationMillis > 0) {
+    return status.durationMillis;
+  }
+
+  if (startedAt) {
+    return Math.max(0, Date.now() - startedAt);
+  }
+
+  return 0;
+}
+
+async function getRecordedClipUploadPayload(recordedClip: RecordedClip): Promise<
+  | { kind: "native"; uri: string; sizeBytes: number; contentType?: string | null }
+  | { kind: "web"; blob: Blob; sizeBytes: number; contentType?: string | null }
+> {
+  if (Platform.OS === "web") {
+    const response = await fetch(recordedClip.uri);
+    if (!response.ok) {
+      throw new Error("웹 녹음 파일을 읽는 데 실패했습니다.");
+    }
+    const blob = await response.blob();
+    if (!blob.size) {
+      throw new Error("업로드할 웹 녹음 파일이 비어 있습니다.");
+    }
+    return {
+      kind: "web",
+      blob,
+      sizeBytes: blob.size,
+      contentType: blob.type || recordedClip.contentType || null,
+    };
+  }
+
+  const fileInfo = await FileSystem.getInfoAsync(recordedClip.uri);
+  if (!fileInfo.exists || fileInfo.isDirectory) {
+    throw new Error("업로드할 녹음 파일을 찾을 수 없습니다.");
+  }
+
+  return {
+    kind: "native",
+    uri: recordedClip.uri,
+    sizeBytes: fileInfo.size,
+    contentType: recordedClip.contentType || null,
+  };
+}
+
+async function uploadRecordedClipToPresignedUrl(
+  uploadUrl: string,
+  payload:
+    | { kind: "native"; uri: string; sizeBytes: number; contentType?: string | null }
+    | { kind: "web"; blob: Blob; sizeBytes: number; contentType?: string | null },
+  contentType: string,
+  onProgress: (percent: number) => void,
+) {
+  if (payload.kind === "web") {
+    const response = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": contentType,
+      },
+      body: payload.blob,
+    });
+    if (!response.ok) {
+      throw new Error(`업로드에 실패했습니다. (${response.status})`);
+    }
+    onProgress(100);
+    return;
+  }
+
+  const uploadTask = FileSystem.createUploadTask(
+    uploadUrl,
+    payload.uri,
+    {
+      httpMethod: "PUT",
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: {
+        "Content-Type": contentType,
+      },
+    },
+    (progress) => {
+      if (progress.totalBytesExpectedToSend <= 0) return;
+      const percent = Math.min(
+        100,
+        Math.max(1, Math.round((progress.totalBytesSent / progress.totalBytesExpectedToSend) * 100)),
+      );
+      onProgress(percent);
+    },
+  );
+
+  const uploadResult = await uploadTask.uploadAsync();
+  if (!uploadResult || uploadResult.status < 200 || uploadResult.status >= 300) {
+    throw new Error(`업로드에 실패했습니다. (${uploadResult?.status ?? "unknown"})`);
+  }
+}
+
+function guessAudioContentType(fileName: string) {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith(".m4a")) return "audio/mp4";
+  if (lower.endsWith(".caf")) return "audio/x-caf";
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".webm")) return "audio/webm";
+  return "audio/mp4";
+}
+
+function ensureAudioFileName(fileName: string, contentType?: string | null) {
+  const trimmed = fileName.trim() || `practice-${Date.now()}`;
+  if (/\.[a-z0-9]+$/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const extension = getExtensionFromContentType(contentType);
+  return `${trimmed}${extension}`;
+}
+
+function getExtensionFromContentType(contentType?: string | null) {
+  const normalized = contentType?.toLowerCase() ?? "";
+  if (normalized.includes("webm")) return ".webm";
+  if (normalized.includes("mpeg")) return ".mp3";
+  if (normalized.includes("wav")) return ".wav";
+  if (normalized.includes("x-caf")) return ".caf";
+  if (normalized.includes("mp4") || normalized.includes("m4a") || normalized.includes("aac")) return ".m4a";
+  return ".m4a";
+}
+
+function getFileNameFromUri(uri: string) {
+  const segments = uri.split("/");
+  const last = segments[segments.length - 1];
+  return last || "practice-answer.m4a";
+}
+
+function formatPermissionLabel(permission: "unknown" | "granted" | "denied") {
+  if (permission === "granted") return "허용됨";
+  if (permission === "denied") return "거부됨";
+  return "아직 확인 전";
+}
+
+function formatDurationMs(value?: number | null) {
+  if (!value || value <= 0) return "00:00";
+  const totalSeconds = Math.round(value / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
     backgroundColor: "#f8fafc",
     padding: 24,
-    gap: 16
+    gap: 16,
   },
   centered: {
     flex: 1,
@@ -405,93 +999,100 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#f8fafc",
     padding: 24,
-    gap: 12
+    gap: 12,
   },
   title: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#0f172a"
+    color: "#0f172a",
   },
   description: {
     color: "#475569",
-    lineHeight: 22
+    lineHeight: 22,
   },
   card: {
     backgroundColor: "#ffffff",
     borderRadius: 20,
     padding: 20,
-    gap: 10
+    gap: 10,
   },
   cardTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#0f172a"
+    color: "#0f172a",
   },
   row: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8
+    gap: 8,
   },
   chip: {
     backgroundColor: "#eff6ff",
     borderRadius: 999,
     paddingVertical: 10,
-    paddingHorizontal: 14
+    paddingHorizontal: 14,
   },
   chipSelected: {
-    backgroundColor: "#2563eb"
+    backgroundColor: "#2563eb",
   },
   chipText: {
     color: "#1d4ed8",
-    fontWeight: "700"
+    fontWeight: "700",
   },
   chipTextSelected: {
-    color: "#ffffff"
+    color: "#ffffff",
   },
   primaryButton: {
     backgroundColor: "#2563eb",
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 18,
-    alignItems: "center"
+    alignItems: "center",
   },
   primaryButtonText: {
     color: "#ffffff",
-    fontWeight: "800"
+    fontWeight: "800",
   },
   secondaryButton: {
     backgroundColor: "#e2e8f0",
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 18,
-    alignItems: "center"
+    alignItems: "center",
   },
   secondaryButtonText: {
     color: "#0f172a",
-    fontWeight: "800"
+    fontWeight: "800",
+  },
+  uploadButton: {
+    backgroundColor: "#0f766e",
+    borderRadius: 999,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    alignItems: "center",
   },
   buttonDisabled: {
-    opacity: 0.6
+    opacity: 0.6,
   },
   reviewCard: {
     borderWidth: 1,
     borderColor: "#e2e8f0",
     borderRadius: 18,
     padding: 14,
-    gap: 6
+    gap: 6,
   },
   reviewCardSelected: {
     borderColor: "#2563eb",
-    backgroundColor: "#f8fbff"
+    backgroundColor: "#f8fbff",
   },
   reviewKorean: {
     color: "#0f172a",
     fontWeight: "800",
-    lineHeight: 22
+    lineHeight: 22,
   },
   reviewEnglish: {
     color: "#334155",
-    lineHeight: 21
+    lineHeight: 21,
   },
   promptCard: {
     borderWidth: 1,
@@ -499,12 +1100,12 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 14,
     gap: 6,
-    backgroundColor: "#f8fbff"
+    backgroundColor: "#f8fbff",
   },
   promptTitle: {
     color: "#0f172a",
     fontWeight: "800",
-    lineHeight: 22
+    lineHeight: 22,
   },
   answerInput: {
     borderWidth: 1,
@@ -515,46 +1116,91 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     minHeight: 110,
     textAlignVertical: "top",
-    color: "#0f172a"
+    color: "#0f172a",
   },
-  scoreCard: {
+  voiceCard: {
     borderWidth: 1,
     borderColor: "#d1fae5",
     borderRadius: 18,
-    padding: 14,
-    gap: 6,
-    backgroundColor: "#f0fdf4"
+    padding: 16,
+    gap: 10,
+    backgroundColor: "#f0fdf4",
+  },
+  recordingValue: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: "#0f172a",
+  },
+  clipCard: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 14,
+    padding: 12,
+    gap: 4,
+    backgroundColor: "#ffffff",
+  },
+  completionCard: {
+    backgroundColor: "#ecfeff",
+    borderRadius: 20,
+    padding: 20,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#a5f3fc",
+  },
+  completionTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#164e63",
+  },
+  completionText: {
+    color: "#155e75",
+    lineHeight: 21,
+  },
+  scoreCard: {
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    backgroundColor: "#f8fbff",
+    borderRadius: 18,
+    padding: 16,
+    gap: 8,
   },
   scoreTitle: {
-    color: "#166534",
-    fontSize: 18,
-    fontWeight: "800"
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#0f172a",
   },
   feedbackText: {
-    color: "#14532d",
-    lineHeight: 20
+    color: "#334155",
+    lineHeight: 21,
   },
   historyRow: {
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    borderRadius: 16,
-    padding: 12,
-    gap: 4
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+    paddingTop: 12,
+    gap: 4,
   },
   historyTitle: {
     color: "#0f172a",
-    fontWeight: "700"
+    fontWeight: "700",
   },
   metaText: {
     color: "#64748b",
-    lineHeight: 20
-  },
-  error: {
-    color: "#dc2626",
-    lineHeight: 20
+    lineHeight: 20,
   },
   success: {
     color: "#15803d",
-    lineHeight: 20
-  }
+    lineHeight: 20,
+  },
+  error: {
+    color: "#dc2626",
+    lineHeight: 20,
+  },
+  partTitle: {
+    color: "#0f172a",
+    fontWeight: "700",
+  },
+  partMeta: {
+    color: "#475569",
+    lineHeight: 20,
+  },
 });

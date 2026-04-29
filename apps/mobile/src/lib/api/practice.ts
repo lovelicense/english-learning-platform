@@ -26,6 +26,13 @@ export type PracticeScoreResponse = {
   suggestedAnswerAlt?: string;
   target: string;
   answer: string;
+  recognizedAnswer?: string | null;
+  audioUrl?: string | null;
+};
+
+export type PracticeVoicePresignResponse = {
+  key: string;
+  uploadUrl: string;
 };
 
 export type PracticeHistoryResponse = {
@@ -76,6 +83,31 @@ export async function scorePracticeAnswer(input: {
   promptTarget?: string;
 }) {
   return apiFetch<PracticeScoreResponse>("/practice/score", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function createPracticeVoicePresign(input: {
+  fileName: string;
+  contentType: string;
+}) {
+  return apiFetch<PracticeVoicePresignResponse>("/practice/voice/presign", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function scorePracticeVoiceAnswer(input: {
+  expressionId: string;
+  audioKey: string;
+  fileName: string;
+  testType: "translation" | "situation" | "pattern" | "think";
+  promptKorean?: string;
+  promptContext?: string;
+  promptTarget?: string;
+}) {
+  return apiFetch<PracticeScoreResponse>("/practice/score-voice", {
     method: "POST",
     body: JSON.stringify(input),
   });

@@ -620,6 +620,22 @@ git push origin main
 - 모바일 `recording/[id]` 화면에 문장별 영어 표현 생성, 표현 TTS 생성/재생 연결 추가
 - 모바일 `expressions` 탭 목록 조회, `expression/[id]` 상세 조회, TTS 재생, 메모 저장 연결 추가
 - 모바일 `reviews` 탭에 복습 카드 목록, 문제 생성, 텍스트 답변 채점, 최근 연습 기록 조회 연결 추가
+- 모바일 `reviews` 탭에 `음성 답변(STT)` 모드, 영어 답변 녹음/재생, `voice/presign -> score-voice` 채점 연결 추가
+- 모바일 `reviews` 탭 채점 결과에 STT 인식 문장, 채점된 음성 다시 듣기 표시 추가
+- 모바일 `reviews` 탭에서 `녹음 종료 -> 자동 STT 업로드 -> 자동 음성 채점` 흐름 추가
+- 모바일 `reviews` 탭에서 채점 완료 후 정답 TTS 자동 재생 추가
+- 모바일 `reviews` 탭에서 정답 TTS 재생 종료 후 다음 복습 카드 자동 이동 및 문제 자동 준비 추가
+- 모바일 `reviews` 탭에 마지막 카드 완료 시 `오늘 복습 완료` 카드와 다시 시작 / 새로고침 동선 추가
+- 모바일 `reviews` 탭에서 `음성 답변(STT)` 모드일 때 질문 한국어 TTS 재생 후 3초 뒤 자동 녹음 시작 추가
+- 모바일 `reviews` / `expression practice` 에서 `번역형 / 상황형 / Think in English` 는 선택만 하고, `문제 생성(시작)` 버튼이 실제 시작 트리거가 되도록 UX 정리
+- 모바일 `reviews` 는 채점 후 자동 다음 이동 대신 결과 확인 뒤 `다음 문제` 버튼으로 이동하도록 UX 변경
+- 모바일 `expression/[id]/practice` 전용 화면 추가
+  - 표현 하나를 골라 문제 생성
+  - 텍스트/음성 답변 채점
+  - 질문 TTS 후 3초 뒤 자동 녹음 시작
+  - 정답 TTS 자동 재생
+- 모바일 `expression/[id]/practice` 화면에서 `이전 표현 / 다음 표현` 이동으로 연속 학습 가능하게 추가
+- 모바일 `expression/[id]` 상세에서 `표현 연습` 진입 버튼 추가
 - 타입 체크 확인:
   - `pnpm --filter @elp/mobile exec tsc --noEmit` 통과
 
@@ -641,6 +657,7 @@ git push origin main
 - 세션 처리 완료 후 STT 결과 목록/상세 화면 설계
 - 모바일 로그인 UX 다듬기
 - 안드로이드 실기기 기준으로 녹음/업로드 안정성 확인
+- 모바일 `reviews` 음성 답변 종료 후 자동 STT/자동 채점 여부 UX 검토
 - 필요 시 모바일 업로드 실패 재시도 정책 설계
 
 ## 참고 메모
@@ -654,4 +671,4 @@ git push origin main
 
 
 # 새 대화 시작 문장
-영어학습앱 개발 이어서 진행할게. STT + diarization + TTS까지 구현했고, 프로젝트 개발 개요 및 진행상태, 구성 등은 project_context.md  파일 참고해. 
+영어학습앱 개발 이어서 진행할게. 프로젝트 개발 개요 및 진행상태, 구성 등은 project_context.md  파일 참고해. 
