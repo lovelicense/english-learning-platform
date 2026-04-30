@@ -2,7 +2,7 @@ import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";
 import * as Speech from "expo-speech";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { listExpressions, type ExpressionResponse } from "../../../src/lib/api/expressions";
 import {
@@ -13,6 +13,11 @@ import {
   type PracticePromptResponse,
   type PracticeScoreResponse,
 } from "../../../src/lib/api/practice";
+import {
+  DEFAULT_LEARNING_PREFERENCES,
+  getLearningPreferences,
+  type LearningPreferences,
+} from "../../../src/lib/learning-preferences";
 
 type PracticeTestType = "translation" | "situation" | "pattern" | "think";
 type PracticeAnswerMode = "voice" | "text";
@@ -48,6 +53,7 @@ export default function ExpressionPracticeScreen() {
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [recordedClip, setRecordedClip] = useState<RecordedClip | null>(null);
   const [voiceUploadPercent, setVoiceUploadPercent] = useState(0);
+  const [learningPreferences, setLearningPreferences] = useState<LearningPreferences>(DEFAULT_LEARNING_PREFERENCES);
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const activeRecordingRef = useRef<Audio.Recording | null>(null);
@@ -106,6 +112,12 @@ export default function ExpressionPracticeScreen() {
     void loadExpression();
   }, [loadExpression]);
 
+  useFocusEffect(
+    useCallback(() => {
+      void loadLearningPreferences();
+    }, []),
+  );
+
   useEffect(() => {
     return () => {
       stopRecordingTimer();
@@ -127,7 +139,14 @@ export default function ExpressionPracticeScreen() {
     setVoiceUploadPercent(0);
     setPlayingKey(null);
     setSelectedTestType("translation");
-  }, [expressionId]);
+    setAnswerMode(learningPreferences.defaultAnswerMode);
+  }, [expressionId, learningPreferences.defaultAnswerMode]);
+
+  async function loadLearningPreferences() {
+    const next = await getLearningPreferences();
+    setLearningPreferences(next);
+    setAnswerMode(next.defaultAnswerMode);
+  }
 
   async function handleGeneratePrompt(testType?: PracticeTestType) {
     if (!expression) return;
@@ -145,7 +164,15 @@ export default function ExpressionPracticeScreen() {
       setRecordedClip(null);
       setVoiceUploadPercent(0);
       if (answerMode === "voice") {
-        setMessage("표현 연습 문제를 준비했고 질문을 읽어준 뒤 3초 후 자동으로 녹음을 시작합니다.");
+        if (learningPreferences.autoPlayPromptTts && learningPreferences.autoStartVoiceRecording) {
+          setMessage("표현 연습 문제를 준비했고 질문을 읽어준 뒤 3초 후 자동으로 녹음을 시작합니다.");
+        } else if (learningPreferences.autoPlayPromptTts) {
+          setMessage("표현 연습 문제를 준비했고 질문을 먼저 읽어줍니다.");
+        } else if (learningPreferences.autoStartVoiceRecording) {
+          setMessage("표현 연습 문제를 준비했고 3초 후 자동으로 녹음을 시작합니다.");
+        } else {
+          setMessage("표현 연습 문제를 준비했습니다. 원하면 직접 녹음을 시작해 주세요.");
+        }
       } else {
         setMessage("표현 연습 문제를 준비했습니다.");
       }
@@ -404,9 +431,20 @@ export default function ExpressionPracticeScreen() {
 
   async function maybeSpeakPromptAndAutoRecord(nextPrompt: PracticePromptResponse) {
     if (answerMode !== "voice") return;
+    if (!learningPreferences.autoPlayPromptTts) {
+      if (learningPreferences.autoStartVoiceRecording) {
+        scheduleAutoRecordingStart();
+      } else {
+        setMessage("표현 연습 문제를 준비했습니다. 원하면 직접 녹음을 시작해 주세요.");
+      }
+      return;
+    }
+
     const promptText = nextPrompt.promptKorean.trim();
     if (!promptText) {
-      scheduleAutoRecordingStart();
+      if (learningPreferences.autoStartVoiceRecording) {
+        scheduleAutoRecordingStart();
+      }
       return;
     }
 
@@ -418,13 +456,21 @@ export default function ExpressionPracticeScreen() {
       pitch: 1,
       rate: 0.95,
       onDone: () => {
-        scheduleAutoRecordingStart();
+        if (learningPreferences.autoStartVoiceRecording) {
+          scheduleAutoRecordingStart();
+        } else {
+          setMessage("질문 읽기가 끝났습니다. 원하면 직접 녹음을 시작해 주세요.");
+        }
       },
       onStopped: () => {
         clearAutoRecordTimeout();
       },
       onError: () => {
-        scheduleAutoRecordingStart();
+        if (learningPreferences.autoStartVoiceRecording) {
+          scheduleAutoRecordingStart();
+        } else {
+          setMessage("질문 읽기 중 문제가 있었지만 직접 녹음을 시작할 수 있습니다.");
+        }
       },
     });
   }
@@ -671,14 +717,54 @@ export default function ExpressionPracticeScreen() {
       {score ? (
         <View style={styles.scoreCard}>
           <Text style={styles.scoreTitle}>총점 {score.score}</Text>
-          <Text style={styles.metaText}>의미 {score.meaningScore} · 자연스러움 {score.naturalnessScore} · 문법 {score.grammarScore}</Text>
-          {score.recognizedAnswer ? <Text style={styles.feedbackText}>STT 인식: {score.recognizedAnswer}</Text> : null}
-          <Text style={styles.feedbackText}>feedback: {score.feedback}</Text>
-          <Text style={styles.feedbackText}>강점: {score.strengthComment}</Text>
-          <Text style={styles.feedbackText}>교정: {score.correctionComment}</Text>
-          {score.meaningComment ? <Text style={styles.feedbackText}>의미 코멘트: {score.meaningComment}</Text> : null}
-          <Text style={styles.feedbackText}>추천 답변: {score.suggestedAnswer}</Text>
-          {score.suggestedAnswerAlt ? <Text style={styles.feedbackText}>대안 답변: {score.suggestedAnswerAlt}</Text> : null}
+          <View style={styles.scoreMetricRow}>
+            <View style={styles.scoreMetricChip}>
+              <Text style={styles.scoreMetricLabel}>의미</Text>
+              <Text style={styles.scoreMetricValue}>{score.meaningScore}</Text>
+            </View>
+            <View style={styles.scoreMetricChip}>
+              <Text style={styles.scoreMetricLabel}>자연스러움</Text>
+              <Text style={styles.scoreMetricValue}>{score.naturalnessScore}</Text>
+            </View>
+            <View style={styles.scoreMetricChip}>
+              <Text style={styles.scoreMetricLabel}>문법</Text>
+              <Text style={styles.scoreMetricValue}>{score.grammarScore}</Text>
+            </View>
+          </View>
+          {score.recognizedAnswer ? (
+            <View style={styles.feedbackBlock}>
+              <Text style={styles.feedbackLabel}>STT 인식</Text>
+              <Text style={styles.feedbackText}>{score.recognizedAnswer}</Text>
+            </View>
+          ) : null}
+          <View style={styles.feedbackBlock}>
+            <Text style={styles.feedbackLabel}>총평</Text>
+            <Text style={styles.feedbackText}>{score.feedback}</Text>
+          </View>
+          <View style={styles.feedbackBlock}>
+            <Text style={styles.feedbackLabel}>잘한 점</Text>
+            <Text style={styles.feedbackText}>{score.strengthComment}</Text>
+          </View>
+          <View style={styles.feedbackBlock}>
+            <Text style={styles.feedbackLabel}>교정 포인트</Text>
+            <Text style={styles.feedbackText}>{score.correctionComment}</Text>
+          </View>
+          {score.meaningComment ? (
+            <View style={styles.feedbackBlock}>
+              <Text style={styles.feedbackLabel}>의미 코멘트</Text>
+              <Text style={styles.feedbackText}>{score.meaningComment}</Text>
+            </View>
+          ) : null}
+          <View style={styles.answerBlock}>
+            <Text style={styles.feedbackLabel}>추천 답변</Text>
+            <Text style={styles.answerText}>{score.suggestedAnswer}</Text>
+          </View>
+          {score.suggestedAnswerAlt ? (
+            <View style={styles.answerBlockAlt}>
+              <Text style={styles.feedbackLabel}>대안 답변</Text>
+              <Text style={styles.answerText}>{score.suggestedAnswerAlt}</Text>
+            </View>
+          ) : null}
           {score.audioUrl ? (
             <Pressable style={styles.secondaryButton} onPress={() => void handlePlayAudio("scored-answer", score.audioUrl!)}>
               <Text style={styles.secondaryButtonText}>{playingKey === "scored-answer" ? "채점 음성 정지" : "채점된 음성 다시 듣기"}</Text>
@@ -1000,9 +1086,60 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#0f172a",
   },
+  scoreMetricRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  scoreMetricChip: {
+    backgroundColor: "#eff6ff",
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    minWidth: 88,
+    gap: 2,
+  },
+  scoreMetricLabel: {
+    color: "#2563eb",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  scoreMetricValue: {
+    color: "#0f172a",
+    fontWeight: "800",
+  },
+  feedbackBlock: {
+    gap: 4,
+  },
+  feedbackLabel: {
+    color: "#475569",
+    fontSize: 12,
+    fontWeight: "800",
+  },
   feedbackText: {
     color: "#334155",
     lineHeight: 21,
+  },
+  answerBlock: {
+    gap: 4,
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    backgroundColor: "#eff6ff",
+    borderRadius: 16,
+    padding: 12,
+  },
+  answerBlockAlt: {
+    gap: 4,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: "#f8fafc",
+    borderRadius: 16,
+    padding: 12,
+  },
+  answerText: {
+    color: "#0f172a",
+    lineHeight: 22,
+    fontWeight: "700",
   },
   metaText: {
     color: "#64748b",

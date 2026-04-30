@@ -30,6 +30,34 @@ function scoreTranscriptText(text: string) {
   return trimmed.length + uniqueChunkBonus + chunkCountBonus - duplicatePenalty;
 }
 
+function inferAudioExtensionFromBuffer(buffer?: Buffer) {
+  if (!buffer) {
+    return null;
+  }
+  if (buffer.length >= 4) {
+    const header4 = buffer.subarray(0, 4).toString('hex').toLowerCase();
+    if (header4 === '1a45dfa3') return '.webm';
+    if (header4 === '52494646') return '.wav';
+    if (header4 === '49443303' || header4 === '49443304') return '.mp3';
+  }
+
+  if (buffer.length >= 12) {
+    const brand = buffer.subarray(4, 12).toString('ascii').toLowerCase();
+    if (brand.includes('ftyp')) return '.m4a';
+  }
+
+  return null;
+}
+
+function ensureAudioFileName(fileName: string, buffer?: Buffer) {
+  const trimmed = fileName.trim() || `audio-${Date.now()}.m4a`;
+  const inferredExtension = inferAudioExtensionFromBuffer(buffer) ?? '.m4a';
+  if (/\.[a-z0-9]+$/i.test(trimmed)) {
+    return trimmed.replace(/\.[a-z0-9]+$/i, inferredExtension);
+  }
+  return `${trimmed}${inferredExtension}`;
+}
+
 function extractThinkInEnglishAnchors(koreanText: string) {
   const anchors: string[] = [];
   const quotedPattern = /["'“”‘’「」『』]([^"'“”‘’「」『』]{1,40})["'“”‘’「」『』]/g;
@@ -1099,7 +1127,8 @@ export class OpenAiService {
       };
     }
 
-    const file = await OpenAI.toFile(buffer, fileName);
+    const normalizedFileName = ensureAudioFileName(fileName, buffer);
+    const file = await OpenAI.toFile(buffer, normalizedFileName);
     const nonDiarizationModels = Array.from(
       new Set([
         process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
@@ -1181,7 +1210,7 @@ export class OpenAiService {
 
         const bestCandidate = candidates.sort((left, right) => right.score - left.score)[0];
         console.info(
-          `[STT fallback] file=${fileName} candidates=${JSON.stringify(
+          `[STT fallback] file=${normalizedFileName} candidates=${JSON.stringify(
             candidates.map((candidate) => ({
               model: candidate.model,
               score: candidate.score,
@@ -1222,12 +1251,12 @@ export class OpenAiService {
       const lastEndMs = utterances[utterances.length - 1]?.endMs ?? 0;
       const emptySegmentCount = segments.filter((segment) => !segment.text || !segment.text.trim()).length;
       console.info(
-        `[STT diarization] file=${fileName} raw_segments=${segments.length} empty_segments=${emptySegmentCount} saved_utterances=${utterances.length} speakers=${Object.keys(
+        `[STT diarization] file=${normalizedFileName} raw_segments=${segments.length} empty_segments=${emptySegmentCount} saved_utterances=${utterances.length} speakers=${Object.keys(
           speakerCounts,
         ).length} first_start_ms=${firstStartMs} last_end_ms=${lastEndMs} speaker_counts=${JSON.stringify(speakerCounts)}`,
       );
-      console.info(`[STT diarization preview:first] file=${fileName} ${JSON.stringify(firstUtterancesPreview)}`);
-      console.info(`[STT diarization preview:last] file=${fileName} ${JSON.stringify(lastUtterancesPreview)}`);
+      console.info(`[STT diarization preview:first] file=${normalizedFileName} ${JSON.stringify(firstUtterancesPreview)}`);
+      console.info(`[STT diarization preview:last] file=${normalizedFileName} ${JSON.stringify(lastUtterancesPreview)}`);
 
       return { utterances };
     }
@@ -1245,7 +1274,8 @@ export class OpenAiService {
       return { text: 'I am on my way to pick up my kid.' };
     }
 
-    const file = await OpenAI.toFile(buffer, fileName);
+    const normalizedFileName = ensureAudioFileName(fileName, buffer);
+    const file = await OpenAI.toFile(buffer, normalizedFileName);
     try {
       const primaryModel = process.env.OPENAI_PRACTICE_STT_MODEL ?? process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe';
       const fallbackModel = process.env.OPENAI_PRACTICE_STT_FALLBACK_MODEL ?? 'gpt-4o-transcribe';

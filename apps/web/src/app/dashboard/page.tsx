@@ -7314,7 +7314,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                             </button>
                           </div>
                           <div className="muted" style={{ marginTop: 8 }}>
-                            AI 음성으로 듣는 데 집중하고 싶으면 영문을 숨긴 채로 사용할 수 있습니다.
+                            AI 음성 응답일 때만 영문 숨김이 적용됩니다. AI 텍스트 응답은 이 설정과 관계없이 항상 보입니다.
                           </div>
                         </div>
                         <div className="mini-card">
@@ -7357,7 +7357,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                                       : "텍스트"}
                                   </span>
                                 </div>
-                                {turn.speaker === "AI" && !showEnglishAiReplyText ? (
+                                {turn.speaker === "AI" && turn.outputMode === "voice" && !showEnglishAiReplyText ? (
                                   <div className="muted" style={{ marginTop: 8 }}>
                                     영문 응답은 숨김 상태입니다. 듣기에 집중하거나 아래에서 한국어 설명만 확인할 수 있습니다.
                                   </div>

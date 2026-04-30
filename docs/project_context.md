@@ -86,6 +86,7 @@ Export 방향:
 
 상세 설계 문서:
 - [AI 대화 자산화 설계안](./ai_conversation_asset_plan.md)
+- [모바일 AI 대화 설계안](./mobile_ai_conversation_plan.md)
 
 
 # 기술 스택
@@ -629,6 +630,7 @@ git push origin main
 - 모바일 `reviews` 탭에서 `음성 답변(STT)` 모드일 때 질문 한국어 TTS 재생 후 3초 뒤 자동 녹음 시작 추가
 - 모바일 `reviews` / `expression practice` 에서 `번역형 / 상황형 / Think in English` 는 선택만 하고, `문제 생성(시작)` 버튼이 실제 시작 트리거가 되도록 UX 정리
 - 모바일 `reviews` 는 채점 후 자동 다음 이동 대신 결과 확인 뒤 `다음 문제` 버튼으로 이동하도록 UX 변경
+- 모바일 `reviews` 는 `다음 문제` 이동 시 이전 문제 유형을 유지하고, 스크롤 위치도 `현재 연습` 영역에 유지하도록 보강
 - 모바일 `expression/[id]/practice` 전용 화면 추가
   - 표현 하나를 골라 문제 생성
   - 텍스트/음성 답변 채점
@@ -671,4 +673,4 @@ git push origin main
 
 
 # 새 대화 시작 문장
-영어학습앱 개발 이어서 진행할게. 프로젝트 개발 개요 및 진행상태, 구성 등은 project_context.md  파일 참고해. 
+영어학습앱 개발 이어서 진행할게. 프로젝트 개발 개요 및 진행상태, 구성 등은 docs폴더 아래 project_context.md 등 .md파일 참고해. 

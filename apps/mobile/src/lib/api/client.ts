@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "../config";
+import { getApiBaseUrl } from "../config";
 import { clearSession, getToken } from "../auth";
 
 type ApiFetchOptions = RequestInit & {
@@ -6,8 +6,12 @@ type ApiFetchOptions = RequestInit & {
 };
 
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
+  const baseUrl = await getApiBaseUrl();
   const headers = new Headers(options.headers ?? {});
-  headers.set("Content-Type", "application/json");
+  const isFormDataBody = typeof FormData !== "undefined" && options.body instanceof FormData;
+  if (!isFormDataBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
 
   if (!options.skipAuth) {
     const token = await getToken();
@@ -16,7 +20,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${baseUrl}${path}`, {
     ...options,
     headers,
   });

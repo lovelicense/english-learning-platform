@@ -324,6 +324,11 @@ export class AiConversationsService {
 
   async transcribeAudio(language: 'en' | 'ko', file: { buffer: Buffer; originalname: string } | undefined) {
     if (!file) throw new BadRequestException('음성 파일이 없습니다.');
+    const uploadInfo = file as { buffer: Buffer; originalname: string; mimetype?: string; size?: number };
+    const headerPreview = uploadInfo.buffer.subarray(0, 16).toString('hex');
+    console.info(
+      `[AI Conversation STT Upload] language=${language} originalname=${uploadInfo.originalname} mimetype=${uploadInfo.mimetype ?? 'unknown'} size=${uploadInfo.size ?? uploadInfo.buffer.length} header=${headerPreview}`,
+    );
     if (language === 'en') {
       const result = await this.openai.transcribeEnglishAudio(file.buffer, file.originalname);
       return { text: result.text };

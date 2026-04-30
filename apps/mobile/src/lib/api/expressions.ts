@@ -35,6 +35,22 @@ export type ExpressionTtsResponse = {
   expression: string;
 };
 
+export type BulkExpressionResponse = {
+  recordingId: string;
+  createdCount: number;
+  skippedCount: number;
+  totalRequested: number;
+  expressions: ExpressionResponse[];
+};
+
+export type BulkTtsResponse = {
+  recordingId: string;
+  updatedCount: number;
+  skippedCount: number;
+  totalRequested: number;
+  expressions: ExpressionTtsResponse[];
+};
+
 export async function listExpressions() {
   return apiFetch<ExpressionResponse[]>("/expressions");
 }
@@ -58,9 +74,46 @@ export async function generateExpressionForUtterance(
   });
 }
 
+export async function generateExpressionFromText(input: {
+  koreanText: string;
+  personProfileIds?: string[];
+  relationship?: string;
+  situation?: string;
+  tone?: string;
+}) {
+  return apiFetch<ExpressionResponse>("/expressions/generate", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function generateExpressionTts(expressionId: string) {
   return apiFetch<ExpressionTtsResponse>(`/expressions/${expressionId}/tts`, {
     method: "POST",
+  });
+}
+
+export async function generateRecordingExpressionsBulk(input: {
+  recordingId: string;
+  speakerScope?: "mine" | "others" | "all";
+  includeExisting?: boolean;
+  relationship?: string;
+  situation?: string;
+  tone?: string;
+}) {
+  return apiFetch<BulkExpressionResponse>("/expressions/generate/bulk", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function generateRecordingTtsBulk(input: {
+  recordingId: string;
+  onlyMissing?: boolean;
+}) {
+  return apiFetch<BulkTtsResponse>("/expressions/tts/bulk", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 

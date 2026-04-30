@@ -37,6 +37,14 @@ export default function ExpressionDetailScreen() {
       { label: "맥락 메모", value: expression.sourceContextNote ?? "-" },
     ];
   }, [expression]);
+  const nextActionHint = useMemo(() => {
+    if (!expression) return "";
+    if (!expression.ttsUrl) return "먼저 TTS를 만들어 두면 이후 듣기 학습과 복습 진입이 쉬워집니다.";
+    if ((expression.practiceCount ?? 0) === 0) return "이 표현은 아직 연습 전입니다. 바로 `표현 연습`으로 들어가 첫 시도를 해보는 게 좋습니다.";
+    if ((expression.latestPracticeScore ?? 100) < 80) return "최근 점수가 낮아서 다시 연습해볼 가치가 큽니다.";
+    return "이 표현은 다시 듣기와 가벼운 복습에 바로 활용할 수 있습니다.";
+  }, [expression]);
+  const hasMemoChange = useMemo(() => (expression?.userMemo ?? "") !== memoDraft, [expression?.userMemo, memoDraft]);
 
   const loadExpression = useCallback(async (showRefreshing = false) => {
     if (!expressionId) {
@@ -218,6 +226,11 @@ export default function ExpressionDetailScreen() {
         </View>
       ) : null}
 
+      <View style={styles.highlightCard}>
+        <Text style={styles.highlightLabel}>다음 학습 액션</Text>
+        <Text style={styles.highlightValue}>{nextActionHint || "표현을 불러오는 중입니다."}</Text>
+      </View>
+
       <View style={styles.card}>
         <Text style={styles.cardTitle}>기본 표현</Text>
         <Text style={styles.korean}>{expression?.koreanText ?? "-"}</Text>
@@ -227,6 +240,14 @@ export default function ExpressionDetailScreen() {
         {expression?.thinkInEnglish ? <Text style={styles.sub}>think in English: {expression.thinkInEnglish}</Text> : null}
         {expression?.note ? <Text style={styles.sub}>note: {expression.note}</Text> : null}
         <Text style={styles.metaText}>연습 {expression?.practiceCount ?? 0}회 · 최근 점수 {expression?.latestPracticeScore ?? "-"}</Text>
+        <View style={styles.buttonRow}>
+          <Pressable style={styles.primaryButton} onPress={() => expression ? router.push(`/expression/${expression.id}/practice`) : undefined}>
+            <Text style={styles.primaryButtonText}>바로 연습하기</Text>
+          </Pressable>
+          <Pressable style={[styles.secondaryButton, !expression?.ttsUrl && styles.buttonDisabled]} onPress={() => void handlePlayTts()} disabled={!expression?.ttsUrl}>
+            <Text style={styles.secondaryButtonText}>{playing ? "정지" : "정답 먼저 듣기"}</Text>
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.card}>
@@ -251,6 +272,7 @@ export default function ExpressionDetailScreen() {
           value={memoDraft}
           onChangeText={setMemoDraft}
         />
+        {hasMemoChange ? <Text style={styles.pendingText}>저장하지 않은 메모 변경이 있습니다.</Text> : null}
         <Pressable style={[styles.primaryButton, savingMemo && styles.buttonDisabled]} onPress={() => void handleSaveMemo()} disabled={savingMemo}>
           {savingMemo ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>메모 저장</Text>}
         </Pressable>
@@ -298,6 +320,24 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 10
   },
+  highlightCard: {
+    backgroundColor: "#eff6ff",
+    borderRadius: 20,
+    padding: 20,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "#bfdbfe"
+  },
+  highlightLabel: {
+    color: "#2563eb",
+    fontWeight: "800",
+    fontSize: 12
+  },
+  highlightValue: {
+    color: "#0f172a",
+    lineHeight: 22,
+    fontWeight: "700"
+  },
   cardTitle: {
     fontSize: 18,
     fontWeight: "700",
@@ -331,6 +371,10 @@ const styles = StyleSheet.create({
     minHeight: 110,
     textAlignVertical: "top",
     color: "#0f172a"
+  },
+  pendingText: {
+    color: "#b45309",
+    lineHeight: 20
   },
   buttonRow: {
     flexDirection: "row",
