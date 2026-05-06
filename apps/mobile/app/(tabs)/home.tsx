@@ -72,6 +72,12 @@ export default function HomeScreen() {
             <Text style={styles.secondaryCardText}>저장한 표현과 TTS를 다시 확인</Text>
           </Pressable>
         </Link>
+        <Link href="/learning-assets" asChild>
+          <Pressable style={styles.secondaryCard}>
+            <Text style={styles.secondaryCardTitle}>Learning Assets</Text>
+            <Text style={styles.secondaryCardText}>패턴/단어 진도와 약한 유형, 연결된 표현 확인</Text>
+          </Pressable>
+        </Link>
         <Link href="/(tabs)/settings" asChild>
           <Pressable style={styles.secondaryCard}>
             <Text style={styles.secondaryCardTitle}>Settings</Text>

@@ -36,6 +36,19 @@ const TRACKS: Array<{
   },
 ];
 
+const TRACK_FLOW_STEPS: Record<TrackKey, string[]> = {
+  english: [
+    "AI와 영어로 실제로 이어서 답하기",
+    "좋은 내 답변을 표현 자산으로 저장하기",
+    "세션을 다이얼로그 연습으로 다시 쓰기",
+  ],
+  korean: [
+    "AI와 한국어로 실제 문장 끌어내기",
+    "내 턴을 저장하고 영어 표현 생성하기",
+    "생성된 표현으로 연습/복습까지 짧게 잇기",
+  ],
+};
+
 function formatRelativeDate(dateString: string) {
   const timestamp = new Date(dateString).getTime();
   if (Number.isNaN(timestamp)) return dateString;
@@ -129,8 +142,13 @@ export default function AiConversationHomeScreen() {
       <View style={styles.summaryCard}>
         <Text style={styles.summaryTitle}>현재 준비 상태</Text>
         <Text style={styles.summaryText}>등록된 AI 대화 세션: {totalSessionCount}개</Text>
-        <Text style={styles.summaryText}>이번 단계: Home 진입 + 트랙별 시작 + 최근 세션 읽기</Text>
-        <Text style={styles.summaryText}>다음 단계: 텍스트 대화 전송, 턴 저장, 음성 입력</Text>
+        <Text style={styles.summaryText}>영어 세션 {englishSessions.length}개 · 한국어 세션 {koreanSessions.length}개</Text>
+        <Text style={styles.summaryText}>지금 목표: 대화 자체보다 대화에서 저장, 연습까지 이어지는 연결을 더 짧게 만들기</Text>
+        <View style={styles.actionRow}>
+          <Pressable style={styles.secondaryButton} onPress={() => router.push("/dialogue-practice")}>
+            <Text style={styles.secondaryButtonText}>전체 다이얼로그 세트 보기</Text>
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.card}>
@@ -153,6 +171,7 @@ export default function AiConversationHomeScreen() {
 
       {TRACKS.map((track) => {
         const sessions = track.key === "english" ? filteredEnglishSessions : filteredKoreanSessions;
+        const latestSession = sessions[0] ?? null;
         return (
           <View key={track.key} style={styles.card}>
             <View style={styles.trackHeader}>
@@ -165,6 +184,41 @@ export default function AiConversationHomeScreen() {
               </Pressable>
             </View>
             <Text style={styles.cardText}>{track.description}</Text>
+
+            <View style={styles.flowCard}>
+              <Text style={styles.flowTitle}>이 트랙에서 바로 이어지는 흐름</Text>
+              {TRACK_FLOW_STEPS[track.key].map((step, index) => (
+                <View key={`${track.key}-step-${index}`} style={styles.flowStepRow}>
+                  <View style={styles.flowStepBadge}>
+                    <Text style={styles.flowStepBadgeText}>{index + 1}</Text>
+                  </View>
+                  <Text style={styles.flowStepText}>{step}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.statusCard}>
+              <Text style={styles.statusTitle}>지금 이 트랙에서 먼저 할 일</Text>
+              <Text style={styles.cardText}>
+                {latestSession
+                  ? track.key === "english"
+                    ? "최근 영어 세션을 다시 열고, 내 답변이 있는 턴을 표현 저장 또는 다이얼로그 연습으로 이어보는 것이 가장 빠릅니다."
+                    : "최근 한국어 세션을 다시 열고, 저장할 내 턴을 골라 영어 표현 생성으로 넘기는 것이 가장 빠릅니다."
+                  : track.key === "english"
+                    ? "첫 영어 세션을 만들어 AI와 몇 턴만 이어간 뒤, 좋은 답변 하나를 표현으로 저장하는 흐름부터 여는 게 좋습니다."
+                    : "첫 한국어 세션을 만들어 실제로 쓰는 문장 하나를 저장하고 영어 표현 생성까지 이어보는 흐름부터 여는 게 좋습니다."}
+              </Text>
+              <View style={styles.actionRow}>
+                <Pressable style={styles.primaryButton} onPress={() => openTrackSetup(track.key)}>
+                  <Text style={styles.primaryButtonText}>{track.cta}</Text>
+                </Pressable>
+                {latestSession ? (
+                  <Pressable style={styles.secondaryButton} onPress={() => openSession(latestSession.id)}>
+                    <Text style={styles.secondaryButtonText}>최근 세션 이어보기</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
 
             <Text style={styles.sectionTitle}>최근 세션</Text>
             {loading ? (
@@ -276,6 +330,51 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: "600",
   },
+  flowCard: {
+    borderRadius: 16,
+    backgroundColor: "#f8fafc",
+    padding: 16,
+    gap: 10,
+  },
+  flowTitle: {
+    color: "#0f172a",
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  flowStepRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  flowStepBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ccfbf1",
+  },
+  flowStepBadgeText: {
+    color: "#115e59",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  flowStepText: {
+    flex: 1,
+    color: "#334155",
+    lineHeight: 20,
+  },
+  statusCard: {
+    borderRadius: 16,
+    backgroundColor: "#ecfeff",
+    padding: 16,
+    gap: 10,
+  },
+  statusTitle: {
+    color: "#134e4a",
+    fontSize: 16,
+    fontWeight: "800",
+  },
   cardText: {
     color: "#334155",
     lineHeight: 20,
@@ -357,6 +456,24 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     color: "#ffffff",
+    fontWeight: "700",
+  },
+  actionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  secondaryButton: {
+    alignSelf: "flex-start",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#99f6e4",
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  secondaryButtonText: {
+    color: "#0f172a",
     fontWeight: "700",
   },
   errorCard: {

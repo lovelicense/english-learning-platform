@@ -1,0 +1,719 @@
+import { useCallback, useMemo, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  getLearningAssetsCatalog,
+  getLearningAssetsProgress,
+  type LearningAssetsCatalog,
+  type LearningAssetProgressSummary,
+  type LearningAssetExpressionRef,
+  type LearningProgressStatus,
+} from "../src/lib/api/learning-assets";
+
+type AssetTab = "pattern" | "vocabulary";
+type AssetFilter = "priority" | "all" | "missing" | "collected" | "automated";
+type PatternAssetItem = LearningAssetsCatalog["patternCategories"][number]["templates"][number] & {
+  categoryCode: string;
+  categoryNameKo: string;
+  level: "A1" | "A2";
+};
+type VocabularyAssetItem = LearningAssetsCatalog["vocabularyCategories"][number]["items"][number] & {
+  categoryCode: string;
+  categoryNameKo: string;
+};
+
+export default function LearningAssetsScreen() {
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [progress, setProgress] = useState<LearningAssetProgressSummary | null>(null);
+  const [catalog, setCatalog] = useState<LearningAssetsCatalog | null>(null);
+  const [assetTab, setAssetTab] = useState<AssetTab>("pattern");
+  const [assetFilter, setAssetFilter] = useState<AssetFilter>("priority");
+  const [query, setQuery] = useState("");
+  const [coreOnly, setCoreOnly] = useState(false);
+
+  const loadAll = useCallback(async (showRefreshing = false) => {
+    if (showRefreshing) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+
+    setError("");
+    try {
+      const [progressResult, catalogResult] = await Promise.all([
+        getLearningAssetsProgress(),
+        getLearningAssetsCatalog(),
+      ]);
+      setProgress(progressResult);
+      setCatalog(catalogResult);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "학습 자산을 불러오지 못했습니다.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadAll();
+    }, [loadAll]),
+  );
+
+  const patternTemplates = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    const items =
+      catalog?.patternCategories.flatMap((category) =>
+        category.templates.map((template) => ({
+          ...template,
+          categoryCode: category.code,
+          categoryNameKo: category.nameKo,
+          level: category.level,
+        })),
+      ) ?? [];
+
+    return items.filter((item) => {
+      if (coreOnly && !item.isCoreExpression) return false;
+      if (assetFilter === "priority" && item.collected && item.automated) return false;
+      if (assetFilter === "missing" && item.collected) return false;
+      if (assetFilter === "collected" && !item.collected) return false;
+      if (assetFilter === "automated" && !item.automated) return false;
+      if (!normalized) return true;
+      return [
+        item.templateText,
+        item.meaningKo ?? "",
+        item.usageNote ?? "",
+        item.categoryNameKo,
+        item.exampleEn ?? "",
+        item.exampleKo ?? "",
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalized);
+    });
+  }, [assetFilter, catalog?.patternCategories, coreOnly, query]);
+
+  const vocabularyItems = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    const items =
+      catalog?.vocabularyCategories.flatMap((category) =>
+        category.items.map((item) => ({
+          ...item,
+          categoryCode: category.code,
+          categoryNameKo: category.nameKo,
+        })),
+      ) ?? [];
+
+    return items.filter((item) => {
+      if (coreOnly && !item.isCore) return false;
+      if (assetFilter === "priority" && item.collected && item.automated) return false;
+      if (assetFilter === "missing" && item.collected) return false;
+      if (assetFilter === "collected" && !item.collected) return false;
+      if (assetFilter === "automated" && !item.automated) return false;
+      if (!normalized) return true;
+      return [
+        item.lemma,
+        item.meaningKo ?? "",
+        item.partOfSpeech ?? "",
+        item.categoryNameKo,
+        item.exampleEn ?? "",
+        item.exampleKo ?? "",
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalized);
+    });
+  }, [assetFilter, catalog?.vocabularyCategories, coreOnly, query]);
+
+  const visibleWeakestCategories = useMemo(
+    () => progress?.weakestCategories.slice(0, 4) ?? [],
+    [progress?.weakestCategories],
+  );
+  const visibleUnmatchedExpressions = useMemo(
+    () => (assetTab === "pattern" ? catalog?.unmatchedPatternExpressions : catalog?.unmatchedVocabularyExpressions)?.slice(0, 6) ?? [],
+    [assetTab, catalog?.unmatchedPatternExpressions, catalog?.unmatchedVocabularyExpressions],
+  );
+  const currentListCount = assetTab === "pattern" ? patternTemplates.length : vocabularyItems.length;
+
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator color="#2563eb" />
+        <Text style={styles.description}>학습 자산을 불러오는 중입니다.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      <Text style={styles.eyebrow}>Learning Assets</Text>
+      <Text style={styles.title}>패턴 / 단어 진도</Text>
+      <Text style={styles.description}>
+        저장한 표현이 어떤 패턴과 단어에 연결됐는지, 그리고 지금 무엇을 먼저 보강하면 좋은지 모바일에서 바로 확인합니다.
+      </Text>
+
+      <View style={styles.heroCard}>
+        <Text style={styles.heroTitle}>현재 요약</Text>
+        <Text style={styles.heroText}>전체 진행률 {progress?.overall.overallProgress ?? 0}%</Text>
+        <Text style={styles.heroText}>
+          패턴 자동화 {progress?.overall.automatedPatternCount ?? 0}/{progress?.overall.patternTemplateCount ?? 0}
+        </Text>
+        <Text style={styles.heroText}>
+          단어 사용 가능 {progress?.overall.usableVocabularyCount ?? 0}/{progress?.overall.vocabularyItemCount ?? 0}
+        </Text>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>학습 자산 바로가기</Text>
+        <View style={styles.row}>
+          <Pressable style={styles.primaryButton} onPress={() => setAssetTab("pattern")}>
+            <Text style={styles.primaryButtonText}>패턴 먼저 보기</Text>
+          </Pressable>
+          <Pressable style={styles.secondaryButton} onPress={() => setAssetTab("vocabulary")}>
+            <Text style={styles.secondaryButtonText}>단어 먼저 보기</Text>
+          </Pressable>
+          <Pressable style={[styles.secondaryButton, refreshing && styles.buttonDisabled]} onPress={() => void loadAll(true)} disabled={refreshing}>
+            {refreshing ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>새로고침</Text>}
+          </Pressable>
+        </View>
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+      </View>
+
+      <View style={styles.metricsGrid}>
+        <View style={styles.metricCard}>
+          <Text style={styles.metricLabel}>패턴 자동화율</Text>
+          <Text style={styles.metricValue}>{progress?.overall.patternAutomationRate ?? 0}%</Text>
+          <Text style={styles.metaText}>
+            {progress?.overall.automatedPatternCount ?? 0} / {progress?.overall.patternTemplateCount ?? 0}
+          </Text>
+        </View>
+        <View style={styles.metricCard}>
+          <Text style={styles.metricLabel}>패턴 수집률</Text>
+          <Text style={styles.metricValue}>{progress?.overall.patternCollectionRate ?? 0}%</Text>
+          <Text style={styles.metaText}>
+            {progress?.overall.collectedPatternCount ?? 0} / {progress?.overall.patternTemplateCount ?? 0}
+          </Text>
+        </View>
+        <View style={styles.metricCard}>
+          <Text style={styles.metricLabel}>단어 사용 가능률</Text>
+          <Text style={styles.metricValue}>{progress?.overall.vocabularyUsableRate ?? 0}%</Text>
+          <Text style={styles.metaText}>
+            {progress?.overall.usableVocabularyCount ?? 0} / {progress?.overall.vocabularyItemCount ?? 0}
+          </Text>
+        </View>
+        <View style={styles.metricCard}>
+          <Text style={styles.metricLabel}>1초 응답 통과율</Text>
+          <Text style={styles.metricValue}>{progress?.overall.responseWithin1sRate ?? 0}%</Text>
+          <Text style={styles.metaText}>최근 성공 기록 기준</Text>
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>레벨 진행률</Text>
+        {(progress?.levels ?? []).map((level) => (
+          <View key={level.level} style={styles.levelCard}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.levelTitle}>{level.level}</Text>
+              <Text style={styles.levelBadge}>{level.progress}%</Text>
+            </View>
+            <Text style={styles.metaText}>
+              패턴 자동화 {level.patternAutomatedCount}/{level.patternTargetCount} · 단어 사용 가능 {level.vocabularyUsableCount}/{level.vocabularyTargetCount}
+            </Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>가장 약한 유형</Text>
+        <Text style={styles.metaText}>아직 덜 모였거나 자동화가 부족한 카테고리부터 보강하면 학습 효율이 높습니다.</Text>
+        {visibleWeakestCategories.length > 0 ? (
+          visibleWeakestCategories.map((item) => (
+            <View key={`${item.kind}-${item.code}`} style={styles.assetCard}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.assetTitle}>{item.nameKo}</Text>
+                <Text style={styles.assetTag}>{item.kind === "pattern" ? "패턴" : "단어"}</Text>
+              </View>
+              <Text style={styles.metaText}>
+                목표 {item.targetCount} · 확보 {item.collectedCount} · 자동화 {item.automatedCount} · 부족 {item.gap}
+              </Text>
+            </View>
+          ))
+        ) : (
+          <Text style={styles.metaText}>약점 데이터가 아직 충분하지 않습니다.</Text>
+        )}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>자산 라이브러리</Text>
+        <View style={styles.row}>
+          <Pressable style={[styles.filterChip, assetTab === "pattern" && styles.filterChipActive]} onPress={() => setAssetTab("pattern")}>
+            <Text style={[styles.filterChipText, assetTab === "pattern" && styles.filterChipTextActive]}>패턴</Text>
+          </Pressable>
+          <Pressable style={[styles.filterChip, assetTab === "vocabulary" && styles.filterChipActive]} onPress={() => setAssetTab("vocabulary")}>
+            <Text style={[styles.filterChipText, assetTab === "vocabulary" && styles.filterChipTextActive]}>단어</Text>
+          </Pressable>
+        </View>
+        <TextInput
+          style={styles.input}
+          placeholder={assetTab === "pattern" ? "패턴, 의미, 예문 검색" : "단어, 뜻, 예문 검색"}
+          value={query}
+          onChangeText={setQuery}
+        />
+        <View style={styles.row}>
+          {([
+            ["priority", "우선 보강"],
+            ["all", "전체"],
+            ["missing", "미확보"],
+            ["collected", "확보됨"],
+            ["automated", "자동화"],
+          ] as const).map(([value, label]) => (
+            <Pressable
+              key={value}
+              style={[styles.filterChip, assetFilter === value && styles.filterChipActive]}
+              onPress={() => setAssetFilter(value)}
+            >
+              <Text style={[styles.filterChipText, assetFilter === value && styles.filterChipTextActive]}>{label}</Text>
+            </Pressable>
+          ))}
+          <Pressable style={[styles.filterChip, coreOnly && styles.filterChipActive]} onPress={() => setCoreOnly((current) => !current)}>
+            <Text style={[styles.filterChipText, coreOnly && styles.filterChipTextActive]}>핵심만</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.metaText}>
+          현재 {currentListCount}개 표시 · {assetTab === "pattern" ? "패턴 템플릿" : "단어 자산"}을 눌러 관련 표현으로 바로 이동할 수 있습니다.
+        </Text>
+
+        {assetTab === "pattern"
+          ? patternTemplates.slice(0, 20).map((item) => <PatternAssetCard key={item.id} item={item} />)
+          : vocabularyItems.slice(0, 20).map((item) => <VocabularyAssetCard key={item.id} item={item} />)}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>{assetTab === "pattern" ? "패턴 미매칭 표현" : "단어 미매칭 표현"}</Text>
+        <Text style={styles.metaText}>
+          {assetTab === "pattern"
+            ? "아직 어떤 패턴에도 연결되지 않은 표현입니다. 새 패턴을 더 모으거나 표현을 다시 점검하는 데 도움이 됩니다."
+            : "아직 단어 자산에 연결되지 않은 표현입니다. 단어 수집이나 표현 점검 후보로 볼 수 있습니다."}
+        </Text>
+        {visibleUnmatchedExpressions.length > 0 ? (
+          visibleUnmatchedExpressions.map((expression) => (
+            <ExpressionBridgeCard key={expression.id} expression={expression} />
+          ))
+        ) : (
+          <Text style={styles.metaText}>지금은 미매칭 표현이 많지 않습니다.</Text>
+        )}
+      </View>
+    </ScrollView>
+  );
+}
+
+function ExpressionBridgeCard({ expression }: { expression: LearningAssetExpressionRef }) {
+  return (
+    <View style={styles.assetCard}>
+      <Text style={styles.assetTitle}>{expression.koreanText}</Text>
+      <Text style={styles.assetBody}>{expression.englishBase}</Text>
+      <View style={styles.row}>
+        <Pressable style={styles.smallPrimaryButton} onPress={() => router.push(`/expression/${expression.id}`)}>
+          <Text style={styles.smallPrimaryButtonText}>표현 상세</Text>
+        </Pressable>
+        <Pressable style={styles.smallSecondaryButton} onPress={() => router.push(`/expression/${expression.id}/practice`)}>
+          <Text style={styles.smallSecondaryButtonText}>표현 연습</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function PatternAssetCard({ item }: { item: PatternAssetItem }) {
+  const status = formatProgressStatus(item.progress?.status, item.collected, item.automated);
+  return (
+    <View style={styles.assetCard}>
+      <View style={styles.rowBetween}>
+        <Text style={styles.assetTitle}>{item.templateText}</Text>
+        <View style={[styles.statusBadge, getStatusBadgeStyle(status)]}>
+          <Text style={[styles.statusBadgeText, getStatusBadgeTextStyle(status)]}>{status}</Text>
+        </View>
+      </View>
+      <Text style={styles.metaText}>{item.categoryNameKo} · {item.level}</Text>
+      <View style={styles.row}>
+        {item.isCoreExpression ? <Text style={styles.infoPill}>핵심 패턴</Text> : null}
+        {item.difficulty ? <Text style={styles.infoPill}>난이도 {item.difficulty}</Text> : null}
+        <Text style={styles.infoPill}>연결 표현 {item.expressions.length}개</Text>
+      </View>
+      {item.meaningKo ? (
+        <View style={styles.detailBlock}>
+          <Text style={styles.detailLabel}>의미</Text>
+          <Text style={styles.assetBody}>{item.meaningKo}</Text>
+        </View>
+      ) : null}
+      {item.usageNote ? (
+        <View style={styles.detailBlock}>
+          <Text style={styles.detailLabel}>사용 메모</Text>
+          <Text style={styles.metaText}>{item.usageNote}</Text>
+        </View>
+      ) : null}
+      {item.exampleEn || item.exampleKo ? (
+        <View style={styles.exampleCard}>
+          <Text style={styles.detailLabel}>예문</Text>
+          {item.exampleEn ? <Text style={styles.assetBody}>{item.exampleEn}</Text> : null}
+          {item.exampleKo ? <Text style={styles.metaText}>{item.exampleKo}</Text> : null}
+        </View>
+      ) : null}
+      <RelatedExpressionPreview expressions={item.expressions} />
+    </View>
+  );
+}
+
+function VocabularyAssetCard({ item }: { item: VocabularyAssetItem }) {
+  const status = formatProgressStatus(item.progress?.status, item.collected, item.automated);
+  return (
+    <View style={styles.assetCard}>
+      <View style={styles.rowBetween}>
+        <Text style={styles.assetTitle}>{item.lemma}</Text>
+        <View style={[styles.statusBadge, getStatusBadgeStyle(status)]}>
+          <Text style={[styles.statusBadgeText, getStatusBadgeTextStyle(status)]}>{status}</Text>
+        </View>
+      </View>
+      <Text style={styles.metaText}>{item.categoryNameKo} · {item.level}</Text>
+      <View style={styles.row}>
+        {item.isCore ? <Text style={styles.infoPill}>핵심 단어</Text> : null}
+        {item.partOfSpeech ? <Text style={styles.infoPill}>{item.partOfSpeech}</Text> : null}
+        {item.frequencyRank ? <Text style={styles.infoPill}>빈도 {item.frequencyRank}</Text> : null}
+        <Text style={styles.infoPill}>연결 표현 {item.expressions.length}개</Text>
+      </View>
+      {item.meaningKo ? (
+        <View style={styles.detailBlock}>
+          <Text style={styles.detailLabel}>뜻</Text>
+          <Text style={styles.assetBody}>{item.meaningKo}</Text>
+        </View>
+      ) : null}
+      {item.exampleEn || item.exampleKo ? (
+        <View style={styles.exampleCard}>
+          <Text style={styles.detailLabel}>예문</Text>
+          {item.exampleEn ? <Text style={styles.assetBody}>{item.exampleEn}</Text> : null}
+          {item.exampleKo ? <Text style={styles.metaText}>{item.exampleKo}</Text> : null}
+        </View>
+      ) : null}
+      <RelatedExpressionPreview expressions={item.expressions} />
+    </View>
+  );
+}
+
+function RelatedExpressionPreview({ expressions }: { expressions: LearningAssetExpressionRef[] }) {
+  if (expressions.length === 0) {
+    return <Text style={styles.metaText}>아직 연결된 표현이 없습니다.</Text>;
+  }
+
+  const preview = expressions.slice(0, 3);
+  return (
+    <View style={styles.relatedSection}>
+      <Text style={styles.detailLabel}>연결된 표현 미리보기</Text>
+      {preview.map((expression) => (
+        <View key={expression.id} style={styles.relatedExpressionCard}>
+          <Text style={styles.relatedExpressionKo}>{expression.koreanText}</Text>
+          <Text style={styles.relatedExpressionEn}>{expression.englishBase}</Text>
+          <View style={styles.row}>
+            <Pressable style={styles.smallPrimaryButton} onPress={() => router.push(`/expression/${expression.id}`)}>
+              <Text style={styles.smallPrimaryButtonText}>상세</Text>
+            </Pressable>
+            <Pressable style={styles.smallSecondaryButton} onPress={() => router.push(`/expression/${expression.id}/practice`)}>
+              <Text style={styles.smallSecondaryButtonText}>연습</Text>
+            </Pressable>
+          </View>
+        </View>
+      ))}
+      {expressions.length > preview.length ? (
+        <Text style={styles.metaText}>추가 연결 표현 {expressions.length - preview.length}개</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function formatProgressStatus(
+  status?: LearningProgressStatus | null,
+  collected?: boolean,
+  automated?: boolean,
+) {
+  if (automated || status === "AUTOMATED") return "자동화";
+  if (status === "USABLE_IN_SPEAKING") return "말하기 가능";
+  if (status === "PRACTICING") return "연습 중";
+  if (status === "RECOGNIZED") return "인식됨";
+  if (collected || status === "COLLECTED") return "수집됨";
+  return "미확보";
+}
+
+function getStatusBadgeStyle(status: string) {
+  if (status === "자동화") return { backgroundColor: "#dcfce7" };
+  if (status === "말하기 가능") return { backgroundColor: "#dbeafe" };
+  if (status === "연습 중") return { backgroundColor: "#fef3c7" };
+  if (status === "인식됨") return { backgroundColor: "#ede9fe" };
+  if (status === "수집됨") return { backgroundColor: "#e2e8f0" };
+  return { backgroundColor: "#fee2e2" };
+}
+
+function getStatusBadgeTextStyle(status: string) {
+  if (status === "자동화") return { color: "#166534" };
+  if (status === "말하기 가능") return { color: "#1d4ed8" };
+  if (status === "연습 중") return { color: "#92400e" };
+  if (status === "인식됨") return { color: "#6d28d9" };
+  if (status === "수집됨") return { color: "#334155" };
+  return { color: "#b91c1c" };
+}
+
+const styles = StyleSheet.create({
+  container: {
+    padding: 24,
+    backgroundColor: "#f8fafc",
+    gap: 16,
+  },
+  centered: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#f8fafc",
+    padding: 24,
+    gap: 12,
+  },
+  eyebrow: {
+    color: "#2563eb",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1,
+  },
+  title: {
+    fontSize: 30,
+    fontWeight: "800",
+    color: "#0f172a",
+  },
+  description: {
+    color: "#475569",
+    lineHeight: 22,
+  },
+  heroCard: {
+    backgroundColor: "#0f172a",
+    borderRadius: 24,
+    padding: 22,
+    gap: 8,
+  },
+  heroTitle: {
+    color: "#f8fafc",
+    fontSize: 20,
+    fontWeight: "800",
+  },
+  heroText: {
+    color: "#cbd5e1",
+    lineHeight: 20,
+  },
+  card: {
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    padding: 20,
+    gap: 10,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0f172a",
+  },
+  metricsGrid: {
+    gap: 12,
+  },
+  metricCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 18,
+    padding: 18,
+    gap: 6,
+  },
+  metricLabel: {
+    color: "#475569",
+    fontWeight: "700",
+  },
+  metricValue: {
+    color: "#0f172a",
+    fontSize: 28,
+    fontWeight: "800",
+  },
+  levelCard: {
+    borderWidth: 1,
+    borderColor: "#dbeafe",
+    borderRadius: 16,
+    padding: 14,
+    gap: 6,
+    backgroundColor: "#f8fbff",
+  },
+  levelTitle: {
+    color: "#0f172a",
+    fontWeight: "800",
+  },
+  levelBadge: {
+    color: "#2563eb",
+    fontWeight: "800",
+  },
+  row: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  rowBetween: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  primaryButton: {
+    backgroundColor: "#2563eb",
+    borderRadius: 999,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: "center",
+  },
+  primaryButtonText: {
+    color: "#ffffff",
+    fontWeight: "800",
+  },
+  secondaryButton: {
+    backgroundColor: "#e2e8f0",
+    borderRadius: 999,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: "center",
+  },
+  secondaryButtonText: {
+    color: "#0f172a",
+    fontWeight: "800",
+  },
+  smallPrimaryButton: {
+    backgroundColor: "#2563eb",
+    borderRadius: 999,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    alignItems: "center",
+  },
+  smallPrimaryButtonText: {
+    color: "#ffffff",
+    fontWeight: "800",
+  },
+  smallSecondaryButton: {
+    backgroundColor: "#e2e8f0",
+    borderRadius: 999,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    alignItems: "center",
+  },
+  smallSecondaryButtonText: {
+    color: "#0f172a",
+    fontWeight: "800",
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  filterChip: {
+    backgroundColor: "#e2e8f0",
+    borderRadius: 999,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  filterChipActive: {
+    backgroundColor: "#dbeafe",
+  },
+  filterChipText: {
+    color: "#334155",
+    fontWeight: "700",
+  },
+  filterChipTextActive: {
+    color: "#1d4ed8",
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  assetCard: {
+    borderWidth: 1,
+    borderColor: "#dbeafe",
+    borderRadius: 18,
+    padding: 14,
+    gap: 6,
+    backgroundColor: "#f8fbff",
+  },
+  assetTitle: {
+    color: "#0f172a",
+    fontWeight: "800",
+    flex: 1,
+  },
+  assetBody: {
+    color: "#334155",
+    lineHeight: 21,
+  },
+  detailBlock: {
+    gap: 4,
+  },
+  detailLabel: {
+    color: "#475569",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  exampleCard: {
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 14,
+    padding: 12,
+    gap: 4,
+    backgroundColor: "#ffffff",
+  },
+  assetTag: {
+    color: "#1d4ed8",
+    fontWeight: "800",
+  },
+  statusBadge: {
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  statusBadgeText: {
+    fontWeight: "800",
+    fontSize: 12,
+  },
+  infoPill: {
+    backgroundColor: "#e2e8f0",
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    color: "#334155",
+    fontWeight: "700",
+    overflow: "hidden",
+  },
+  relatedSection: {
+    gap: 8,
+  },
+  relatedExpressionCard: {
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 14,
+    padding: 12,
+    gap: 6,
+    backgroundColor: "#ffffff",
+  },
+  relatedExpressionKo: {
+    color: "#475569",
+    lineHeight: 20,
+  },
+  relatedExpressionEn: {
+    color: "#0f172a",
+    fontWeight: "700",
+    lineHeight: 21,
+  },
+  metaText: {
+    color: "#64748b",
+    lineHeight: 20,
+  },
+  error: {
+    color: "#dc2626",
+    lineHeight: 20,
+  },
+});

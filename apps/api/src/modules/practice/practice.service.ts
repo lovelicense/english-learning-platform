@@ -200,6 +200,10 @@ export class PracticeService {
     promptKorean?: string,
     promptContext?: string,
     promptTarget?: string,
+    promptTargetAlt?: string,
+    promptReferenceTarget?: string,
+    promptPatternLabel?: string,
+    promptPatternDescription?: string,
     promptReadyAtMs?: number,
     responseStartedAtMs?: number,
   ) {
@@ -232,6 +236,12 @@ export class PracticeService {
     if (!expression) throw new NotFoundException('표현을 찾을 수 없습니다.');
 
     const scoringTarget = promptTarget?.trim() || expression.englishBase;
+    const scoringTargetAlt = promptTargetAlt?.trim() || undefined;
+    const referenceTarget = promptReferenceTarget?.trim() || undefined;
+    const patternNote =
+      testType === 'pattern'
+        ? [promptPatternLabel?.trim(), promptPatternDescription?.trim()].filter(Boolean).join('\n') || undefined
+        : undefined;
 
     const evaluation = await this.openai.evaluatePracticeAnswer({
       koreanPrompt: promptKorean?.trim() || expression.koreanText,
@@ -247,9 +257,10 @@ export class PracticeService {
       userAnswer: answer.trim(),
       mode: 'text',
       testType,
-      note: expression.note ?? undefined,
-      easyAnswer: expression.englishEasy,
-      naturalAnswer: expression.englishNatural,
+      note: testType === 'pattern' ? patternNote : expression.note ?? undefined,
+      easyAnswer: testType === 'pattern' ? scoringTargetAlt : expression.englishEasy,
+      naturalAnswer: testType === 'pattern' ? scoringTargetAlt ?? scoringTarget : expression.englishNatural,
+      referenceEnglish: testType === 'pattern' ? referenceTarget : undefined,
     });
     const log = await this.createPracticeLogWithFallback({
       userId,
@@ -304,6 +315,10 @@ export class PracticeService {
     promptKorean?: string,
     promptContext?: string,
     promptTarget?: string,
+    promptTargetAlt?: string,
+    promptReferenceTarget?: string,
+    promptPatternLabel?: string,
+    promptPatternDescription?: string,
     promptReadyAtMs?: number,
     responseStartedAtMs?: number,
   ) {
@@ -342,6 +357,12 @@ export class PracticeService {
       `[Practice STT] expression_id=${expressionId} user_id=${userId} file=${fileName} recognized_answer=${JSON.stringify(answer.slice(0, 200))}`,
     );
     const scoringTarget = promptTarget?.trim() || expression.englishBase;
+    const scoringTargetAlt = promptTargetAlt?.trim() || undefined;
+    const referenceTarget = promptReferenceTarget?.trim() || undefined;
+    const patternNote =
+      testType === 'pattern'
+        ? [promptPatternLabel?.trim(), promptPatternDescription?.trim()].filter(Boolean).join('\n') || undefined
+        : undefined;
 
     if (!answer) {
       const feedback = '음성에서 영어 답변을 인식하지 못해 무응답으로 0점 처리했습니다.';
@@ -349,7 +370,10 @@ export class PracticeService {
       const strengthComment = '이번 답변에서는 인식된 영어 발화가 없어 평가할 내용을 찾지 못했습니다.';
       const correctionComment = '정답 기준 문장을 한 번 들은 뒤, 더 또렷하게 짧게 말해보세요.';
       const meaningComment = '핵심 의미를 전달한 영어 답변이 인식되지 않았습니다.';
-      const suggestedAnswerAlt = expression.englishNatural ?? expression.englishEasy ?? expression.englishBase;
+      const suggestedAnswerAlt =
+        testType === 'pattern'
+          ? scoringTargetAlt ?? scoringTarget
+          : expression.englishNatural ?? expression.englishEasy ?? expression.englishBase;
 
       const log = await this.createPracticeLogWithFallback({
         userId,
@@ -411,9 +435,10 @@ export class PracticeService {
       userAnswer: answer,
       mode: 'voice',
       testType,
-      note: expression.note ?? undefined,
-      easyAnswer: expression.englishEasy,
-      naturalAnswer: expression.englishNatural,
+      note: testType === 'pattern' ? patternNote : expression.note ?? undefined,
+      easyAnswer: testType === 'pattern' ? scoringTargetAlt : expression.englishEasy,
+      naturalAnswer: testType === 'pattern' ? scoringTargetAlt ?? scoringTarget : expression.englishNatural,
+      referenceEnglish: testType === 'pattern' ? referenceTarget : undefined,
     });
     const log = await this.createPracticeLogWithFallback({
       userId,

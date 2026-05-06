@@ -2,9 +2,13 @@ import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";
 import * as Speech from "expo-speech";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useFocusEffect } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { listExpressions, type ExpressionResponse } from "../../src/lib/api/expressions";
+import {
+  listExpressions,
+  savePracticeExpression,
+  type ExpressionResponse,
+} from "../../src/lib/api/expressions";
 import {
   createPracticeVoicePresign,
   generatePracticePrompt,
@@ -30,6 +34,11 @@ type RecordedClip = {
   durationMs: number;
   fileName: string;
   contentType?: string | null;
+};
+type SavedPatternExpressionState = {
+  id: string;
+  hasEnglishTts: boolean;
+  hasKoreanTts: boolean;
 };
 
 export default function ReviewsScreen() {
@@ -58,6 +67,8 @@ export default function ReviewsScreen() {
   const [voiceUploadPercent, setVoiceUploadPercent] = useState(0);
   const [reviewSessionCompleted, setReviewSessionCompleted] = useState(false);
   const [learningPreferences, setLearningPreferences] = useState<LearningPreferences>(DEFAULT_LEARNING_PREFERENCES);
+  const [savingPatternExpression, setSavingPatternExpression] = useState(false);
+  const [savedPatternExpression, setSavedPatternExpression] = useState<SavedPatternExpressionState | null>(null);
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const scrollViewRef = useRef<ScrollView | null>(null);
@@ -81,6 +92,7 @@ export default function ReviewsScreen() {
     const currentIndex = reviews.findIndex((item) => item.id === selectedReviewId);
     return currentIndex >= 0 ? reviews[currentIndex + 1] ?? null : reviews[0] ?? null;
   }, [reviews, selectedReviewId]);
+  const isPatternPrompt = prompt?.testType === "pattern";
   const clipDurationLabel = useMemo(
     () => formatDurationMs(isRecording ? recordingElapsedMs : recordedClip?.durationMs),
     [isRecording, recordingElapsedMs, recordedClip?.durationMs],
@@ -149,6 +161,7 @@ export default function ReviewsScreen() {
     setRecordingElapsedMs(0);
     setVoiceUploadPercent(0);
     setAnswerMode(learningPreferences.defaultAnswerMode);
+    setSavedPatternExpression(null);
   }, [selectedReviewId, learningPreferences.defaultAnswerMode]);
 
   async function loadLearningPreferences() {
@@ -177,6 +190,7 @@ export default function ReviewsScreen() {
     setMessage("");
     setScore(null);
     setReviewSessionCompleted(false);
+    setSavedPatternExpression(null);
 
     try {
       const created = await generatePracticePrompt(review.id, nextType);
@@ -231,6 +245,10 @@ export default function ReviewsScreen() {
         promptKorean: prompt.promptKorean,
         promptContext: prompt.promptContext,
         promptTarget: prompt.target,
+        promptTargetAlt: prompt.targetAlt,
+        promptReferenceTarget: prompt.referenceTarget,
+        promptPatternLabel: prompt.patternLabel,
+        promptPatternDescription: prompt.patternDescription,
       });
       const autoPlayed = await applyScoredResult(result);
       setMessage(autoPlayed ? "텍스트 채점이 완료되어 정답 TTS를 자동 재생합니다. 확인 후 다음 문제로 이동해 주세요." : "텍스트 채점이 완료되었습니다. 확인 후 다음 문제로 이동해 주세요.");
@@ -267,6 +285,10 @@ export default function ReviewsScreen() {
         promptKorean: prompt.promptKorean,
         promptContext: prompt.promptContext,
         promptTarget: prompt.target,
+        promptTargetAlt: prompt.targetAlt,
+        promptReferenceTarget: prompt.referenceTarget,
+        promptPatternLabel: prompt.patternLabel,
+        promptPatternDescription: prompt.patternDescription,
       });
       const autoPlayed = await applyScoredResult(result);
       setMessage(autoPlayed ? "음성 답변 채점이 완료되어 정답 TTS를 자동 재생합니다. 확인 후 다음 문제로 이동해 주세요." : "음성 답변 채점이 완료되었습니다. 확인 후 다음 문제로 이동해 주세요.");
@@ -284,6 +306,77 @@ export default function ReviewsScreen() {
     }
 
     await scoreVoiceAnswerFromClip(recordedClip);
+  }
+
+  async function handleSavePatternExpression() {
+    if (!prompt || prompt.testType !== "pattern") {
+      setError("패턴형 문제 결과만 표현 자산으로 저장할 수 있습니다.");
+      return;
+    }
+    if (savedPatternExpression) {
+      setMessage("이 패턴형 문제 결과는 이미 표현 자산으로 저장했습니다.");
+      return;
+    }
+
+    const koreanText = prompt.promptKorean?.trim();
+    const englishBase = score?.suggestedAnswer?.trim() || prompt.target?.trim();
+    const englishNatural = score?.suggestedAnswerAlt?.trim() || prompt.targetAlt?.trim() || englishBase;
+
+    if (!koreanText || !englishBase) {
+      setError("저장할 문제 문장 또는 영어 표현이 없습니다.");
+      return;
+    }
+
+    const noteParts = [
+      prompt.patternLabel ? `패턴: ${prompt.patternLabel}` : null,
+      prompt.patternDescription ?? null,
+      prompt.referenceTarget ? `원래 대표 표현: ${prompt.referenceTarget}` : null,
+    ].filter(Boolean);
+
+    setSavingPatternExpression(true);
+    setError("");
+    setMessage("");
+    try {
+      const created = await savePracticeExpression({
+        koreanText,
+        englishBase,
+        englishEasy: prompt.target,
+        englishNatural,
+        promptContext: prompt.promptContext,
+        note: noteParts.join("\n"),
+      });
+      setSavedPatternExpression({
+        id: created.id,
+        hasEnglishTts: Boolean(created.ttsUrl),
+        hasKoreanTts: Boolean(created.koreanTtsUrl),
+      });
+      setMessage(
+        created.ttsUrl || created.koreanTtsUrl
+          ? "패턴형 문제를 새 표현 자산으로 저장했고, TTS도 함께 준비했습니다."
+          : "패턴형 문제를 새 표현 자산으로 저장했습니다.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "패턴형 표현 저장에 실패했습니다.");
+    } finally {
+      setSavingPatternExpression(false);
+    }
+  }
+
+  async function handleResumeHistoryReview(log: PracticeHistoryResponse) {
+    const matchedReview = reviewsRef.current.find((item) => item.id === log.expressionId) ?? null;
+    if (!matchedReview) {
+      setMessage("이 표현은 오늘 복습 목록에 없어 표현 상세나 표현 연습으로 이어가는 것이 좋습니다.");
+      return;
+    }
+
+    setError("");
+    setMessage("최근 기록을 현재 복습 카드로 다시 불러왔습니다.");
+    setSelectedReviewId(matchedReview.id);
+    setSelectedTestType(log.testType);
+    setReviewSessionCompleted(false);
+    scrollToPracticeSection(true);
+    await generatePromptForReview(matchedReview, log.testType);
+    scrollToPracticeSection(true);
   }
 
   async function applyScoredResult(result: PracticeScoreResponse) {
@@ -704,7 +797,7 @@ export default function ReviewsScreen() {
             <Text style={styles.reviewKorean}>{selectedReview.korean}</Text>
             <Text style={styles.metaText}>정답 기준: {selectedReview.english}</Text>
             <View style={styles.row}>
-              {(["translation", "situation", "think"] as const).map((type) => (
+              {(["translation", "situation", "pattern", "think"] as const).map((type) => (
                 <Pressable key={type} style={[styles.chip, selectedTestType === type && styles.chipSelected]} onPress={() => setSelectedTestType(type)}>
                   <Text style={[styles.chipText, selectedTestType === type && styles.chipTextSelected]}>{formatTestType(type)}</Text>
                 </Pressable>
@@ -731,9 +824,18 @@ export default function ReviewsScreen() {
               <View style={styles.promptCard}>
                 <Text style={styles.promptTitle}>{prompt.promptKorean}</Text>
                 {prompt.promptContext ? <Text style={styles.metaText}>{prompt.promptContext}</Text> : null}
+                {isPatternPrompt ? (
+                  <View style={styles.patternInfoCard}>
+                    <Text style={styles.patternInfoTitle}>패턴형 문제</Text>
+                    {prompt.patternLabel ? <Text style={styles.metaText}>패턴 이름: {prompt.patternLabel}</Text> : null}
+                    {prompt.patternDescription ? <Text style={styles.metaText}>{prompt.patternDescription}</Text> : null}
+                    <Text style={styles.metaText}>같은 구조를 유지하면서 문맥에 맞는 영어 답을 만들어 보세요.</Text>
+                  </View>
+                ) : null}
                 {prompt.tips ? <Text style={styles.metaText}>힌트: {prompt.tips}</Text> : null}
-                {prompt.patternLabel ? <Text style={styles.metaText}>패턴: {prompt.patternLabel}</Text> : null}
-                {prompt.patternDescription ? <Text style={styles.metaText}>{prompt.patternDescription}</Text> : null}
+                {prompt.testType === "think" ? (
+                  <Text style={styles.metaText}>아래 설명을 읽고 어떤 영어 문장인지 스스로 떠올린 뒤 답해보세요.</Text>
+                ) : null}
               </View>
             ) : (
               <Text style={styles.metaText}>먼저 문제 생성을 눌러 주세요.</Text>
@@ -865,6 +967,16 @@ export default function ReviewsScreen() {
                   </View>
                 ) : null}
                 <View style={styles.answerBlock}>
+                  <Text style={styles.feedbackLabel}>{isPatternPrompt ? "이번 문제 정답" : "정답 기준"}</Text>
+                  <Text style={styles.answerText}>{score.target}</Text>
+                </View>
+                {isPatternPrompt && prompt?.referenceTarget ? (
+                  <View style={styles.answerBlockAlt}>
+                    <Text style={styles.feedbackLabel}>원래 대표 표현</Text>
+                    <Text style={styles.answerText}>{prompt.referenceTarget}</Text>
+                  </View>
+                ) : null}
+                <View style={styles.answerBlock}>
                   <Text style={styles.feedbackLabel}>추천 답변</Text>
                   <Text style={styles.answerText}>{score.suggestedAnswer}</Text>
                 </View>
@@ -878,6 +990,47 @@ export default function ReviewsScreen() {
                   <Pressable style={styles.secondaryButton} onPress={() => void handlePlayAudio("scored-answer", score.audioUrl!)}>
                     <Text style={styles.secondaryButtonText}>{playingKey === "scored-answer" ? "채점 음성 정지" : "채점된 음성 다시 듣기"}</Text>
                   </Pressable>
+                ) : null}
+                {isPatternPrompt ? (
+                  <View style={styles.patternSaveCard}>
+                    <Text style={styles.patternSaveTitle}>표현 자산 저장</Text>
+                    <Text style={styles.metaText}>이번 패턴형 복습 문제를 새 표현으로 저장해 이후 표현 목록과 연습 흐름으로 바로 이어갈 수 있습니다.</Text>
+                    {savedPatternExpression ? (
+                      <View style={styles.successBox}>
+                        <Text style={styles.successBoxTitle}>표현 자산 저장 완료</Text>
+                        <Text style={styles.successBoxText}>
+                          {savedPatternExpression.hasEnglishTts || savedPatternExpression.hasKoreanTts
+                            ? `TTS 준비됨${
+                                savedPatternExpression.hasEnglishTts && savedPatternExpression.hasKoreanTts
+                                  ? " (영어/한국어)"
+                                  : savedPatternExpression.hasEnglishTts
+                                    ? " (영어)"
+                                    : " (한국어)"
+                              }`
+                            : "필요하면 나중에 TTS를 생성할 수 있습니다."}
+                        </Text>
+                      </View>
+                    ) : null}
+                    <View style={styles.row}>
+                      <Pressable
+                        style={[styles.secondaryButton, (savingPatternExpression || !!savedPatternExpression) && styles.buttonDisabled]}
+                        onPress={() => void handleSavePatternExpression()}
+                        disabled={savingPatternExpression || !!savedPatternExpression}
+                      >
+                        {savingPatternExpression ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>{savedPatternExpression ? "표현 자산 저장 완료" : "표현 자산으로 저장"}</Text>}
+                      </Pressable>
+                      {savedPatternExpression ? (
+                        <Pressable style={styles.primaryButton} onPress={() => router.push(`/expression/${savedPatternExpression.id}`)}>
+                          <Text style={styles.primaryButtonText}>새 표현 보기</Text>
+                        </Pressable>
+                      ) : null}
+                      {savedPatternExpression ? (
+                        <Pressable style={styles.secondaryButton} onPress={() => router.push("/expressions")}>
+                          <Text style={styles.secondaryButtonText}>표현 목록 보기</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  </View>
                 ) : null}
                 <Pressable
                   style={styles.primaryButton}
@@ -897,13 +1050,72 @@ export default function ReviewsScreen() {
         <Text style={styles.cardTitle}>최근 연습 기록</Text>
         {practiceLogs.length > 0 ? (
           practiceLogs.slice(0, 10).map((log) => (
-            <View key={log.id} style={styles.historyRow}>
-              <Text style={styles.historyTitle}>{log.koreanText}</Text>
-              <Text style={styles.metaText}>
-                {formatTestType(log.testType)} · {log.mode} · 점수 {log.score}
+            <View key={log.id} style={styles.historyCard}>
+              <View style={styles.historyHeader}>
+                <View style={styles.historyHeaderText}>
+                  <Text style={styles.historyTitle}>{log.promptKorean?.trim() || log.koreanText}</Text>
+                  <Text style={styles.metaText}>
+                    {formatTestType(log.testType)} · {formatPracticeMode(log.mode)} · 점수 {log.score} · {formatHistoryTimestamp(log.createdAt)}
+                  </Text>
+                </View>
+                <View style={styles.historyScoreChip}>
+                  <Text style={styles.historyScoreLabel}>Score</Text>
+                  <Text style={styles.historyScoreValue}>{log.score}</Text>
+                </View>
+              </View>
+              {log.promptContext ? <Text style={styles.metaText}>{log.promptContext}</Text> : null}
+              <View style={styles.feedbackBlock}>
+                <Text style={styles.feedbackLabel}>내 답변</Text>
+                <Text style={styles.feedbackText}>{log.answer || "(비어 있음)"}</Text>
+              </View>
+              {log.recognizedAnswer ? (
+                <View style={styles.feedbackBlock}>
+                  <Text style={styles.feedbackLabel}>STT 인식</Text>
+                  <Text style={styles.feedbackText}>{log.recognizedAnswer}</Text>
+                </View>
+              ) : null}
+              <View style={styles.answerBlock}>
+                <Text style={styles.feedbackLabel}>{log.testType === "pattern" ? "이번 문제 정답" : "정답 기준"}</Text>
+                <Text style={styles.answerText}>{log.target || log.englishBase}</Text>
+              </View>
+              {log.suggestedAnswer ? (
+                <View style={styles.answerBlockAlt}>
+                  <Text style={styles.feedbackLabel}>추천 답변</Text>
+                  <Text style={styles.answerText}>{log.suggestedAnswer}</Text>
+                </View>
+              ) : null}
+              {log.feedback ? (
+                <View style={styles.feedbackBlock}>
+                  <Text style={styles.feedbackLabel}>총평</Text>
+                  <Text style={styles.feedbackText}>{log.feedback}</Text>
+                </View>
+              ) : null}
+              {log.correctionComment ? (
+                <View style={styles.feedbackBlock}>
+                  <Text style={styles.feedbackLabel}>교정 포인트</Text>
+                  <Text style={styles.feedbackText}>{log.correctionComment}</Text>
+                </View>
+              ) : null}
+              <Text style={styles.historyHint}>
+                {reviews.some((item) => item.id === log.expressionId)
+                  ? "오늘 복습 카드에도 남아 있어 지금 다시 이어서 풀 수 있습니다."
+                  : "오늘 복습 목록에는 없지만, 표현 상세나 표현 연습으로 다시 이어갈 수 있습니다."}
               </Text>
-              <Text style={styles.metaText}>내 답: {log.answer || "(비어 있음)"}</Text>
-              {log.recognizedAnswer ? <Text style={styles.metaText}>STT: {log.recognizedAnswer}</Text> : null}
+              <View style={styles.row}>
+                <Pressable style={styles.primaryButton} onPress={() => router.push(`/expression/${log.expressionId}`)}>
+                  <Text style={styles.primaryButtonText}>표현 상세</Text>
+                </Pressable>
+                <Pressable style={styles.secondaryButton} onPress={() => router.push(`/expression/${log.expressionId}/practice`)}>
+                  <Text style={styles.secondaryButtonText}>표현 연습</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.secondaryButton, !reviews.some((item) => item.id === log.expressionId) && styles.buttonDisabled]}
+                  onPress={() => void handleResumeHistoryReview(log)}
+                  disabled={!reviews.some((item) => item.id === log.expressionId)}
+                >
+                  <Text style={styles.secondaryButtonText}>오늘 복습에 불러오기</Text>
+                </Pressable>
+              </View>
             </View>
           ))
         ) : (
@@ -919,6 +1131,21 @@ function formatTestType(value: PracticeTestType | "translation" | "situation" | 
   if (value === "situation") return "상황형";
   if (value === "think") return "Think in English";
   return "패턴형";
+}
+
+function formatPracticeMode(value: "text" | "voice") {
+  return value === "voice" ? "음성 답변" : "텍스트 답변";
+}
+
+function formatHistoryTimestamp(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  const hours = `${date.getHours()}`.padStart(2, "0");
+  const minutes = `${date.getMinutes()}`.padStart(2, "0");
+  return `${month}.${day} ${hours}:${minutes}`;
 }
 
 function getDurationFromStatus(status: Awaited<ReturnType<Audio.Recording["getStatusAsync"]>>, startedAt: number | null) {
@@ -1187,6 +1414,19 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     lineHeight: 22,
   },
+  patternInfoCard: {
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    borderRadius: 14,
+    padding: 12,
+    gap: 4,
+    backgroundColor: "#eff6ff",
+  },
+  patternInfoTitle: {
+    color: "#1d4ed8",
+    fontSize: 12,
+    fontWeight: "800",
+  },
   answerInput: {
     borderWidth: 1,
     borderColor: "#cbd5e1",
@@ -1299,20 +1539,65 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 12,
   },
+  patternSaveCard: {
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+    backgroundColor: "#f8faff",
+    borderRadius: 16,
+    padding: 12,
+    gap: 8,
+  },
+  patternSaveTitle: {
+    color: "#312e81",
+    fontWeight: "800",
+  },
   answerText: {
     color: "#0f172a",
     lineHeight: 22,
     fontWeight: "700",
   },
-  historyRow: {
+  historyCard: {
     borderTopWidth: 1,
     borderTopColor: "#e2e8f0",
-    paddingTop: 12,
+    paddingTop: 14,
+    gap: 8,
+  },
+  historyHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  historyHeaderText: {
+    flex: 1,
     gap: 4,
   },
   historyTitle: {
     color: "#0f172a",
     fontWeight: "700",
+    lineHeight: 21,
+  },
+  historyScoreChip: {
+    minWidth: 70,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: "#eff6ff",
+    gap: 2,
+    alignItems: "center",
+  },
+  historyScoreLabel: {
+    color: "#2563eb",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  historyScoreValue: {
+    color: "#0f172a",
+    fontWeight: "800",
+  },
+  historyHint: {
+    color: "#475569",
+    lineHeight: 20,
   },
   metaText: {
     color: "#64748b",
@@ -1324,6 +1609,22 @@ const styles = StyleSheet.create({
   },
   error: {
     color: "#dc2626",
+    lineHeight: 20,
+  },
+  successBox: {
+    borderWidth: 1,
+    borderColor: "#86efac",
+    backgroundColor: "#f0fdf4",
+    borderRadius: 14,
+    padding: 12,
+    gap: 4,
+  },
+  successBoxTitle: {
+    color: "#166534",
+    fontWeight: "800",
+  },
+  successBoxText: {
+    color: "#166534",
     lineHeight: 20,
   },
   partTitle: {

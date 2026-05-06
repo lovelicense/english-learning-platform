@@ -1,9 +1,14 @@
 import { Audio } from "expo-av";
 import * as Speech from "expo-speech";
-import { useFocusEffect, useLocalSearchParams } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { listDialoguePracticeSets, transcribeAiConversationAudio, type DialoguePracticeSetResponse } from "../../src/lib/api/ai-conversations";
+import {
+  listDialoguePracticeSets,
+  transcribeAiConversationAudio,
+  updateDialoguePracticeSetTitle,
+  type DialoguePracticeSetResponse,
+} from "../../src/lib/api/ai-conversations";
 
 type PracticeAnswerMode = "voice" | "text";
 type RecordedClip = {
@@ -14,14 +19,17 @@ type RecordedClip = {
 };
 
 export default function DialoguePracticeScreen() {
+  const router = useRouter();
   const params = useLocalSearchParams<{ id?: string }>();
   const practiceSetId = typeof params.id === "string" ? params.id : "";
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
   const [playingKey, setPlayingKey] = useState<string | null>(null);
   const [practiceSet, setPracticeSet] = useState<DialoguePracticeSetResponse | null>(null);
+  const [titleDraft, setTitleDraft] = useState("");
   const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
   const [started, setStarted] = useState(false);
   const [showAiPrompt, setShowAiPrompt] = useState(true);
@@ -66,6 +74,7 @@ export default function DialoguePracticeScreen() {
         throw new Error("다이얼로그 연습 세트를 찾을 수 없습니다.");
       }
       setPracticeSet(found);
+      setTitleDraft(found.title);
       setCurrentTurnIndex(0);
       setStarted(false);
       setRevealAnswer(false);
@@ -117,6 +126,28 @@ export default function DialoguePracticeScreen() {
       <Text style={styles.eyebrow}>Dialogue Practice</Text>
       <Text style={styles.title}>{practiceSet.title}</Text>
       <Text style={styles.description}>영어 AI 대화에서 저장한 세트를 turn 순서대로 다시 말해보는 모바일 연습 화면입니다.</Text>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>세트 제목</Text>
+        <TextInput
+          style={styles.textInput}
+          value={titleDraft}
+          onChangeText={setTitleDraft}
+          placeholder="다이얼로그 제목"
+        />
+        <View style={styles.inlineRow}>
+          <Pressable
+            style={[styles.secondaryButton, (!titleDraft.trim() || savingTitle || titleDraft.trim() === practiceSet.title.trim()) && styles.buttonDisabled]}
+            onPress={() => void handleSaveTitle()}
+            disabled={!titleDraft.trim() || savingTitle || titleDraft.trim() === practiceSet.title.trim()}
+          >
+            {savingTitle ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>제목 저장</Text>}
+          </Pressable>
+          <Pressable style={styles.secondaryButton} onPress={() => router.push("/dialogue-practice")}>
+            <Text style={styles.secondaryButtonText}>전체 세트 보기</Text>
+          </Pressable>
+        </View>
+      </View>
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>연습 세트 정보</Text>
@@ -498,6 +529,27 @@ export default function DialoguePracticeScreen() {
     }
   }
 
+  async function handleSaveTitle() {
+    if (!practiceSet || !titleDraft.trim()) {
+      setError("저장할 제목을 입력해 주세요.");
+      return;
+    }
+
+    setSavingTitle(true);
+    setError("");
+    setMessage("");
+    try {
+      const updated = await updateDialoguePracticeSetTitle(practiceSet.id, titleDraft.trim());
+      setPracticeSet(updated);
+      setTitleDraft(updated.title);
+      setMessage("다이얼로그 제목을 저장했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "다이얼로그 제목 저장에 실패했습니다.");
+    } finally {
+      setSavingTitle(false);
+    }
+  }
+
   async function ensureRecordingPermission() {
     const current = await Audio.getPermissionsAsync();
     if (current.granted) {
@@ -579,6 +631,15 @@ const styles = StyleSheet.create({
   cardText: {
     color: "#334155",
     lineHeight: 20,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: "#f8fafc",
+    color: "#0f172a",
   },
   helperText: {
     color: "#64748b",

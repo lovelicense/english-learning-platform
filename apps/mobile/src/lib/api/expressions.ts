@@ -51,6 +51,15 @@ export type BulkTtsResponse = {
   expressions: ExpressionTtsResponse[];
 };
 
+export type SavePracticeExpressionInput = {
+  koreanText: string;
+  englishBase: string;
+  englishEasy?: string;
+  englishNatural?: string;
+  promptContext?: string;
+  note?: string;
+};
+
 export async function listExpressions() {
   return apiFetch<ExpressionResponse[]>("/expressions");
 }
@@ -123,5 +132,12 @@ export async function updateExpressionMemo(expressionId: string, userMemo?: stri
     body: JSON.stringify({
       userMemo,
     }),
+  });
+}
+
+export async function savePracticeExpression(input: SavePracticeExpressionInput) {
+  return apiFetch<ExpressionResponse>("/expressions/save-practice", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }

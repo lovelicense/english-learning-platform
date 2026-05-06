@@ -4,7 +4,11 @@ import * as Speech from "expo-speech";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { listExpressions, type ExpressionResponse } from "../../../src/lib/api/expressions";
+import {
+  listExpressions,
+  savePracticeExpression,
+  type ExpressionResponse,
+} from "../../../src/lib/api/expressions";
 import {
   createPracticeVoicePresign,
   generatePracticePrompt,
@@ -26,6 +30,11 @@ type RecordedClip = {
   durationMs: number;
   fileName: string;
   contentType?: string | null;
+};
+type SavedPatternExpressionState = {
+  id: string;
+  hasEnglishTts: boolean;
+  hasKoreanTts: boolean;
 };
 
 export default function ExpressionPracticeScreen() {
@@ -54,6 +63,8 @@ export default function ExpressionPracticeScreen() {
   const [recordedClip, setRecordedClip] = useState<RecordedClip | null>(null);
   const [voiceUploadPercent, setVoiceUploadPercent] = useState(0);
   const [learningPreferences, setLearningPreferences] = useState<LearningPreferences>(DEFAULT_LEARNING_PREFERENCES);
+  const [savingPatternExpression, setSavingPatternExpression] = useState(false);
+  const [savedPatternExpression, setSavedPatternExpression] = useState<SavedPatternExpressionState | null>(null);
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const activeRecordingRef = useRef<Audio.Recording | null>(null);
@@ -77,6 +88,7 @@ export default function ExpressionPracticeScreen() {
     () => (currentExpressionIndex >= 0 ? expressions[currentExpressionIndex + 1] ?? null : null),
     [currentExpressionIndex, expressions],
   );
+  const isPatternPrompt = prompt?.testType === "pattern";
 
   const loadExpression = useCallback(async (showRefreshing = false) => {
     if (!expressionId) {
@@ -140,6 +152,7 @@ export default function ExpressionPracticeScreen() {
     setPlayingKey(null);
     setSelectedTestType("translation");
     setAnswerMode(learningPreferences.defaultAnswerMode);
+    setSavedPatternExpression(null);
   }, [expressionId, learningPreferences.defaultAnswerMode]);
 
   async function loadLearningPreferences() {
@@ -156,6 +169,7 @@ export default function ExpressionPracticeScreen() {
     setError("");
     setMessage("");
     setScore(null);
+    setSavedPatternExpression(null);
 
     try {
       const created = await generatePracticePrompt(expression.id, nextType);
@@ -205,6 +219,10 @@ export default function ExpressionPracticeScreen() {
         promptKorean: prompt.promptKorean,
         promptContext: prompt.promptContext,
         promptTarget: prompt.target,
+        promptTargetAlt: prompt.targetAlt,
+        promptReferenceTarget: prompt.referenceTarget,
+        promptPatternLabel: prompt.patternLabel,
+        promptPatternDescription: prompt.patternDescription,
       });
       const autoPlayed = await applyScoredResult(result);
       setMessage(autoPlayed ? "텍스트 채점이 완료되어 정답 TTS를 자동 재생합니다." : "텍스트 채점이 완료되었습니다.");
@@ -242,6 +260,10 @@ export default function ExpressionPracticeScreen() {
         promptKorean: prompt.promptKorean,
         promptContext: prompt.promptContext,
         promptTarget: prompt.target,
+        promptTargetAlt: prompt.targetAlt,
+        promptReferenceTarget: prompt.referenceTarget,
+        promptPatternLabel: prompt.patternLabel,
+        promptPatternDescription: prompt.patternDescription,
       });
       const autoPlayed = await applyScoredResult(result);
       setMessage(autoPlayed ? "음성 답변 채점이 완료되어 정답 TTS를 자동 재생합니다." : "음성 답변 채점이 완료되었습니다.");
@@ -259,6 +281,60 @@ export default function ExpressionPracticeScreen() {
     }
 
     await scoreVoiceAnswerFromClip(recordedClip);
+  }
+
+  async function handleSavePatternExpression() {
+    if (!prompt || prompt.testType !== "pattern") {
+      setError("패턴형 문제 결과만 표현 자산으로 저장할 수 있습니다.");
+      return;
+    }
+    if (savedPatternExpression) {
+      setMessage("이 패턴형 문제 결과는 이미 표현 자산으로 저장했습니다.");
+      return;
+    }
+
+    const koreanText = prompt.promptKorean?.trim();
+    const englishBase = score?.suggestedAnswer?.trim() || prompt.target?.trim();
+    const englishNatural = score?.suggestedAnswerAlt?.trim() || prompt.targetAlt?.trim() || englishBase;
+
+    if (!koreanText || !englishBase) {
+      setError("저장할 문제 문장 또는 영어 표현이 없습니다.");
+      return;
+    }
+
+    const noteParts = [
+      prompt.patternLabel ? `패턴: ${prompt.patternLabel}` : null,
+      prompt.patternDescription ?? null,
+      prompt.referenceTarget ? `원래 대표 표현: ${prompt.referenceTarget}` : null,
+    ].filter(Boolean);
+
+    setSavingPatternExpression(true);
+    setError("");
+    setMessage("");
+    try {
+      const created = await savePracticeExpression({
+        koreanText,
+        englishBase,
+        englishEasy: prompt.target,
+        englishNatural,
+        promptContext: prompt.promptContext,
+        note: noteParts.join("\n"),
+      });
+      setSavedPatternExpression({
+        id: created.id,
+        hasEnglishTts: Boolean(created.ttsUrl),
+        hasKoreanTts: Boolean(created.koreanTtsUrl),
+      });
+      setMessage(
+        created.ttsUrl || created.koreanTtsUrl
+          ? "패턴형 문제를 새 표현 자산으로 저장했고, TTS도 함께 준비했습니다."
+          : "패턴형 문제를 새 표현 자산으로 저장했습니다.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "패턴형 표현 저장에 실패했습니다.");
+    } finally {
+      setSavingPatternExpression(false);
+    }
   }
 
   function handleMoveToExpression(targetId: string) {
@@ -595,7 +671,7 @@ export default function ExpressionPracticeScreen() {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>문제 생성</Text>
         <View style={styles.row}>
-          {(["translation", "situation", "think"] as const).map((type) => (
+          {(["translation", "situation", "pattern", "think"] as const).map((type) => (
             <Pressable
               key={type}
               style={[styles.chip, selectedTestType === type && styles.chipSelected]}
@@ -625,8 +701,18 @@ export default function ExpressionPracticeScreen() {
           <View style={styles.promptCard}>
             <Text style={styles.promptTitle}>{prompt.promptKorean}</Text>
             {prompt.promptContext ? <Text style={styles.metaText}>{prompt.promptContext}</Text> : null}
+            {isPatternPrompt ? (
+              <View style={styles.patternInfoCard}>
+                <Text style={styles.patternInfoTitle}>패턴형 문제</Text>
+                {prompt.patternLabel ? <Text style={styles.metaText}>패턴 이름: {prompt.patternLabel}</Text> : null}
+                {prompt.patternDescription ? <Text style={styles.metaText}>{prompt.patternDescription}</Text> : null}
+                <Text style={styles.metaText}>패턴 설명을 보고 같은 골격으로 영어 답을 만들어 보세요.</Text>
+              </View>
+            ) : null}
             {prompt.tips ? <Text style={styles.metaText}>힌트: {prompt.tips}</Text> : null}
-            {prompt.patternLabel ? <Text style={styles.metaText}>패턴: {prompt.patternLabel}</Text> : null}
+            {prompt.testType === "think" ? (
+              <Text style={styles.metaText}>아래 설명을 바탕으로 어떤 영어 문장을 떠올려야 하는지 생각해 보세요.</Text>
+            ) : null}
           </View>
         ) : (
           <Text style={styles.metaText}>먼저 연습 문제를 생성해 주세요.</Text>
@@ -756,6 +842,16 @@ export default function ExpressionPracticeScreen() {
             </View>
           ) : null}
           <View style={styles.answerBlock}>
+            <Text style={styles.feedbackLabel}>{isPatternPrompt ? "이번 문제 정답" : "정답 기준"}</Text>
+            <Text style={styles.answerText}>{score.target}</Text>
+          </View>
+          {isPatternPrompt && prompt?.referenceTarget ? (
+            <View style={styles.answerBlockAlt}>
+              <Text style={styles.feedbackLabel}>원래 대표 표현</Text>
+              <Text style={styles.answerText}>{prompt.referenceTarget}</Text>
+            </View>
+          ) : null}
+          <View style={styles.answerBlock}>
             <Text style={styles.feedbackLabel}>추천 답변</Text>
             <Text style={styles.answerText}>{score.suggestedAnswer}</Text>
           </View>
@@ -769,6 +865,47 @@ export default function ExpressionPracticeScreen() {
             <Pressable style={styles.secondaryButton} onPress={() => void handlePlayAudio("scored-answer", score.audioUrl!)}>
               <Text style={styles.secondaryButtonText}>{playingKey === "scored-answer" ? "채점 음성 정지" : "채점된 음성 다시 듣기"}</Text>
             </Pressable>
+          ) : null}
+          {isPatternPrompt ? (
+            <View style={styles.patternSaveCard}>
+              <Text style={styles.patternSaveTitle}>표현 자산 저장</Text>
+              <Text style={styles.metaText}>이번 패턴형 문제의 한국어 문장과 답안을 새 표현으로 저장해 이후 표현 학습에 바로 합류시킵니다.</Text>
+              {savedPatternExpression ? (
+                <View style={styles.successBox}>
+                  <Text style={styles.successBoxTitle}>표현 자산 저장 완료</Text>
+                  <Text style={styles.successBoxText}>
+                    {savedPatternExpression.hasEnglishTts || savedPatternExpression.hasKoreanTts
+                      ? `TTS 준비됨${
+                          savedPatternExpression.hasEnglishTts && savedPatternExpression.hasKoreanTts
+                            ? " (영어/한국어)"
+                            : savedPatternExpression.hasEnglishTts
+                              ? " (영어)"
+                              : " (한국어)"
+                        }`
+                      : "필요하면 나중에 TTS를 생성할 수 있습니다."}
+                  </Text>
+                </View>
+              ) : null}
+              <View style={styles.row}>
+                <Pressable
+                  style={[styles.secondaryButton, (savingPatternExpression || !!savedPatternExpression) && styles.buttonDisabled]}
+                  onPress={() => void handleSavePatternExpression()}
+                  disabled={savingPatternExpression || !!savedPatternExpression}
+                >
+                  {savingPatternExpression ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>{savedPatternExpression ? "표현 자산 저장 완료" : "표현 자산으로 저장"}</Text>}
+                </Pressable>
+                {savedPatternExpression ? (
+                  <Pressable style={styles.primaryButton} onPress={() => router.push(`/expression/${savedPatternExpression.id}`)}>
+                    <Text style={styles.primaryButtonText}>새 표현 보기</Text>
+                  </Pressable>
+                ) : null}
+                {savedPatternExpression ? (
+                  <Pressable style={styles.secondaryButton} onPress={() => router.push("/expressions")}>
+                    <Text style={styles.secondaryButtonText}>표현 목록 보기</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
           ) : null}
         </View>
       ) : null}
@@ -1041,6 +1178,19 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     lineHeight: 22,
   },
+  patternInfoCard: {
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    borderRadius: 14,
+    padding: 12,
+    gap: 4,
+    backgroundColor: "#eff6ff",
+  },
+  patternInfoTitle: {
+    color: "#1d4ed8",
+    fontSize: 12,
+    fontWeight: "800",
+  },
   answerInput: {
     borderWidth: 1,
     borderColor: "#cbd5e1",
@@ -1136,6 +1286,18 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 12,
   },
+  patternSaveCard: {
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+    backgroundColor: "#f8faff",
+    borderRadius: 16,
+    padding: 12,
+    gap: 8,
+  },
+  patternSaveTitle: {
+    color: "#312e81",
+    fontWeight: "800",
+  },
   answerText: {
     color: "#0f172a",
     lineHeight: 22,
@@ -1151,6 +1313,22 @@ const styles = StyleSheet.create({
   },
   error: {
     color: "#dc2626",
+    lineHeight: 20,
+  },
+  successBox: {
+    borderWidth: 1,
+    borderColor: "#86efac",
+    backgroundColor: "#f0fdf4",
+    borderRadius: 14,
+    padding: 12,
+    gap: 4,
+  },
+  successBoxTitle: {
+    color: "#166534",
+    fontWeight: "800",
+  },
+  successBoxText: {
+    color: "#166534",
     lineHeight: 20,
   },
   partTitle: {

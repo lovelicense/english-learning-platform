@@ -5,23 +5,35 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, 
 import { listExpressions, type ExpressionResponse } from "../../src/lib/api/expressions";
 
 type ExpressionFilter = "all" | "tts_ready" | "needs_tts" | "needs_practice" | "recent";
+type PlaylistLanguage = "english" | "korean";
+type PlaylistTrack = {
+  expressionId: string;
+  language: PlaylistLanguage;
+  englishRepeatIndex: number;
+};
 
 export default function ExpressionsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
   const [expressions, setExpressions] = useState<ExpressionResponse[]>([]);
   const [activeFilter, setActiveFilter] = useState<ExpressionFilter>("all");
   const [playingExpressionId, setPlayingExpressionId] = useState("");
   const [playlistPlaying, setPlaylistPlaying] = useState(false);
   const [playlistCurrentIndex, setPlaylistCurrentIndex] = useState(-1);
-  const [playlistRepeatOnce, setPlaylistRepeatOnce] = useState(false);
-  const [playlistGapMs, setPlaylistGapMs] = useState<0 | 1500 | 3000>(1500);
+  const [playlistCurrentLanguage, setPlaylistCurrentLanguage] = useState<PlaylistLanguage | null>(null);
+  const [playlistCurrentRepeatIndex, setPlaylistCurrentRepeatIndex] = useState(0);
+  const [playlistRepeatCount, setPlaylistRepeatCount] = useState<1 | 2 | 3>(1);
+  const [playlistGapMs, setPlaylistGapMs] = useState<0 | 1000 | 2000 | 3000>(1000);
+  const [playlistIncludeKorean, setPlaylistIncludeKorean] = useState(false);
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const playlistRef = useRef<ExpressionResponse[]>([]);
+  const playlistTracksRef = useRef<PlaylistTrack[]>([]);
   const playlistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playlistSessionIdRef = useRef(0);
 
   const prioritizedExpressions = useMemo(() => {
     return [...expressions].sort((a, b) => {
@@ -84,6 +96,7 @@ export default function ExpressionsScreen() {
     }
 
     setError("");
+    setMessage("");
     try {
       const list = await listExpressions();
       setExpressions(list);
@@ -120,11 +133,14 @@ export default function ExpressionsScreen() {
         return;
       }
 
+      await stopPlayback();
       setPlaylistPlaying(false);
       setPlaylistCurrentIndex(-1);
+      setPlaylistCurrentLanguage(null);
+      setPlaylistCurrentRepeatIndex(0);
       playlistRef.current = [];
-      await stopPlayback();
-      await playExpressionAudio(expression, false);
+      playlistTracksRef.current = [];
+      await playExpressionAudio(expression, { language: "english", partOfPlaylist: false, trackIndex: -1, sessionId: 0 });
     } catch (err) {
       setPlayingExpressionId("");
       setError(err instanceof Error ? err.message : "TTS 재생에 실패했습니다.");
@@ -144,42 +160,103 @@ export default function ExpressionsScreen() {
 
     setError("");
     setActiveFilter("tts_ready");
-    playlistRef.current = ttsReadyExpressions;
+    const playbackExpressions = playlistIncludeKorean ? ttsReadyExpressions.filter((item) => item.koreanTtsUrl) : ttsReadyExpressions;
+    if (playbackExpressions.length === 0) {
+      setError("한국어 포함 재생에 필요한 한국어 TTS가 아직 없습니다.");
+      return;
+    }
+    await stopPlayback();
+    const nextSessionId = playlistSessionIdRef.current + 1;
+    playlistSessionIdRef.current = nextSessionId;
+    playlistRef.current = playbackExpressions;
+    playlistTracksRef.current = playbackExpressions.flatMap((expression) => {
+      const englishTracks = Array.from({ length: playlistRepeatCount }, (_, index) => ({
+        expressionId: expression.id,
+        language: "english" as const,
+        englishRepeatIndex: index + 1,
+      }));
+      return playlistIncludeKorean
+        ? [{ expressionId: expression.id, language: "korean" as const, englishRepeatIndex: 0 }, ...englishTracks]
+        : englishTracks;
+    });
     setPlaylistPlaying(true);
     setPlaylistCurrentIndex(0);
+    setPlaylistCurrentLanguage(playlistIncludeKorean ? "korean" : "english");
+    setPlaylistCurrentRepeatIndex(playlistIncludeKorean ? 0 : 1);
 
     try {
-      await stopPlayback();
-      await playExpressionAudio(ttsReadyExpressions[0], true);
+      if (playlistIncludeKorean && playbackExpressions.length < ttsReadyExpressions.length) {
+        setMessage(`한국어 TTS가 없는 표현 ${ttsReadyExpressions.length - playbackExpressions.length}개는 제외하고 재생합니다.`);
+      } else {
+        setMessage("");
+      }
+      await playPlaylistTrack(0, nextSessionId);
     } catch (err) {
       setPlaylistPlaying(false);
       setPlaylistCurrentIndex(-1);
+      setPlaylistCurrentLanguage(null);
+      setPlaylistCurrentRepeatIndex(0);
       playlistRef.current = [];
+      playlistTracksRef.current = [];
       setError(err instanceof Error ? err.message : "전체 재생 시작에 실패했습니다.");
     }
   }
 
-  async function playExpressionAudio(expression: ExpressionResponse, partOfPlaylist: boolean) {
-    if (!expression.ttsUrl) return;
+  async function playExpressionAudio(
+    expression: ExpressionResponse,
+    options: { language: PlaylistLanguage; partOfPlaylist: boolean; trackIndex: number; sessionId: number },
+  ) {
+    const targetUrl = options.language === "korean" ? expression.koreanTtsUrl : expression.ttsUrl;
+    if (!targetUrl) return;
 
     await Audio.setAudioModeAsync({
       playsInSilentModeIOS: true,
     });
     const { sound } = await Audio.Sound.createAsync(
-      { uri: expression.ttsUrl },
+      { uri: targetUrl },
       { shouldPlay: true },
       (status) => {
         if (!status.isLoaded) return;
         if (status.didJustFinish) {
-          void handlePlaybackFinished(expression.id, partOfPlaylist);
+          void handlePlaybackFinished({
+            expressionId: expression.id,
+            wasPlaylistPlayback: options.partOfPlaylist,
+            trackIndex: options.trackIndex,
+            sessionId: options.sessionId,
+          });
         }
       },
     );
     soundRef.current = sound;
     setPlayingExpressionId(expression.id);
+    setPlaylistCurrentLanguage(options.partOfPlaylist ? options.language : null);
   }
 
-  async function handlePlaybackFinished(finishedExpressionId: string, wasPlaylistPlayback: boolean) {
+  async function playPlaylistTrack(trackIndex: number, sessionId = playlistSessionIdRef.current) {
+    const track = playlistTracksRef.current[trackIndex];
+    if (!track) return;
+
+    const expression = playlistRef.current.find((item) => item.id === track.expressionId);
+    if (!expression) return;
+
+    setPlaylistPlaying(true);
+    setPlaylistCurrentIndex(playlistRef.current.findIndex((item) => item.id === track.expressionId));
+    setPlaylistCurrentLanguage(track.language);
+    setPlaylistCurrentRepeatIndex(track.englishRepeatIndex);
+    await playExpressionAudio(expression, {
+      language: track.language,
+      partOfPlaylist: true,
+      trackIndex,
+      sessionId,
+    });
+  }
+
+  async function handlePlaybackFinished(input: {
+    expressionId: string;
+    wasPlaylistPlayback: boolean;
+    trackIndex: number;
+    sessionId: number;
+  }) {
     const sound = soundRef.current;
     soundRef.current = null;
     setPlayingExpressionId("");
@@ -192,48 +269,49 @@ export default function ExpressionsScreen() {
       }
     }
 
-    if (!wasPlaylistPlayback) {
+    if (!input.wasPlaylistPlayback) {
+      return;
+    }
+    if (input.sessionId !== playlistSessionIdRef.current) {
       return;
     }
 
-    const playlist = playlistRef.current;
-    const currentIndex = playlist.findIndex((item) => item.id === finishedExpressionId);
-    const nextExpression = currentIndex >= 0 ? playlist[currentIndex + 1] ?? null : null;
+    const tracks = playlistTracksRef.current;
+    const nextTrack = tracks[input.trackIndex + 1] ?? null;
 
-    if (!nextExpression) {
-      if (playlistRepeatOnce && playlist.length > 0) {
-        setPlaylistRepeatOnce(false);
-        setPlaylistCurrentIndex(0);
-        scheduleNextPlaylistPlayback(playlist[0]);
-        return;
-      }
+    if (!nextTrack) {
       setPlaylistPlaying(false);
       setPlaylistCurrentIndex(-1);
+      setPlaylistCurrentLanguage(null);
+      setPlaylistCurrentRepeatIndex(0);
       playlistRef.current = [];
+      playlistTracksRef.current = [];
       return;
     }
 
-    setPlaylistCurrentIndex(currentIndex + 1);
     try {
-      scheduleNextPlaylistPlayback(nextExpression);
+      scheduleNextPlaylistPlayback(input.trackIndex + 1);
     } catch (err) {
       setPlaylistPlaying(false);
       setPlaylistCurrentIndex(-1);
+      setPlaylistCurrentLanguage(null);
+      setPlaylistCurrentRepeatIndex(0);
       playlistRef.current = [];
+      playlistTracksRef.current = [];
       setError(err instanceof Error ? err.message : "다음 표현 재생에 실패했습니다.");
     }
   }
 
-  function scheduleNextPlaylistPlayback(expression: ExpressionResponse) {
+  function scheduleNextPlaylistPlayback(trackIndex: number) {
     clearPlaylistTimeout();
     if (playlistGapMs <= 0) {
-      void playExpressionAudio(expression, true);
+      void playPlaylistTrack(trackIndex);
       return;
     }
 
     playlistTimeoutRef.current = setTimeout(() => {
       playlistTimeoutRef.current = null;
-      void playExpressionAudio(expression, true);
+      void playPlaylistTrack(trackIndex);
     }, playlistGapMs);
   }
 
@@ -249,7 +327,11 @@ export default function ExpressionsScreen() {
     setPlayingExpressionId("");
     setPlaylistPlaying(false);
     setPlaylistCurrentIndex(-1);
+    setPlaylistCurrentLanguage(null);
+    setPlaylistCurrentRepeatIndex(0);
+    playlistSessionIdRef.current += 1;
     playlistRef.current = [];
+    playlistTracksRef.current = [];
     clearPlaylistTimeout();
     if (!sound) return;
 
@@ -317,8 +399,13 @@ export default function ExpressionsScreen() {
       </View>
 
       {error ? (
+      <View style={styles.card}>
+        <Text style={styles.error}>{error}</Text>
+      </View>
+    ) : null}
+      {message ? (
         <View style={styles.card}>
-          <Text style={styles.error}>{error}</Text>
+          <Text style={styles.success}>{message}</Text>
         </View>
       ) : null}
 
@@ -341,31 +428,62 @@ export default function ExpressionsScreen() {
             <Text style={styles.secondaryButtonText}>{playlistPlaying ? "전체 재생 정지" : "전체 연속 재생"}</Text>
           </Pressable>
         </View>
-        <View style={styles.row}>
-          <Pressable
-            style={[styles.filterChip, playlistRepeatOnce && styles.filterChipActive]}
-            onPress={() => setPlaylistRepeatOnce((current) => !current)}
-          >
-            <Text style={[styles.filterChipText, playlistRepeatOnce && styles.filterChipTextActive]}>한 번 더 반복</Text>
-          </Pressable>
-          {([
-            [0, "텀 없음"],
-            [1500, "1.5초 텀"],
-            [3000, "3초 텀"],
-          ] as const).map(([value, label]) => (
-            <Pressable
-              key={value}
-              style={[styles.filterChip, playlistGapMs === value && styles.filterChipActive]}
-              onPress={() => setPlaylistGapMs(value)}
-            >
-              <Text style={[styles.filterChipText, playlistGapMs === value && styles.filterChipTextActive]}>{label}</Text>
-            </Pressable>
-          ))}
+        <View style={styles.learningSettingsCard}>
+          <Text style={styles.learningSettingsTitle}>학습 설정</Text>
+          <Text style={styles.metaText}>반복 횟수, 문장 사이 텀, 한국어 포함 여부를 정해서 쉐도잉용으로 이어 들을 수 있습니다.</Text>
+          <View style={styles.settingsGroup}>
+            <Text style={styles.settingsLabel}>문장당 영어 반복</Text>
+            <View style={styles.row}>
+              {[1, 2, 3].map((count) => (
+                <Pressable
+                  key={count}
+                  style={[styles.filterChip, playlistRepeatCount === count && styles.filterChipActive]}
+                  onPress={() => setPlaylistRepeatCount(count as 1 | 2 | 3)}
+                >
+                  <Text style={[styles.filterChipText, playlistRepeatCount === count && styles.filterChipTextActive]}>{count}회</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+          <View style={styles.settingsGroup}>
+            <Text style={styles.settingsLabel}>반복 사이 텀</Text>
+            <View style={styles.row}>
+              {([0, 1000, 2000, 3000] as const).map((value) => (
+                <Pressable
+                  key={value}
+                  style={[styles.filterChip, playlistGapMs === value && styles.filterChipActive]}
+                  onPress={() => setPlaylistGapMs(value)}
+                >
+                  <Text style={[styles.filterChipText, playlistGapMs === value && styles.filterChipTextActive]}>{formatGapLabel(value)}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+          <View style={styles.settingsGroup}>
+            <Text style={styles.settingsLabel}>재생 순서</Text>
+            <View style={styles.row}>
+              <Pressable
+                style={[styles.filterChip, !playlistIncludeKorean && styles.filterChipActive]}
+                onPress={() => setPlaylistIncludeKorean(false)}
+              >
+                <Text style={[styles.filterChipText, !playlistIncludeKorean && styles.filterChipTextActive]}>영어만</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.filterChip, playlistIncludeKorean && styles.filterChipActive]}
+                onPress={() => setPlaylistIncludeKorean(true)}
+              >
+                <Text style={[styles.filterChipText, playlistIncludeKorean && styles.filterChipTextActive]}>한국어 후 영어</Text>
+              </Pressable>
+            </View>
+          </View>
         </View>
         <Text style={styles.metaText}>이동 중 듣기 학습용 목록을 바로 좁혀볼 수 있습니다.</Text>
         {playlistPlaying && playlistCurrentIndex >= 0 ? (
           <Text style={styles.playlistStatusText}>
             재생 중: {playlistCurrentIndex + 1} / {playlistRef.current.length}
+            {playlistCurrentLanguage === "korean"
+              ? " · 한국어 안내"
+              : ` · 영어 ${playlistCurrentRepeatIndex}/${playlistRepeatCount}`}
           </Text>
         ) : null}
       </View>
@@ -526,6 +644,26 @@ const styles = StyleSheet.create({
   filterChipTextActive: {
     color: "#1d4ed8"
   },
+  learningSettingsCard: {
+    borderWidth: 1,
+    borderColor: "#dbeafe",
+    borderRadius: 18,
+    padding: 14,
+    gap: 10,
+    backgroundColor: "#f8fbff"
+  },
+  learningSettingsTitle: {
+    color: "#0f172a",
+    fontWeight: "800"
+  },
+  settingsGroup: {
+    gap: 8
+  },
+  settingsLabel: {
+    color: "#475569",
+    fontSize: 12,
+    fontWeight: "800"
+  },
   expressionCard: {
     borderWidth: 1,
     borderColor: "#dbeafe",
@@ -627,6 +765,10 @@ const styles = StyleSheet.create({
   error: {
     color: "#dc2626",
     lineHeight: 20
+  },
+  success: {
+    color: "#15803d",
+    lineHeight: 20
   }
 });
 
@@ -635,4 +777,9 @@ function getExpressionPriorityLabel(expression: ExpressionResponse) {
   if ((expression.practiceCount ?? 0) === 0) return "우선순위: 아직 연습 전이라 첫 연습 후보입니다.";
   if ((expression.latestPracticeScore ?? 100) < 80) return "우선순위: 최근 점수가 낮아 다시 보는 편이 좋습니다.";
   return "우선순위: 저장된 표현으로 다시 듣기/연습하기 좋습니다.";
+}
+
+function formatGapLabel(gapMs: 0 | 1000 | 2000 | 3000) {
+  if (gapMs === 0) return "텀 없음";
+  return `${gapMs / 1000}초 텀`;
 }

@@ -81,6 +81,10 @@ export async function scorePracticeAnswer(input: {
   promptKorean?: string;
   promptContext?: string;
   promptTarget?: string;
+  promptTargetAlt?: string;
+  promptReferenceTarget?: string;
+  promptPatternLabel?: string;
+  promptPatternDescription?: string;
 }) {
   return apiFetch<PracticeScoreResponse>("/practice/score", {
     method: "POST",
@@ -106,6 +110,10 @@ export async function scorePracticeVoiceAnswer(input: {
   promptKorean?: string;
   promptContext?: string;
   promptTarget?: string;
+  promptTargetAlt?: string;
+  promptReferenceTarget?: string;
+  promptPatternLabel?: string;
+  promptPatternDescription?: string;
 }) {
   return apiFetch<PracticeScoreResponse>("/practice/score-voice", {
     method: "POST",

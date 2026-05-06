@@ -93,6 +93,13 @@ export async function listDialoguePracticeSets() {
   return apiFetch<DialoguePracticeSetResponse[]>("/ai-conversations/dialogue-practice-sets");
 }
 
+export async function updateDialoguePracticeSetTitle(id: string, title: string) {
+  return apiFetch<DialoguePracticeSetResponse>(`/ai-conversations/dialogue-practice-sets/${id}/title`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
 export async function createAiConversationSession(input: {
   mode: AiConversationTrackMode;
   title?: string;

@@ -33,6 +33,10 @@ export class PracticeController {
       dto.promptKorean,
       dto.promptContext,
       dto.promptTarget,
+      dto.promptTargetAlt,
+      dto.promptReferenceTarget,
+      dto.promptPatternLabel,
+      dto.promptPatternDescription,
       dto.promptReadyAtMs,
       dto.responseStartedAtMs,
     );
@@ -54,6 +58,10 @@ export class PracticeController {
       dto.promptKorean,
       dto.promptContext,
       dto.promptTarget,
+      dto.promptTargetAlt,
+      dto.promptReferenceTarget,
+      dto.promptPatternLabel,
+      dto.promptPatternDescription,
       dto.promptReadyAtMs,
       dto.responseStartedAtMs,
     );

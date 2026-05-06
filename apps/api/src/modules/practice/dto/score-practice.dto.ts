@@ -36,6 +36,22 @@ export class ScorePracticeDto {
   promptTarget?: string;
 
   @IsOptional()
+  @IsString()
+  promptTargetAlt?: string;
+
+  @IsOptional()
+  @IsString()
+  promptReferenceTarget?: string;
+
+  @IsOptional()
+  @IsString()
+  promptPatternLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  promptPatternDescription?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(0)
   promptReadyAtMs?: number;
@@ -84,6 +100,22 @@ export class ScoreVoicePracticeDto {
   @IsOptional()
   @IsString()
   promptTarget?: string;
+
+  @IsOptional()
+  @IsString()
+  promptTargetAlt?: string;
+
+  @IsOptional()
+  @IsString()
+  promptReferenceTarget?: string;
+
+  @IsOptional()
+  @IsString()
+  promptPatternLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  promptPatternDescription?: string;
 
   @IsOptional()
   @IsInt()

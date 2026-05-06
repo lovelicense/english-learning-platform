@@ -27,6 +27,10 @@ function getTurnActionLabel(mode: AiConversationSessionResponse["mode"]) {
   return mode === "ENGLISH_AI" ? "영어 표현 생성" : "저장 후 영어 표현 생성";
 }
 
+function formatModeSummary(session: AiConversationSessionResponse) {
+  return `AI ${session.aiOutputMode === "voice" ? "음성" : "텍스트"} · 내 답변 ${session.userInputMode === "voice" ? "음성(STT)" : "텍스트"}`;
+}
+
 type RecordedClip = {
   uri: string;
   durationMs: number;
@@ -64,6 +68,28 @@ export default function AiConversationDetailScreen() {
   const [latestGeneratedExpressionId, setLatestGeneratedExpressionId] = useState("");
 
   const hasTurns = useMemo(() => Boolean(session?.turns.length), [session?.turns.length]);
+  const latestUserTurn = useMemo(
+    () => [...(session?.turns ?? [])].reverse().find((turn) => turn.speaker === "USER") ?? null,
+    [session?.turns],
+  );
+  const englishTrackNextStep = useMemo(() => {
+    if (!session || session.mode !== "ENGLISH_AI") return "";
+    if (!hasTurns) return "먼저 영어로 한 턴 이상 답해 세션을 시작해 주세요.";
+    if (!latestUserTurn) return "내 답변이 생기면 표현 저장과 다이얼로그 연습 저장이 가능해집니다.";
+    if (dialoguePracticeSets.length === 0) {
+      return "좋은 사용자 턴을 표현으로 저장하고, 세션 전체를 다이얼로그 연습 세트로 바꿔 다시 말해보는 흐름이 다음 단계입니다.";
+    }
+    return "이미 연습 세트가 있으니, 표현 저장과 다이얼로그 연습 재시작 중 지금 필요한 쪽으로 바로 이어갈 수 있습니다.";
+  }, [dialoguePracticeSets.length, hasTurns, latestUserTurn, session]);
+  const koreanTrackNextStep = useMemo(() => {
+    if (!session || session.mode !== "KOREAN_AI") return "";
+    if (!hasTurns) return "먼저 실제로 쓰는 한국어 한 턴을 보내 세션을 시작해 주세요.";
+    if (!latestUserTurn) return "내 한국어 턴이 생기면 바로 저장 후 영어 표현 생성으로 넘길 수 있습니다.";
+    if (latestGeneratedExpressionId) {
+      return "방금 만든 표현을 바로 보고, 연습하거나 오늘 복습으로 이어가는 것이 가장 빠른 다음 단계입니다.";
+    }
+    return "저장할 한국어 턴을 골라 영어 표현 생성으로 넘기면, 이 대화가 수집 채널로 완성됩니다.";
+  }, [hasTurns, latestGeneratedExpressionId, latestUserTurn, session]);
   const soundRef = useRef<Audio.Sound | null>(null);
   const activeRecordingRef = useRef<Audio.Recording | null>(null);
   const recordingStartedAtRef = useRef<number | null>(null);
@@ -165,9 +191,38 @@ export default function AiConversationDetailScreen() {
         {session.aiRole ? <Text style={styles.cardText}>AI 역할: {session.aiRole}</Text> : null}
         {session.conversationTopic ? <Text style={styles.cardText}>주제: {session.conversationTopic}</Text> : null}
         {session.situationDescription ? <Text style={styles.cardText}>상황: {session.situationDescription}</Text> : null}
-        <Text style={styles.cardText}>
-          현재 모드: AI {session.aiOutputMode === "voice" ? "음성" : "텍스트"} · 내 답변 {session.userInputMode === "voice" ? "음성(STT)" : "텍스트"}
+        <Text style={styles.cardText}>현재 모드: {formatModeSummary(session)}</Text>
+      </View>
+
+      <View style={styles.pipelineCard}>
+        <Text style={styles.pipelineEyebrow}>{session.mode === "ENGLISH_AI" ? "Practice Bridge" : "Collection Bridge"}</Text>
+        <Text style={styles.pipelineTitle}>
+          {session.mode === "ENGLISH_AI" ? "현재 세션에서 다음에 할 일" : "이 세션을 학습 흐름으로 잇는 방법"}
         </Text>
+        <Text style={styles.pipelineText}>
+          {session.mode === "ENGLISH_AI" ? englishTrackNextStep : koreanTrackNextStep}
+        </Text>
+        <View style={styles.pipelineSteps}>
+          {(session.mode === "ENGLISH_AI"
+            ? [
+                "좋은 내 답변은 표현 자산으로 저장",
+                "세션 전체는 다이얼로그 연습 세트로 변환",
+                "저장된 자산은 다시 표현 연습으로 합류",
+              ]
+            : [
+                "내 한국어 턴을 수집 자산으로 저장",
+                "저장 즉시 영어 표현 생성으로 연결",
+                "생성된 표현을 바로 연습/복습으로 이동",
+              ]
+          ).map((step, index) => (
+            <View key={`${session.mode}-step-${index}`} style={styles.pipelineStepRow}>
+              <View style={styles.pipelineStepBadge}>
+                <Text style={styles.pipelineStepBadgeText}>{index + 1}</Text>
+              </View>
+              <Text style={styles.pipelineStepText}>{step}</Text>
+            </View>
+          ))}
+        </View>
       </View>
 
       <View style={styles.card}>
@@ -390,6 +445,11 @@ export default function AiConversationDetailScreen() {
           {!hasTurns ? <Text style={styles.cardText}>먼저 영어 대화 턴이 있어야 다이얼로그 연습 세트를 만들 수 있습니다.</Text> : null}
 
           <Text style={styles.sectionLabel}>이 세션에서 만든 연습 세트</Text>
+          <View style={styles.inlineRow}>
+            <Pressable style={styles.secondaryButton} onPress={() => router.push("/dialogue-practice")}>
+              <Text style={styles.secondaryButtonText}>전체 세트 보기</Text>
+            </Pressable>
+          </View>
           {dialoguePracticeSets.length > 0 ? (
             dialoguePracticeSets.map((set) => (
               <View key={set.id} style={styles.dialogueSetCard}>
@@ -420,6 +480,23 @@ export default function AiConversationDetailScreen() {
           )}
         </View>
       ) : null}
+
+      <View style={styles.reuseCard}>
+        <Text style={styles.cardTitle}>세션 다시 활용</Text>
+        <Text style={styles.cardText}>
+          {session.mode === "ENGLISH_AI"
+            ? "이 세션은 `영어 대화 -> 표현 저장 -> 다이얼로그 연습` 순서로 여러 번 다시 쓸 수 있습니다."
+            : "이 세션은 `한국어 수집 -> 영어 표현 생성 -> 연습/복습` 순서로 다시 이어 쓰는 수집 채널입니다."}
+        </Text>
+        <View style={styles.inlineRow}>
+          <Pressable style={styles.secondaryButton} onPress={() => router.push("/ai-conversation")}>
+            <Text style={styles.secondaryButtonText}>다른 세션 보기</Text>
+          </Pressable>
+          <Pressable style={styles.secondaryButton} onPress={() => void loadSession()}>
+            <Text style={styles.secondaryButtonText}>현재 세션 새로고침</Text>
+          </Pressable>
+        </View>
+      </View>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
     </ScrollView>
@@ -815,6 +892,53 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 8,
   },
+  pipelineCard: {
+    backgroundColor: "#ecfeff",
+    borderRadius: 20,
+    padding: 20,
+    gap: 10,
+  },
+  pipelineEyebrow: {
+    color: "#0f766e",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1,
+  },
+  pipelineTitle: {
+    color: "#0f172a",
+    fontSize: 20,
+    fontWeight: "800",
+  },
+  pipelineText: {
+    color: "#134e4a",
+    lineHeight: 21,
+  },
+  pipelineSteps: {
+    gap: 10,
+  },
+  pipelineStepRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  pipelineStepBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ccfbf1",
+  },
+  pipelineStepBadgeText: {
+    color: "#115e59",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  pipelineStepText: {
+    flex: 1,
+    color: "#334155",
+    lineHeight: 20,
+  },
   currentReplyCard: {
     gap: 12,
   },
@@ -883,6 +1007,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#f8fafc",
     padding: 14,
     gap: 6,
+  },
+  reuseCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    padding: 20,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#dbeafe",
   },
   dialogueSetTitle: {
     color: "#0f172a",
