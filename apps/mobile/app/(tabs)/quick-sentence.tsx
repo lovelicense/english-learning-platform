@@ -1,9 +1,9 @@
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { generateExpressionFromText } from "../src/lib/api/expressions";
-import { listPersonProfiles } from "../src/lib/api/person-profiles";
-import type { PersonProfileResponse } from "../src/lib/api/recordings";
+import { generateExpressionFromText } from "../../src/lib/api/expressions";
+import { listPersonProfiles } from "../../src/lib/api/person-profiles";
+import type { PersonProfileResponse } from "../../src/lib/api/recordings";
 import {
   buildRecordingContextPayload,
   EMPTY_RECORDING_CONTEXT,
@@ -14,7 +14,7 @@ import {
   SITUATION_TEMPLATES,
   TONE_TEMPLATES,
   type RecordingGenerationContext,
-} from "../src/lib/recording-context";
+} from "../../src/lib/recording-context";
 
 export default function QuickSentenceScreen() {
   const [loading, setLoading] = useState(true);

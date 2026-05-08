@@ -1,4 +1,5 @@
 import { Audio } from "expo-av";
+import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import { useFocusEffect, Link, router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -10,6 +11,7 @@ import {
   enqueueRecordingSessionProcessing,
   fetchRecordingSession,
   finalizeRecordingSession,
+  type RecordingSessionSource,
   type RecordingSessionCreateResponse,
   type RecordingSessionStatusResponse,
 } from "../../src/lib/api/recording-sessions";
@@ -30,9 +32,14 @@ type RecordedClip = {
   durationMs: number;
   fileName: string;
   contentType?: string | null;
+  source: "recorded" | "imported";
+  webFile?: File | null;
 };
 
 type RecordingListFilter = "all" | "processed" | "processing" | "needs_review";
+
+const MANUAL_UPLOAD_ALLOWED_EXTENSIONS = [".wav", ".m4a", ".mp3", ".mp4", ".aac"] as const;
+const MANUAL_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 
 export default function RecordScreen() {
   const [title, setTitle] = useState("");
@@ -74,6 +81,25 @@ export default function RecordScreen() {
   const canFinalize = Boolean(sessionMeta?.sessionId && (session?.parts.length ?? 0) > 0);
   const canProcess = Boolean(sessionMeta?.sessionId && session?.status === "UPLOADED" && (session?.parts.length ?? 0) > 0);
   const currentSessionStatus = session?.status ?? sessionMeta?.status ?? "NOT_STARTED";
+  const failedPart = useMemo(
+    () => session?.parts.find((part) => part.status === "FAILED") ?? null,
+    [session?.parts],
+  );
+  const failedJobs = useMemo(
+    () => session?.jobs.filter((job) => job.status === "FAILED") ?? [],
+    [session?.jobs],
+  );
+  const canRetryFailedPart = Boolean(sessionMeta?.sessionId && failedPart && recordedClip && !uploading && !processing && !finalizing && !isRecording);
+  const canRetryFailedProcessing = Boolean(
+    sessionMeta?.sessionId &&
+    !failedPart &&
+    failedJobs.length > 0 &&
+    (session?.parts.some((part) => part.status === "UPLOADED") ?? false) &&
+    !uploading &&
+    !processing &&
+    !finalizing &&
+    !isRecording,
+  );
   const nextActionHint = useMemo(() => {
     if (isRecording) {
       return "녹음을 끝내면 로컬 파일 저장 단계로 넘어갑니다.";
@@ -81,11 +107,20 @@ export default function RecordScreen() {
     if (uploading) {
       return "업로드와 처리 요청이 진행 중입니다. 완료 후 결과 화면으로 이어집니다.";
     }
+    if (failedPart) {
+      if (recordedClip) {
+        return `Part ${failedPart.partNumber} 업로드가 실패했습니다. 준비된 파일로 실패 파트를 다시 업로드할 수 있습니다.`;
+      }
+      return `Part ${failedPart.partNumber} 업로드가 실패했습니다. 먼저 업로드할 파일을 다시 준비해 주세요.`;
+    }
+    if (failedJobs.length > 0 && (session?.parts.some((part) => part.status === "UPLOADED") ?? false)) {
+      return "업로드는 끝났지만 처리 작업이 실패했습니다. 처리 다시 요청으로 같은 세션을 다시 돌릴 수 있습니다.";
+    }
     if (!recordedClip) {
-      return "먼저 실제 음성을 녹음해 파일을 만들어 주세요.";
+      return "먼저 실제 음성을 녹음하거나, 이미 있는 오디오 파일을 가져와 주세요.";
     }
     if (!sessionMeta?.sessionId) {
-      return "지금은 녹음 파일이 준비된 상태입니다. 바로 업로드하거나 세션을 먼저 만들어도 됩니다.";
+      return "지금은 업로드할 음성 파일이 준비된 상태입니다. 바로 업로드하거나 세션을 먼저 만들어도 됩니다.";
     }
     if (canProcess) {
       return "업로드는 끝났고, 이제 처리 요청만 보내면 STT 파이프라인이 시작됩니다.";
@@ -93,8 +128,8 @@ export default function RecordScreen() {
     if (canFinalize) {
       return "업로드된 파트가 있습니다. finalize 후 process로 이어갈 수 있습니다.";
     }
-    return "녹음 파일 업로드와 처리 시작까지 한 번에 진행할 수 있습니다.";
-  }, [isRecording, uploading, recordedClip, sessionMeta?.sessionId, canProcess, canFinalize]);
+    return "준비된 음성 파일 업로드와 처리 시작까지 한 번에 진행할 수 있습니다.";
+  }, [isRecording, uploading, failedPart, recordedClip, failedJobs.length, session?.parts, sessionMeta?.sessionId, canProcess, canFinalize]);
   const sessionStatusTone = useMemo(() => getSessionStatusTone(currentSessionStatus), [currentSessionStatus]);
   const filteredRecordings = useMemo(() => {
     const query = recordingsQuery.trim().toLowerCase();
@@ -166,11 +201,14 @@ export default function RecordScreen() {
     setError("");
     setMessage("");
     try {
-      const created = await createRecordingSession(title);
+      const created = await createRecordingSession({
+        title,
+        source: getRecordingSessionSource(recordedClip),
+      });
       setSessionMeta(created);
       const status = await fetchRecordingSession(created.sessionId);
       setSession(status);
-      setMessage("모바일 녹음 세션이 생성되었습니다. 이제 실제 녹음 파일을 이 세션에 업로드하는 단계만 남았습니다.");
+      setMessage("업로드 세션이 생성되었습니다. 이제 준비된 음성 파일을 이 세션에 업로드하면 됩니다.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "녹음 세션 생성에 실패했습니다.");
     } finally {
@@ -287,6 +325,8 @@ export default function RecordScreen() {
         durationMs,
         fileName,
         contentType: "mediaType" in status && typeof status.mediaType === "string" ? status.mediaType : null,
+        source: "recorded",
+        webFile: null,
       } satisfies RecordedClip;
 
       setRecordedClip(nextClip);
@@ -312,6 +352,54 @@ export default function RecordScreen() {
     }
   }
 
+  async function handlePickAudioFile() {
+    if (recordingBusy || uploading || isRecording) return;
+
+    setRecordingBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          "audio/wav",
+          "audio/x-wav",
+          "audio/mp4",
+          "audio/mpeg",
+          "audio/aac",
+          "audio/*",
+        ],
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets?.length) {
+        setMessage("파일 가져오기를 취소했습니다.");
+        return;
+      }
+
+      const asset = result.assets[0];
+      validateManualUploadAsset(asset);
+
+      const nextClip = {
+        uri: asset.uri,
+        durationMs: 0,
+        fileName: asset.name || getFileNameFromUri(asset.uri),
+        contentType: asset.mimeType || guessAudioContentType(asset.name || asset.uri),
+        source: "imported",
+        webFile: asset.file ?? null,
+      } satisfies RecordedClip;
+
+      setRecordedClip(nextClip);
+      setRecordingElapsedMs(0);
+      setMessage("오디오 파일을 가져왔습니다. 이제 `업로드하고 처리 시작`으로 STT 파이프라인에 바로 연결할 수 있습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "오디오 파일 가져오기에 실패했습니다.");
+    } finally {
+      setRecordingBusy(false);
+    }
+  }
+
   async function ensureRecordingPermission() {
     const current = await Audio.getPermissionsAsync();
     if (current.granted) {
@@ -332,7 +420,7 @@ export default function RecordScreen() {
   async function handleUploadRecordedClip(clipOverride?: RecordedClip) {
     const targetClip = clipOverride ?? recordedClip;
     if (!targetClip) {
-      setError("먼저 음성을 녹음해 주세요.");
+      setError("먼저 음성을 녹음하거나 오디오 파일을 가져와 주세요.");
       return;
     }
 
@@ -341,57 +429,108 @@ export default function RecordScreen() {
     setUploading(true);
     setUploadPercent(1);
     setError("");
-    setMessage("녹음 파일 업로드를 준비하고 있습니다.");
+    setMessage("음성 파일 업로드를 준비하고 있습니다.");
 
     try {
-      const activeSession = await ensureUploadSession();
-      const uploadPayload = await getRecordedClipUploadPayload(targetClip);
-
+      const activeSession = await ensureUploadSession(getRecordingSessionSource(targetClip));
       const existingPartCount = session?.parts.length ?? 0;
       const partNumber = existingPartCount + 1;
-      const contentType = uploadPayload.contentType || guessAudioContentType(targetClip.fileName);
-      const uploadFileName = ensureAudioFileName(targetClip.fileName, contentType);
-
-      const presign = await createRecordingSessionPartPresign(activeSession.sessionId, {
-        partNumber,
-        fileName: uploadFileName,
-        contentType,
-        sizeBytes: uploadPayload.sizeBytes,
-      });
-
-      setMessage(`녹음 파일을 업로드 중입니다. part ${partNumber}/1`);
-
-      await uploadRecordedClipToPresignedUrl(presign.uploadUrl, uploadPayload, contentType, setUploadPercent);
-
-      const completed = await completeRecordingSessionPart(activeSession.sessionId, presign.partId, {
-        durationMs: targetClip.durationMs,
-        sizeBytes: uploadPayload.sizeBytes,
+      setMessage(`음성 파일을 업로드 중입니다. part ${partNumber}/1`);
+      const completed = await uploadClipToSession(activeSession.sessionId, targetClip, partNumber, {
+        totalDurationMs: resolveSessionTotalDurationMs(session, targetClip),
+        expectedPartCount: Math.max(session?.expectedPartCount ?? 0, partNumber),
+        onProgress: setUploadPercent,
       });
       setLatestRecordingId(completed.recordingId);
-
-      await finalizeRecordingSession(activeSession.sessionId, partNumber, targetClip.durationMs);
-      await enqueueRecordingSessionProcessing(activeSession.sessionId, true);
       const next = await fetchRecordingSession(activeSession.sessionId);
       setSession(next);
       setUploadPercent(100);
-      setMessage("녹음 업로드와 STT 처리 요청까지 완료했습니다. 이제 worker 결과를 기다리면 됩니다.");
+      setMessage("음성 파일 업로드와 STT 처리 요청까지 완료했습니다. 이제 worker 결과를 기다리면 됩니다.");
       await refreshRecordings();
       if (recordingPreferences.openResultAfterUpload) {
         router.push(`/recording/${completed.recordingId}`);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "녹음 업로드에 실패했습니다.");
+      setError(err instanceof Error ? err.message : "음성 파일 업로드에 실패했습니다.");
     } finally {
       setUploading(false);
     }
   }
 
-  async function ensureUploadSession() {
-    if (sessionMeta?.sessionId && !shouldCreateFreshSession(session?.status)) {
+  async function handleRetryFailedPart(partNumber?: number) {
+    const targetPart = session?.parts.find((part) => part.partNumber === (partNumber ?? failedPart?.partNumber) && part.status === "FAILED") ?? failedPart;
+
+    if (!sessionMeta?.sessionId || !targetPart) {
+      return;
+    }
+    if (!recordedClip) {
+      setError("실패 파트를 다시 업로드하려면 먼저 업로드할 파일을 다시 준비해 주세요.");
+      return;
+    }
+
+    setUploading(true);
+    setUploadPercent(1);
+    setError("");
+    setMessage(`Part ${targetPart.partNumber}를 다시 업로드합니다.`);
+
+    try {
+      setMessage(`실패한 part ${targetPart.partNumber}를 다시 업로드 중입니다.`);
+      const completed = await uploadClipToSession(sessionMeta.sessionId, recordedClip, targetPart.partNumber, {
+        totalDurationMs: resolveSessionTotalDurationMs(session, recordedClip),
+        expectedPartCount: Math.max(session?.expectedPartCount ?? 0, session?.parts.length ?? 0, targetPart.partNumber),
+        onProgress: setUploadPercent,
+      });
+      setLatestRecordingId(completed.recordingId);
+
+      const next = await fetchRecordingSession(sessionMeta.sessionId);
+      setSession(next);
+      setUploadPercent(100);
+      setMessage(`Part ${targetPart.partNumber}를 다시 업로드하고 처리 요청까지 완료했습니다.`);
+      await refreshRecordings();
+      if (recordingPreferences.openResultAfterUpload) {
+        router.push(`/recording/${completed.recordingId}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "실패 파트 재업로드에 실패했습니다.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleRetryProcessing() {
+    if (!sessionMeta?.sessionId) {
+      return;
+    }
+
+    setProcessing(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const result = await enqueueRecordingSessionProcessing(sessionMeta.sessionId, true);
+      const next = await fetchRecordingSession(sessionMeta.sessionId);
+      setSession(next);
+      setMessage(`실패한 처리 작업을 다시 큐에 등록했습니다. queuedJobCount=${result.queuedJobCount}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "처리 다시 요청에 실패했습니다.");
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  async function ensureUploadSession(source: RecordingSessionSource) {
+    if (
+      sessionMeta?.sessionId &&
+      !shouldCreateFreshSession(session?.status) &&
+      (!session?.source || session.source === source)
+    ) {
       return sessionMeta;
     }
 
-    const created = await createRecordingSession(title);
+    const created = await createRecordingSession({
+      title,
+      source,
+    });
     setSessionMeta(created);
     const status = await fetchRecordingSession(created.sessionId);
     setSession(status);
@@ -482,13 +621,17 @@ export default function RecordScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Recording MVP</Text>
       <Text style={styles.description}>
-        모바일에서는 먼저 실제 녹음을 안정적으로 만들고, 그 다음 업로드 세션과 STT 파이프라인을 연결하는 순서가 가장 안전합니다.
+        모바일에서는 직접 녹음한 파일이나 이미 있는 오디오 파일을 가져와 업로드 세션과 STT 파이프라인으로 연결할 수 있습니다.
       </Text>
 
       <View style={[styles.statusSummaryCard, sessionStatusTone === "success" && styles.statusSummarySuccess, sessionStatusTone === "warning" && styles.statusSummaryWarning]}>
         <Text style={styles.statusSummaryLabel}>현재 상태</Text>
         <Text style={styles.statusSummaryValue}>{formatSessionStatusLabel(currentSessionStatus)}</Text>
         <Text style={styles.statusSummaryHint}>{nextActionHint}</Text>
+        {session?.errorMessage ? <Text style={styles.error}>세션 오류: {session.errorMessage}</Text> : null}
+        {failedJobs.length > 0 ? (
+          <Text style={styles.metaText}>실패한 작업 {failedJobs.length}개가 있어 복구 액션을 확인해 주세요.</Text>
+        ) : null}
       </View>
 
       <View style={styles.timerCard}>
@@ -497,7 +640,7 @@ export default function RecordScreen() {
         <Text style={styles.timerHint}>
           {isRecording
             ? "녹음 중에는 언제든 종료할 수 있습니다."
-            : "이제 실제 녹음 파일을 바로 업로드하고 STT 처리 큐까지 연결할 수 있습니다."}
+            : "이제 준비된 음성 파일을 바로 업로드하고 STT 처리 큐까지 연결할 수 있습니다."}
         </Text>
       </View>
 
@@ -508,7 +651,12 @@ export default function RecordScreen() {
           기본 제목: {recordingPreferences.defaultSessionTitle || "없음"} / 자동 업로드: {recordingPreferences.autoUploadAfterStop ? "켜짐" : "꺼짐"} / 업로드 후 결과 열기: {recordingPreferences.openResultAfterUpload ? "켜짐" : "꺼짐"}
         </Text>
         <Text style={styles.metaText}>
-          {recordedClip ? "녹음 파일이 준비되었습니다. 업로드를 시작하면 finalize/process까지 자동으로 이어집니다." : "아직 저장된 녹음 파일이 없습니다. 먼저 녹음을 시작해 주세요."}
+          {recordedClip
+            ? "업로드할 음성 파일이 준비되었습니다. 업로드를 시작하면 finalize/process까지 자동으로 이어집니다."
+            : "아직 준비된 음성 파일이 없습니다. 먼저 녹음하거나 파일을 가져와 주세요."}
+        </Text>
+        <Text style={styles.metaText}>
+          파일 가져오기는 WAV, M4A, MP3, MP4, AAC 형식을 지원하며 최대 {Math.round(MANUAL_UPLOAD_MAX_BYTES / 1024 / 1024)}MB까지 업로드할 수 있습니다.
         </Text>
         <View style={styles.buttonRow}>
           <Pressable
@@ -524,6 +672,13 @@ export default function RecordScreen() {
             disabled={!isRecording || recordingBusy}
           >
             {recordingBusy && isRecording ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>녹음 종료</Text>}
+          </Pressable>
+          <Pressable
+            style={[styles.secondaryButton, (recordingBusy || uploading || isRecording) && styles.buttonDisabled]}
+            onPress={() => void handlePickAudioFile()}
+            disabled={recordingBusy || uploading || isRecording}
+          >
+            {recordingBusy && !isRecording ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>파일 가져오기</Text>}
           </Pressable>
         </View>
         <Pressable
@@ -543,13 +698,14 @@ export default function RecordScreen() {
         ) : null}
         {recordedClip ? (
           <View style={styles.clipCard}>
-            <Text style={styles.partTitle}>저장된 음성 파일</Text>
+            <Text style={styles.partTitle}>{recordedClip.source === "imported" ? "가져온 음성 파일" : "저장된 음성 파일"}</Text>
+            <Text style={styles.partMeta}>source: {recordedClip.source === "imported" ? "MANUAL_UPLOAD" : "MOBILE"}</Text>
             <Text style={styles.partMeta}>file: {recordedClip.fileName}</Text>
-            <Text style={styles.partMeta}>duration: {clipDurationLabel}</Text>
+            <Text style={styles.partMeta}>duration: {recordedClip.durationMs > 0 ? clipDurationLabel : "가져온 파일 길이 미확인"}</Text>
             <Text style={styles.clipUri}>{recordedClip.uri}</Text>
           </View>
         ) : (
-          <Text style={styles.metaText}>아직 저장된 음성 파일이 없습니다.</Text>
+          <Text style={styles.metaText}>아직 준비된 음성 파일이 없습니다.</Text>
         )}
       </View>
 
@@ -561,7 +717,9 @@ export default function RecordScreen() {
           value={title}
           onChangeText={setTitle}
         />
-        <Text style={styles.metaText}>source는 자동으로 `MOBILE`로 저장됩니다.</Text>
+        <Text style={styles.metaText}>
+          source는 준비된 파일 기준으로 자동 결정됩니다. 직접 녹음은 `MOBILE`, 파일 가져오기는 `MANUAL_UPLOAD`로 저장됩니다.
+        </Text>
       </View>
 
       <View style={styles.card}>
@@ -602,20 +760,72 @@ export default function RecordScreen() {
         </View>
         {!canFinalize ? <Text style={styles.metaText}>업로드된 파트가 있어야 `업로드 마감`을 호출할 수 있습니다.</Text> : null}
         {!canProcess ? <Text style={styles.metaText}>세션이 `UPLOADED` 상태여야 `처리 요청`을 보낼 수 있습니다.</Text> : null}
+        {(failedPart || failedJobs.length > 0) ? (
+          <View style={styles.recoveryCard}>
+            <Text style={styles.recoveryTitle}>실패 복구</Text>
+            {failedPart ? (
+              <Text style={styles.metaText}>
+                Part {failedPart.partNumber} 업로드가 실패했습니다.
+                {failedPart.errorMessage ? ` ${failedPart.errorMessage}` : ""}
+              </Text>
+            ) : null}
+            {!failedPart && failedJobs.length > 0 ? (
+              <Text style={styles.metaText}>업로드는 끝났지만 처리 작업이 실패했습니다. 같은 세션으로 다시 처리 요청할 수 있습니다.</Text>
+            ) : null}
+            <View style={styles.buttonRow}>
+              {failedPart ? (
+                <Pressable
+                  style={[styles.uploadButton, !canRetryFailedPart && styles.buttonDisabled]}
+                  onPress={() => void handleRetryFailedPart(failedPart.partNumber)}
+                  disabled={!canRetryFailedPart}
+                >
+                  {uploading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>실패 파트 다시 업로드</Text>}
+                </Pressable>
+              ) : null}
+              {canRetryFailedProcessing ? (
+                <Pressable
+                  style={[styles.secondaryButton, processing && styles.buttonDisabled]}
+                  onPress={() => void handleRetryProcessing()}
+                  disabled={processing}
+                >
+                  {processing ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>처리 다시 요청</Text>}
+                </Pressable>
+              ) : null}
+            </View>
+            {failedPart && !recordedClip ? (
+              <Text style={styles.metaText}>실패 파트를 다시 올리려면 먼저 `파일 가져오기` 또는 새 녹음으로 업로드할 파일을 준비해 주세요.</Text>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>세션 가이드</Text>
         <Text style={styles.cardText}>권장 파트 길이: {recommendedPartLabel}</Text>
         <Text style={styles.cardText}>최대 길이: {maxDurationLabel}</Text>
-        <Text style={styles.cardText}>현재 완료 범위: 실제 음성 녹음, 로컬 파일 저장, presign 업로드, finalize, process 요청</Text>
-        <Text style={styles.cardText}>다음 구현 순서: STT 결과 상세 화면, 문장 수정, 내 화자 선택</Text>
+        <Text style={styles.cardText}>현재 완료 범위: 실제 음성 녹음, 파일 가져오기, presign 업로드, finalize, process 요청</Text>
+        <Text style={styles.cardText}>
+          다음 액션:
+          {" "}
+          {failedPart
+            ? "실패 파트 다시 업로드"
+            : canRetryFailedProcessing
+              ? "처리 다시 요청"
+              : canProcess
+                ? "처리 요청"
+                : canFinalize
+                  ? "업로드 마감"
+                  : recordedClip
+                    ? "업로드하고 처리 시작"
+                    : "녹음 또는 파일 가져오기"}
+        </Text>
       </View>
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>현재 세션 상태</Text>
         <Text style={styles.cardText}>sessionId: {sessionMeta?.sessionId ?? "-"}</Text>
         <Text style={styles.cardText}>status: {formatSessionStatusLabel(currentSessionStatus)}</Text>
+        <Text style={styles.cardText}>source: {session?.source ?? "-"}</Text>
         <Text style={styles.cardText}>uploadedPartCount: {session?.uploadedPartCount ?? 0}</Text>
         <Text style={styles.cardText}>expectedPartCount: {session?.expectedPartCount ?? "-"}</Text>
         <Text style={styles.cardText}>totalDurationMs: {session?.totalDurationMs ?? "-"}</Text>
@@ -627,10 +837,25 @@ export default function RecordScreen() {
         <Text style={styles.cardTitle}>업로드 파트</Text>
         {session?.parts?.length ? (
           session.parts.map((part) => (
-            <View key={part.id} style={styles.partRow}>
+            <View key={part.id} style={[styles.partRow, part.status === "FAILED" && styles.partRowFailed]}>
               <Text style={styles.partTitle}>Part {part.partNumber}</Text>
               <Text style={styles.partMeta}>{part.status}</Text>
               <Text style={styles.partMeta}>{part.fileName}</Text>
+              <Text style={styles.partMeta}>size: {formatFileSize(part.sizeBytes)}</Text>
+              <Text style={styles.partMeta}>duration: {formatDurationMs(part.durationMs)}</Text>
+              <Text style={styles.partMeta}>updated: {formatDateTime(part.updatedAt)}</Text>
+              {part.errorMessage ? <Text style={styles.error}>error: {part.errorMessage}</Text> : null}
+              {part.status === "FAILED" ? (
+                <View style={styles.buttonRow}>
+                  <Pressable
+                    style={[styles.uploadButton, (!recordedClip || uploading || processing || finalizing || isRecording) && styles.buttonDisabled]}
+                    onPress={() => void handleRetryFailedPart(part.partNumber)}
+                    disabled={!recordedClip || uploading || processing || finalizing || isRecording}
+                  >
+                    {uploading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>이 파트 다시 업로드</Text>}
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
           ))
         ) : (
@@ -753,10 +978,11 @@ export default function RecordScreen() {
         <Text style={styles.cardTitle}>작업 큐</Text>
         {session?.jobs?.length ? (
           session.jobs.map((job) => (
-            <View key={job.id} style={styles.partRow}>
+            <View key={job.id} style={[styles.partRow, job.status === "FAILED" && styles.partRowFailed]}>
               <Text style={styles.partTitle}>{job.type}</Text>
               <Text style={styles.partMeta}>{job.status}</Text>
               <Text style={styles.partMeta}>{formatDateTime(job.createdAt)}</Text>
+              <Text style={styles.partMeta}>updated: {formatDateTime(job.updatedAt)}</Text>
               {job.errorMessage ? <Text style={styles.error}>{job.errorMessage}</Text> : null}
             </View>
           ))
@@ -785,6 +1011,15 @@ async function getRecordedClipUploadPayload(recordedClip: RecordedClip): Promise
   | { kind: "web"; blob: Blob; sizeBytes: number; contentType?: string | null }
 > {
   if (Platform.OS === "web") {
+    if (recordedClip.webFile) {
+      return {
+        kind: "web",
+        blob: recordedClip.webFile,
+        sizeBytes: recordedClip.webFile.size,
+        contentType: recordedClip.webFile.type || recordedClip.contentType || null,
+      };
+    }
+
     const response = await fetch(recordedClip.uri);
     if (!response.ok) {
       throw new Error("웹 녹음 파일을 읽는 데 실패했습니다.");
@@ -812,6 +1047,49 @@ async function getRecordedClipUploadPayload(recordedClip: RecordedClip): Promise
     sizeBytes: fileInfo.size,
     contentType: recordedClip.contentType || null,
   };
+}
+
+async function uploadClipToSession(
+  sessionId: string,
+  targetClip: RecordedClip,
+  partNumber: number,
+  options: {
+    totalDurationMs?: number;
+    expectedPartCount?: number;
+    onProgress?: (percent: number) => void;
+  },
+) {
+  const uploadPayload = await getRecordedClipUploadPayload(targetClip);
+  const contentType = uploadPayload.contentType || guessAudioContentType(targetClip.fileName);
+  const uploadFileName = ensureAudioFileName(targetClip.fileName, contentType);
+
+  const presign = await createRecordingSessionPartPresign(sessionId, {
+    partNumber,
+    fileName: uploadFileName,
+    contentType,
+    sizeBytes: uploadPayload.sizeBytes,
+  });
+
+  await uploadRecordedClipToPresignedUrl(
+    presign.uploadUrl,
+    uploadPayload,
+    contentType,
+    options.onProgress ?? (() => undefined),
+  );
+
+  const completed = await completeRecordingSessionPart(sessionId, presign.partId, {
+    durationMs: targetClip.durationMs || undefined,
+    sizeBytes: uploadPayload.sizeBytes,
+  });
+
+  await finalizeRecordingSession(
+    sessionId,
+    options.expectedPartCount,
+    options.totalDurationMs && options.totalDurationMs > 0 ? options.totalDurationMs : undefined,
+  );
+  await enqueueRecordingSessionProcessing(sessionId, true);
+
+  return completed;
 }
 
 async function uploadRecordedClipToPresignedUrl(
@@ -863,6 +1141,27 @@ async function uploadRecordedClipToPresignedUrl(
   }
 }
 
+function getRecordingSessionSource(recordedClip?: RecordedClip | null): RecordingSessionSource {
+  return recordedClip?.source === "imported" ? "MANUAL_UPLOAD" : "MOBILE";
+}
+
+function validateManualUploadAsset(asset: DocumentPicker.DocumentPickerAsset) {
+  const normalizedName = (asset.name || asset.uri).toLowerCase();
+  const matchedExtension = MANUAL_UPLOAD_ALLOWED_EXTENSIONS.find((ext) => normalizedName.endsWith(ext));
+
+  if (!matchedExtension) {
+    throw new Error(
+      `파일 가져오기는 ${MANUAL_UPLOAD_ALLOWED_EXTENSIONS.join(", ")} 형식만 지원합니다.`,
+    );
+  }
+
+  if (typeof asset.size === "number" && asset.size > MANUAL_UPLOAD_MAX_BYTES) {
+    throw new Error(
+      `가져오는 파일은 최대 ${Math.round(MANUAL_UPLOAD_MAX_BYTES / 1024 / 1024)}MB까지 지원합니다. 더 큰 파일은 나눠서 업로드해 주세요.`,
+    );
+  }
+}
+
 function guessAudioContentType(fileName: string) {
   const lower = fileName.toLowerCase();
   if (lower.endsWith(".m4a")) return "audio/mp4";
@@ -871,6 +1170,14 @@ function guessAudioContentType(fileName: string) {
   if (lower.endsWith(".mp3")) return "audio/mpeg";
   if (lower.endsWith(".webm")) return "audio/webm";
   return "audio/mp4";
+}
+
+function resolveSessionTotalDurationMs(session: RecordingSessionStatusResponse | null, targetClip: RecordedClip) {
+  if (targetClip.durationMs > 0) {
+    return targetClip.durationMs;
+  }
+
+  return session?.totalDurationMs ?? undefined;
 }
 
 function ensureAudioFileName(fileName: string, contentType?: string | null) {
@@ -948,6 +1255,17 @@ function formatDateTime(value: string) {
   return date.toLocaleString();
 }
 
+function formatFileSize(value?: number | null) {
+  if (!value || value <= 0) return "-";
+  if (value >= 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(1)}MB`;
+  }
+  if (value >= 1024) {
+    return `${Math.round(value / 1024)}KB`;
+  }
+  return `${value}B`;
+}
+
 const styles = StyleSheet.create({
   container: {
     backgroundColor: "#f8fafc",
@@ -977,6 +1295,18 @@ const styles = StyleSheet.create({
   cardText: {
     color: "#334155",
     lineHeight: 20
+  },
+  recoveryCard: {
+    borderWidth: 1,
+    borderColor: "#fed7aa",
+    backgroundColor: "#fff7ed",
+    borderRadius: 18,
+    padding: 14,
+    gap: 8
+  },
+  recoveryTitle: {
+    color: "#9a3412",
+    fontWeight: "800"
   },
   statusSummaryCard: {
     backgroundColor: "#ffffff",
@@ -1177,6 +1507,10 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 14,
     gap: 4
+  },
+  partRowFailed: {
+    borderColor: "#fdba74",
+    backgroundColor: "#fff7ed"
   },
   partTitle: {
     color: "#0f172a",

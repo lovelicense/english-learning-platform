@@ -14,31 +14,24 @@ export default function HomeScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.eyebrow}>Mobile MVP</Text>
-      <Text style={styles.title}>English Learning Mobile</Text>
+      <Text style={styles.title}>내말영어</Text>
       <Text style={styles.description}>
-        실사용 흐름은 녹음, STT 확인, 표현 생성, 복습 순서입니다. 홈 탭에서는 오늘 바로 들어갈 작업과 현재 앱 준비 상태만 간단히 보여줍니다.
+        내 말로 배우는 영어학습
       </Text>
+      {loading ? (
+        <ActivityIndicator color="#2563eb" />
+      ) : (
+        <View style={styles.statusPill}>
+          <Text style={styles.statusPillText}>로그인 상태: {user?.email ?? storedEmail ?? "not signed in"}</Text>
+        </View>
+      )}
+      {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <View style={styles.heroCard}>
         <Text style={styles.heroTitle}>오늘 바로 할 수 있는 것</Text>
         <Text style={styles.heroText}>1. 실제 상황을 녹음하고 STT 결과를 정리하기</Text>
         <Text style={styles.heroText}>2. 한국어 문장을 영어 표현으로 바꾸고 TTS로 듣기</Text>
         <Text style={styles.heroText}>3. 복습 카드에서 텍스트/음성으로 답해보기</Text>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Current Status</Text>
-        {loading ? (
-          <ActivityIndicator color="#2563eb" />
-        ) : (
-          <>
-            <Text style={styles.cardText}>로그인 상태: {user?.email ?? storedEmail ?? "not signed in"}</Text>
-            <Text style={styles.cardText}>모바일 핵심 루프: 구현 완료 후 QA 단계</Text>
-            <Text style={styles.cardText}>다음 포커스: 실기기 검증, UX 다듬기, 학습 설정 연결</Text>
-            {error ? <Text style={styles.error}>{error}</Text> : null}
-          </>
-        )}
       </View>
 
       <View style={styles.grid}>
@@ -117,6 +110,17 @@ const styles = StyleSheet.create({
   description: {
     color: "#475569",
     lineHeight: 22,
+  },
+  statusPill: {
+    alignSelf: "flex-start",
+    backgroundColor: "#e2e8f0",
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  statusPillText: {
+    color: "#334155",
+    fontWeight: "700",
   },
   heroCard: {
     backgroundColor: "#0f172a",

@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { router, useFocusEffect } from "expo-router";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import * as FileSystem from "expo-file-system";
+import { ActivityIndicator, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from "react-native";
+import { exportAssets, type ExportAssetType, type ExportFormat } from "../src/lib/api/exports";
 import {
   getLearningAssetsCatalog,
   getLearningAssetsProgress,
@@ -22,6 +24,8 @@ type VocabularyAssetItem = LearningAssetsCatalog["vocabularyCategories"][number]
   categoryNameKo: string;
 };
 
+const EXPORT_DIRECTORY_NAME = "exports";
+
 export default function LearningAssetsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -32,6 +36,9 @@ export default function LearningAssetsScreen() {
   const [assetFilter, setAssetFilter] = useState<AssetFilter>("priority");
   const [query, setQuery] = useState("");
   const [coreOnly, setCoreOnly] = useState(false);
+  const [exportLoadingKey, setExportLoadingKey] = useState("");
+  const [exportError, setExportError] = useState("");
+  const [exportMessage, setExportMessage] = useState("");
 
   const loadAll = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) {
@@ -137,6 +144,30 @@ export default function LearningAssetsScreen() {
   );
   const currentListCount = assetTab === "pattern" ? patternTemplates.length : vocabularyItems.length;
 
+  const handleExportAssets = useCallback(async (assetType: ExportAssetType, format: ExportFormat) => {
+    const loadingKey = `${assetType}-${format}`;
+    setExportLoadingKey(loadingKey);
+    setExportError("");
+    setExportMessage("");
+
+    try {
+      const exported = await exportAssets(assetType, format);
+      const destination = await persistExportFile(exported.fileName, exported.body, exported.contentType);
+
+      const assetLabel = assetType === "korean" ? "한글표현 자산" : "영어표현 자산";
+      const formatLabel = format.toUpperCase();
+      if (destination.kind === "shared") {
+        setExportMessage(`${assetLabel} ${formatLabel} 파일을 준비했고 공유 화면으로 넘겼습니다.`);
+      } else {
+        setExportMessage(`${assetLabel} ${formatLabel} 파일을 ${destination.locationLabel} 저장했습니다.`);
+      }
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "데이터 export에 실패했습니다.");
+    } finally {
+      setExportLoadingKey("");
+    }
+  }, []);
+
   if (loading) {
     return (
       <View style={styles.centered}>
@@ -163,6 +194,64 @@ export default function LearningAssetsScreen() {
         <Text style={styles.heroText}>
           단어 사용 가능 {progress?.overall.usableVocabularyCount ?? 0}/{progress?.overall.vocabularyItemCount ?? 0}
         </Text>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>데이터 Export</Text>
+        <Text style={styles.metaText}>
+          한국어 원문 자산과 영어 표현 자산을 JSON 또는 CSV로 저장해 다른 AI 워크플로우나 개인 정리용으로 바로 가져갈 수 있습니다.
+        </Text>
+        <View style={styles.exportBlock}>
+          <Text style={styles.assetTitle}>1. 한글표현 자산</Text>
+          <Text style={styles.metaText}>
+            원문 문장, 맥락 메모, 화자, 시간축, 관계/상황/톤, 연결된 영어 표현 정보를 함께 내보냅니다.
+          </Text>
+          <View style={styles.row}>
+            <Pressable
+              style={[styles.primaryButton, exportLoadingKey === "korean-json" && styles.buttonDisabled]}
+              onPress={() => void handleExportAssets("korean", "json")}
+              disabled={!!exportLoadingKey}
+            >
+              {exportLoadingKey === "korean-json" ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>JSON 저장</Text>}
+            </Pressable>
+            <Pressable
+              style={[styles.secondaryButton, exportLoadingKey === "korean-csv" && styles.buttonDisabled]}
+              onPress={() => void handleExportAssets("korean", "csv")}
+              disabled={!!exportLoadingKey}
+            >
+              {exportLoadingKey === "korean-csv" ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>CSV 저장</Text>}
+            </Pressable>
+          </View>
+        </View>
+        <View style={styles.exportBlock}>
+          <Text style={styles.assetTitle}>2. 영어표현 자산</Text>
+          <Text style={styles.metaText}>
+            기본형/쉬운형/자연형, 메모, 원문 연결, TTS 키, 연습 이력 요약, 패턴/단어 매칭 정보를 함께 내보냅니다.
+          </Text>
+          <View style={styles.row}>
+            <Pressable
+              style={[styles.primaryButton, exportLoadingKey === "english-json" && styles.buttonDisabled]}
+              onPress={() => void handleExportAssets("english", "json")}
+              disabled={!!exportLoadingKey}
+            >
+              {exportLoadingKey === "english-json" ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>JSON 저장</Text>}
+            </Pressable>
+            <Pressable
+              style={[styles.secondaryButton, exportLoadingKey === "english-csv" && styles.buttonDisabled]}
+              onPress={() => void handleExportAssets("english", "csv")}
+              disabled={!!exportLoadingKey}
+            >
+              {exportLoadingKey === "english-csv" ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>CSV 저장</Text>}
+            </Pressable>
+          </View>
+        </View>
+        <Text style={styles.metaText}>
+          {Platform.OS === "android"
+            ? "Android에서는 저장할 폴더를 먼저 고르고, 선택한 위치에 파일을 저장합니다."
+            : "iOS에서는 파일을 저장한 뒤 바로 공유 화면으로 넘겨 다른 앱이나 Files로 보낼 수 있습니다."}
+        </Text>
+        {exportError ? <Text style={styles.error}>{exportError}</Text> : null}
+        {exportMessage ? <Text style={styles.success}>{exportMessage}</Text> : null}
       </View>
 
       <View style={styles.card}>
@@ -462,6 +551,82 @@ function getStatusBadgeTextStyle(status: string) {
   return { color: "#b91c1c" };
 }
 
+async function persistExportFile(fileName: string, body: string, contentType: string) {
+  if (Platform.OS === "android") {
+    const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+    if (!permissions.granted || !permissions.directoryUri) {
+      throw new Error("저장할 폴더를 선택해야 export 파일을 저장할 수 있습니다.");
+    }
+
+    const { baseName, extension } = splitFileName(fileName);
+    const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(
+      permissions.directoryUri,
+      baseName,
+      contentType.split(";")[0] ?? guessMimeType(extension),
+    );
+    await FileSystem.StorageAccessFramework.writeAsStringAsync(targetUri, body, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+
+    return {
+      kind: "saved" as const,
+      locationLabel: "선택한 폴더에",
+    };
+  }
+
+  const baseDirectory = FileSystem.documentDirectory;
+  if (!baseDirectory) {
+    throw new Error("기기 문서 저장 공간을 찾지 못했습니다.");
+  }
+
+  const exportDirectory = `${baseDirectory}${EXPORT_DIRECTORY_NAME}`;
+  await FileSystem.makeDirectoryAsync(exportDirectory, { intermediates: true });
+
+  const fileUri = `${exportDirectory}/${fileName}`;
+  await FileSystem.writeAsStringAsync(fileUri, body, {
+    encoding: FileSystem.EncodingType.UTF8,
+  });
+
+  await Share.share(
+    {
+      title: fileName,
+      url: fileUri,
+      message: `English Learning export: ${fileName}`,
+    },
+    {
+      subject: fileName,
+    },
+  );
+
+  return {
+    kind: "shared" as const,
+    locationLabel: fileUri,
+  };
+}
+
+function splitFileName(fileName: string) {
+  const dotIndex = fileName.lastIndexOf(".");
+  if (dotIndex === -1) {
+    return {
+      baseName: fileName,
+      extension: "",
+    };
+  }
+
+  return {
+    baseName: fileName.slice(0, dotIndex),
+    extension: fileName.slice(dotIndex + 1).toLowerCase(),
+  };
+}
+
+function guessMimeType(extension: string) {
+  if (extension === "csv") {
+    return "text/csv";
+  }
+
+  return "application/json";
+}
+
 const styles = StyleSheet.create({
   container: {
     padding: 24,
@@ -516,6 +681,14 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     color: "#0f172a",
+  },
+  exportBlock: {
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 16,
+    padding: 14,
+    backgroundColor: "#f8fbff",
   },
   metricsGrid: {
     gap: 12,
@@ -714,6 +887,10 @@ const styles = StyleSheet.create({
   },
   error: {
     color: "#dc2626",
+    lineHeight: 20,
+  },
+  success: {
+    color: "#166534",
     lineHeight: 20,
   },
 });

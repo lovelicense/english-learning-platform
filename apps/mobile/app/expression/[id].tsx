@@ -1,8 +1,9 @@
 import { Audio } from "expo-av";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import {
+  deleteExpression,
   generateExpressionTts,
   listExpressions,
   type ExpressionResponse,
@@ -18,6 +19,7 @@ export default function ExpressionDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [savingMemo, setSavingMemo] = useState(false);
   const [ttsLoading, setTtsLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -187,6 +189,39 @@ export default function ExpressionDetailScreen() {
     }
   }
 
+  function handleDeleteExpression() {
+    if (!expression || deleting) return;
+
+    const confirmDelete = async () => {
+      setDeleting(true);
+      setError("");
+      setMessage("");
+      try {
+        await stopPlayback();
+        await deleteExpression(expression.id);
+        router.replace("/expressions");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "표현 삭제에 실패했습니다.");
+      } finally {
+        setDeleting(false);
+      }
+    };
+
+    const deleteMessage = `"${expression.englishBase}" 표현을 삭제할까요? 오늘의 복습 기록에서도 제외됩니다.`;
+
+    if (typeof window !== "undefined" && typeof window.confirm === "function") {
+      if (window.confirm(deleteMessage)) {
+        void confirmDelete();
+      }
+      return;
+    }
+
+    Alert.alert("표현 삭제", deleteMessage, [
+      { text: "취소", style: "cancel" },
+      { text: "삭제", style: "destructive", onPress: () => void confirmDelete() },
+    ]);
+  }
+
   if (loading) {
     return (
       <View style={styles.centered}>
@@ -213,6 +248,11 @@ export default function ExpressionDetailScreen() {
         <Pressable style={[styles.secondaryButton, refreshing && styles.buttonDisabled]} onPress={() => void loadExpression(true)} disabled={refreshing}>
           {refreshing ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>새로고침</Text>}
         </Pressable>
+        {expression ? (
+          <Pressable style={[styles.dangerButton, deleting && styles.buttonDisabled]} onPress={() => handleDeleteExpression()} disabled={deleting}>
+            {deleting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>삭제</Text>}
+          </Pressable>
+        ) : null}
       </View>
 
       {error ? (
@@ -278,6 +318,14 @@ export default function ExpressionDetailScreen() {
         </Pressable>
       </View>
 
+      <View style={styles.dangerCard}>
+        <Text style={styles.cardTitle}>정리 액션</Text>
+        <Text style={styles.metaText}>표현을 삭제하면 목록과 오늘의 복습에서 함께 제외됩니다. 패턴/단어 학습 이력은 유지됩니다.</Text>
+        <Pressable style={[styles.dangerButton, deleting && styles.buttonDisabled]} onPress={() => handleDeleteExpression()} disabled={deleting}>
+          {deleting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>이 표현 삭제</Text>}
+        </Pressable>
+      </View>
+
       <View style={styles.card}>
         <Text style={styles.cardTitle}>원문 맥락</Text>
         {sourceSummary.map((item) => (
@@ -319,6 +367,14 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 20,
     gap: 10
+  },
+  dangerCard: {
+    backgroundColor: "#fff7ed",
+    borderRadius: 20,
+    padding: 20,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#fed7aa"
   },
   highlightCard: {
     backgroundColor: "#eff6ff",
@@ -394,6 +450,13 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     backgroundColor: "#e2e8f0",
+    borderRadius: 999,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    alignItems: "center"
+  },
+  dangerButton: {
+    backgroundColor: "#dc2626",
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 18,

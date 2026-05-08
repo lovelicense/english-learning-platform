@@ -135,6 +135,12 @@ export async function updateExpressionMemo(expressionId: string, userMemo?: stri
   });
 }
 
+export async function deleteExpression(expressionId: string) {
+  return apiFetch<{ success: boolean; expressionId: string }>(`/expressions/${expressionId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function savePracticeExpression(input: SavePracticeExpressionInput) {
   return apiFetch<ExpressionResponse>("/expressions/save-practice", {
     method: "POST",

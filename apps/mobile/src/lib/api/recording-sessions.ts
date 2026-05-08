@@ -1,5 +1,7 @@
 import { apiFetch } from "./client";
 
+export type RecordingSessionSource = "MOBILE" | "MANUAL_UPLOAD";
+
 export type RecordingSessionCreateResponse = {
   sessionId: string;
   status: string;
@@ -48,12 +50,15 @@ export type RecordingSessionStatusResponse = {
   }>;
 };
 
-export async function createRecordingSession(title?: string) {
+export async function createRecordingSession(input?: {
+  title?: string;
+  source?: RecordingSessionSource;
+}) {
   return apiFetch<RecordingSessionCreateResponse>("/recording-sessions", {
     method: "POST",
     body: JSON.stringify({
-      source: "MOBILE",
-      title: title?.trim() || undefined,
+      source: input?.source ?? "MOBILE",
+      title: input?.title?.trim() || undefined,
     }),
   });
 }

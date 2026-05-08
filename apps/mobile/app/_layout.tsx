@@ -12,7 +12,6 @@ export default function RootLayout() {
       <Stack.Screen name="dialogue-practice/[id]" options={{ title: "Dialogue Practice" }} />
       <Stack.Screen name="learning-assets" options={{ title: "Learning Assets" }} />
       <Stack.Screen name="person-profiles" options={{ title: "People Dictionary" }} />
-      <Stack.Screen name="quick-sentence" options={{ title: "Quick Save" }} />
       <Stack.Screen name="recording/[id]" options={{ title: "Recording Detail" }} />
       <Stack.Screen name="expression/[id]" options={{ title: "Expression Detail" }} />
     </Stack>
