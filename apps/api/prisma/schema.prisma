@@ -157,6 +157,7 @@ model Recording {
   userId               String
   audioKey             String
   fileName             String
+  displayName          String?
   status               RecordingStatus @default(UPLOADED)
   diarization          Boolean         @default(false)
   analysisSummary      String?

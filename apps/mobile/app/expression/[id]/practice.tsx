@@ -663,8 +663,8 @@ export default function ExpressionPracticeScreen() {
         </Text>
         <Text style={styles.korean}>{expression?.koreanText ?? "-"}</Text>
         <Text style={styles.base}>{expression?.englishBase ?? "-"}</Text>
-        <Text style={styles.sub}>easy: {expression?.englishEasy ?? "-"}</Text>
-        <Text style={styles.sub}>natural: {expression?.englishNatural ?? "-"}</Text>
+        <Text style={styles.sub}>쉬운형: {expression?.englishEasy ?? "-"}</Text>
+        <Text style={styles.sub}>자연형: {expression?.englishNatural ?? "-"}</Text>
         <Text style={styles.metaText}>연습 {expression?.practiceCount ?? 0}회 · 최근 점수 {expression?.latestPracticeScore ?? "-"}</Text>
       </View>
 
@@ -789,8 +789,8 @@ export default function ExpressionPracticeScreen() {
             {recordedClip ? (
               <View style={styles.clipCard}>
                 <Text style={styles.partTitle}>저장된 음성</Text>
-                <Text style={styles.partMeta}>file: {recordedClip.fileName}</Text>
-                <Text style={styles.partMeta}>duration: {formatDurationMs(recordedClip.durationMs)}</Text>
+                <Text style={styles.partMeta}>파일명: {recordedClip.fileName}</Text>
+                <Text style={styles.partMeta}>길이: {formatDurationMs(recordedClip.durationMs)}</Text>
               </View>
             ) : (
               <Text style={styles.metaText}>아직 저장된 음성 답변이 없습니다.</Text>

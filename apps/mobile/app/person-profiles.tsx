@@ -8,6 +8,7 @@ import {
   updatePersonProfile,
 } from "../src/lib/api/person-profiles";
 import type { PersonProfileResponse } from "../src/lib/api/recordings";
+import { mobileTheme } from "../src/theme/colors";
 
 type PersonProfileDraft = {
   name: string;
@@ -26,6 +27,8 @@ const EMPTY_DRAFT: PersonProfileDraft = {
   notes: "",
   isMe: false,
 };
+
+const theme = mobileTheme.colors;
 
 function toDraft(profile?: PersonProfileResponse | null): PersonProfileDraft {
   if (!profile) return EMPTY_DRAFT;
@@ -187,7 +190,7 @@ export default function PersonProfilesScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>People Dictionary</Text>
+      <Text style={styles.title}>개인 인물 사전</Text>
       <Text style={styles.description}>
         자주 등장하는 가족, 친구, 선생님 같은 인물을 미리 등록해 두면 녹음 상세에서 관련 인물 선택과 화자 연결이 빨라집니다.
       </Text>
@@ -213,7 +216,7 @@ export default function PersonProfilesScreen() {
           <Text style={styles.secondaryButtonText}>새 인물 추가</Text>
         </Pressable>
         {loading ? (
-          <ActivityIndicator color="#2563eb" />
+          <ActivityIndicator color={theme.brand} />
         ) : filteredProfiles.length > 0 ? (
           filteredProfiles.map((profile) => {
             const selected = selectedProfileId === profile.id;
@@ -329,29 +332,31 @@ export default function PersonProfilesScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.background,
     padding: 24,
-    gap: 16,
+    gap: 18,
   },
   title: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   description: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 22,
   },
   card: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
     borderRadius: 24,
     padding: 20,
     gap: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   cardTitle: {
     fontSize: 18,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   headRow: {
     flexDirection: "row",
@@ -361,30 +366,30 @@ const styles = StyleSheet.create({
   },
   input: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
-    backgroundColor: "#ffffff",
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    color: "#0f172a",
+    color: theme.text,
   },
   multilineInput: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
-    backgroundColor: "#ffffff",
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
     minHeight: 100,
-    color: "#0f172a",
+    color: theme.text,
     textAlignVertical: "top",
   },
   fieldLabel: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
   },
   helperText: {
-    color: "#64748b",
+    color: theme.textMuted,
     lineHeight: 20,
   },
   buttonRow: {
@@ -393,36 +398,38 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   primaryButton: {
-    backgroundColor: "#2563eb",
+    backgroundColor: theme.brand,
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 18,
     alignItems: "center",
   },
   primaryButtonText: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontWeight: "800",
   },
   secondaryButton: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 18,
     alignItems: "center",
   },
   secondaryButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
   },
   dangerButtonSmall: {
-    backgroundColor: "#dc2626",
+    backgroundColor: theme.danger,
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 14,
     alignItems: "center",
   },
   dangerButtonText: {
-    color: "#ffffff",
+    color: theme.textOnDark,
     fontWeight: "800",
   },
   buttonDisabled: {
@@ -430,14 +437,15 @@ const styles = StyleSheet.create({
   },
   profileCard: {
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: theme.border,
     borderRadius: 18,
     padding: 14,
     gap: 6,
+    backgroundColor: theme.surface,
   },
   profileCardSelected: {
-    borderColor: "#93c5fd",
-    backgroundColor: "#f8fbff",
+    borderColor: theme.brand,
+    backgroundColor: theme.surfaceBrand,
   },
   profileHead: {
     flexDirection: "row",
@@ -450,12 +458,12 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   profileName: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
     fontSize: 16,
   },
   profileMeta: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 20,
   },
   switchRow: {
@@ -470,15 +478,15 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   switchTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
   },
   error: {
-    color: "#dc2626",
+    color: theme.danger,
     lineHeight: 20,
   },
   success: {
-    color: "#15803d",
+    color: theme.success,
     lineHeight: 20,
   },
 });

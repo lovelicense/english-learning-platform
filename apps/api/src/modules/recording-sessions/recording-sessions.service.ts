@@ -23,6 +23,52 @@ export class RecordingSessionsService {
     private readonly storage: StorageService,
   ) {}
 
+  private buildRecordingDisplayName(baseTitle: string, partNumber: number, totalParts: number) {
+    const normalizedTitle = baseTitle.trim();
+    if (!normalizedTitle) {
+      return null;
+    }
+    if (totalParts <= 1) {
+      return normalizedTitle;
+    }
+    return `${normalizedTitle} (${partNumber}/${totalParts})`;
+  }
+
+  private async syncRecordingDisplayNames(sessionId: string) {
+    const session = await this.prisma.recordingSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        parts: {
+          where: {
+            recordingId: {
+              not: null,
+            },
+          },
+          orderBy: { partNumber: 'asc' },
+        },
+      },
+    });
+
+    const baseTitle = session?.title?.trim();
+    if (!session || !baseTitle || session.parts.length === 0) {
+      return;
+    }
+
+    const totalParts = Math.max(session.expectedPartCount ?? session.parts.length, session.parts.length, 1);
+    await this.prisma.$transaction(
+      session.parts
+        .filter((part) => Boolean(part.recordingId))
+        .map((part) =>
+          this.prisma.recording.update({
+            where: { id: part.recordingId! },
+            data: {
+              displayName: this.buildRecordingDisplayName(baseTitle, part.partNumber, totalParts),
+            },
+          } as any),
+        ),
+    );
+  }
+
   async createSession(userId: string, input: { source: RecordingSource; title?: string }) {
     const session = await this.prisma.recordingSession.create({
       data: {
@@ -109,6 +155,11 @@ export class RecordingSessionsService {
     partId: string,
     input: { durationMs?: number; sizeBytes?: number },
   ) {
+    const session = await this.prisma.recordingSession.findFirst({
+      where: { id: sessionId, userId },
+    });
+    if (!session) throw new NotFoundException('녹음 세션을 찾을 수 없습니다.');
+
     const part = await this.prisma.recordingPart.findFirst({
       where: { id: partId, sessionId, session: { userId } },
     });
@@ -129,9 +180,10 @@ export class RecordingSessionsService {
               userId,
               audioKey: part.audioKey,
               fileName: part.fileName,
+              displayName: session.title?.trim() || null,
               status: RecordingStatus.UPLOADED,
             },
-          });
+          } as any);
 
     const updated = await this.prisma.recordingPart.update({
       where: { id: partId },
@@ -184,6 +236,8 @@ export class RecordingSessionsService {
         completedAt: new Date(),
       },
     });
+
+    await this.syncRecordingDisplayNames(sessionId);
 
     return {
       sessionId: finalized.id,

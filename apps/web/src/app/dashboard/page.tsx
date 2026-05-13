@@ -47,6 +47,7 @@ type PersonProfile = {
 type RecordingResponse = {
   id: string;
   fileName: string;
+  displayName?: string | null;
   status: string;
   audioUrl?: string;
   diarization?: boolean;
@@ -64,6 +65,7 @@ type RecordingResponse = {
 type RecordingSummary = {
   id: string;
   fileName: string;
+  displayName?: string | null;
   status: string;
   diarization: boolean;
   createdAt: string;
@@ -99,6 +101,7 @@ type Expression = {
   utterance?: {
     recording?: {
       id: string;
+      displayName?: string | null;
       fileName?: string | null;
       createdAt?: string;
     } | null;
@@ -688,6 +691,14 @@ function formatAiConversationModeSummary(outputMode: AiOutputMode, inputMode: Ai
   return `AI ${outputMode === "voice" ? "음성" : "텍스트"} · 답변 ${inputMode === "voice" ? "음성(STT)" : "텍스트"}`;
 }
 
+function getRecordingDisplayName(recording: { displayName?: string | null; fileName?: string | null } | null | undefined) {
+  const trimmedDisplayName = recording?.displayName?.trim();
+  if (trimmedDisplayName) {
+    return trimmedDisplayName;
+  }
+  return recording?.fileName?.trim() || "이 녹음";
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
@@ -697,6 +708,7 @@ export default function DashboardPage() {
   const [recordingDuration, setRecordingDuration] = useState(20000);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [recording, setRecording] = useState<RecordingResponse | null>(null);
+  const [recordingDisplayNameDraft, setRecordingDisplayNameDraft] = useState("");
   const [recordingContext, setRecordingContext] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
   const [recordingContextDraft, setRecordingContextDraft] = useState<RecordingGenerationContext>(EMPTY_RECORDING_CONTEXT);
   const [recordingAnalysis, setRecordingAnalysis] = useState<RecordingAnalysis | null>(null);
@@ -967,6 +979,7 @@ export default function DashboardPage() {
         expression.sourceSituation ?? "",
         expression.sourceTone ?? "",
         expression.sourceContextNote ?? "",
+        expression.utterance?.recording?.displayName ?? "",
         expression.utterance?.recording?.fileName ?? "",
       ]
         .join(" ")
@@ -1155,6 +1168,10 @@ export default function DashboardPage() {
   const analysisStatus = recording?.analysisStatus ?? (hasAnyAnalysis ? "OK" : "NOT_ANALYZED");
   const isReviewAnswerHidden =
     Boolean(activeReviewExpressionId) && selectedExpression?.id === activeReviewExpressionId && !score;
+
+  useEffect(() => {
+    setRecordingDisplayNameDraft(recording?.displayName?.trim() || "");
+  }, [recording?.displayName, recording?.id]);
 
   const currentFlowStep = flowStepId ? stepMap[flowStepId] : null;
   const flowProgress = useMemo(() => {
@@ -4652,9 +4669,38 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       setScore(null);
       setTtsUrl("");
       focusSelectedRecordingDetail();
-      setMessage(`이전 녹음 "${loaded.fileName}"을 불러왔습니다. 이어서 문장 수정, 표현 생성, TTS 생성을 진행할 수 있습니다.`);
+      setMessage(`이전 녹음 "${getRecordingDisplayName(loaded)}"을 불러왔습니다. 이어서 문장 수정, 표현 생성, TTS 생성을 진행할 수 있습니다.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "이전 녹음을 불러오지 못했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleSaveRecordingDisplayName() {
+    if (!recording?.id) return;
+
+    const normalizedDraft = recordingDisplayNameDraft.trim();
+    const normalizedCurrent = recording.displayName?.trim() || "";
+    if (normalizedDraft === normalizedCurrent) {
+      setMessage("변경된 녹음 이름이 없어 저장하지 않았습니다.");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    setLoading("recording-display-name");
+    try {
+      const updated = await apiFetch<RecordingResponse>(`/recordings/${recording.id}/display-name`, {
+        method: "PATCH",
+        body: JSON.stringify({ displayName: normalizedDraft }),
+      });
+      setRecordingWithDrafts(updated);
+      await refreshRecordings();
+      await refreshLists(selectedExpressionId || undefined);
+      setMessage(normalizedDraft ? "녹음 이름을 저장했습니다." : "녹음 이름을 비우고 파일명 표시로 되돌렸습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "녹음 이름 저장에 실패했습니다.");
     } finally {
       setLoading("");
     }
@@ -4825,7 +4871,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
 
   async function handleDeleteRecording(recordingId: string) {
     const target = recordings.find((item) => item.id === recordingId);
-    const confirmed = window.confirm(`"${target?.fileName ?? "이 녹음"}"을 삭제할까요? 이미 생성한 영어 표현은 남기고, 녹음과 텍스트 변환 결과만 삭제합니다.`);
+    const confirmed = window.confirm(`"${getRecordingDisplayName(target)}"을 삭제할까요? 이미 생성한 영어 표현은 남기고, 녹음과 텍스트 변환 결과만 삭제합니다.`);
     if (!confirmed) return;
 
     setError("");
@@ -4860,7 +4906,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       });
       setRecordingWithDrafts(processed);
       await refreshRecordings();
-      setMessage(`"${processed.fileName}" 텍스트 변환을 다시 실행했고, 결과를 불러왔습니다.`);
+      setMessage(`"${getRecordingDisplayName(processed)}" 텍스트 변환을 다시 실행했고, 결과를 불러왔습니다.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "텍스트 변환 다시 실행에 실패했습니다.");
     } finally {
@@ -4899,7 +4945,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
           <div
             key={set.id}
             className="ai-conversation-draft-item"
-            style={activeDialoguePracticeSetId === set.id ? { borderColor: "#60a5fa", background: "#eff6ff" } : undefined}
+            style={activeDialoguePracticeSetId === set.id ? { borderColor: "var(--brand-soft)", background: "var(--surface-brand)" } : undefined}
           >
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
               <strong>{set.title}</strong>
@@ -5022,7 +5068,12 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       : [];
 
     return (
-      <div ref={dialoguePlayerRef} tabIndex={-1} className="mini-card" style={{ marginTop: 14, borderColor: "#bfdbfe", background: "#f8fbff" }}>
+      <div
+        ref={dialoguePlayerRef}
+        tabIndex={-1}
+        className="mini-card"
+        style={{ marginTop: 14, borderColor: "var(--brand-soft)", background: "var(--surface-brand)" }}
+      >
         <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
           <strong>다이얼로그 플레이어</strong>
           <span className="tag tag-primary">
@@ -5284,7 +5335,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
       <section className="card hero compact">
         <div className="row mobile-header-row" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <h1 className="h1" style={{ marginBottom: 8 }}>내 언어 데이터 대시보드</h1>
+            <h1 className="h1" style={{ marginBottom: 8 }}>내말영어 홈</h1>
             <p className="muted">로그인 사용자: <strong>{user?.email ?? getStoredUser()?.email ?? "-"}</strong></p>
             <p className="muted" style={{ marginTop: 8 }}>
               녹음, 문장, 표현, 테스트 기록을 한곳에 모아 정리하고 학습과 재활용으로 이어갑니다.
@@ -6303,7 +6354,12 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                 {visibleRecordings.map((item, index) => (
                   <div key={item.id} className="mini-card">
                     <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                      <strong>{index + 1}. {item.fileName}</strong>
+                      <div>
+                        <strong>{index + 1}. {getRecordingDisplayName(item)}</strong>
+                        {item.displayName?.trim() && item.displayName.trim() !== item.fileName.trim() ? (
+                          <div className="muted" style={{ marginTop: 6 }}>{item.fileName}</div>
+                        ) : null}
+                      </div>
                       <span className={`tag ${item.status === "PROCESSED" ? "tag-primary" : "tag-muted"}`}>{item.status}</span>
                     </div>
                     <div className="muted" style={{ marginTop: 8 }}>
@@ -6380,7 +6436,25 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   상태: {recording.status} · 문장 수: {recording.utterances.length}
                 </div>
                 <div className="muted" style={{ marginTop: 8 }}>
+                  표시 이름: {getRecordingDisplayName(recording)}
+                </div>
+                <div className="muted" style={{ marginTop: 8 }}>
                   원본 파일: {recording.fileName}
+                </div>
+                <div className="row" style={{ marginTop: 12 }}>
+                  <input
+                    className="input"
+                    style={{ maxWidth: 320 }}
+                    value={recordingDisplayNameDraft}
+                    onChange={(event) => setRecordingDisplayNameDraft(event.target.value)}
+                    placeholder="예: 강남역 카페 대화"
+                  />
+                  <button className="button secondary" onClick={handleSaveRecordingDisplayName} disabled={!!loading}>
+                    {loading === "recording-display-name" ? "저장 중..." : "이름 저장"}
+                  </button>
+                  <button className="button ghost" onClick={() => setRecordingDisplayNameDraft("")} disabled={!!loading}>
+                    이름 비우기
+                  </button>
                 </div>
                 <div className="muted" style={{ marginTop: 8 }}>
                   현재 내 화자: {speakerOptions.find((item) => item.isMine)?.speakerLabel ?? "선택되지 않음"}
@@ -7000,7 +7074,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                           {expression.utteranceId ? "녹음 문장" : "빠른 저장"}
                         </span>
                         {expression.utterance?.recording?.fileName && (
-                          <span className="tag tag-muted">{expression.utterance.recording.fileName}</span>
+                          <span className="tag tag-muted">{getRecordingDisplayName(expression.utterance.recording)}</span>
                         )}
                       </div>
                     </button>
@@ -7081,7 +7155,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                       <strong>출처</strong>
                       <div style={{ marginTop: 8 }}>
                         {selectedBrowserExpression.utterance?.recording?.fileName
-                          ? selectedBrowserExpression.utterance.recording.fileName
+                          ? getRecordingDisplayName(selectedBrowserExpression.utterance.recording)
                           : selectedBrowserExpression.utteranceId
                           ? "연결된 녹음 문장"
                           : "빠른 저장 문장"}
@@ -7172,7 +7246,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                         영어 대화는 표현 자산과 다이얼로그 연습으로, 한국어 대화는 원천 데이터 수집 후 기존 영어 표현 생성 흐름으로 연결합니다.
                       </div>
                     </div>
-                    <span className="badge" style={{ background: "#dbeafe", color: "#1d4ed8" }}>
+                    <span className="badge" style={{ background: "var(--brand-soft)", color: "var(--brand-strong)", borderColor: "var(--brand-soft)" }}>
                       {aiConversationTab === "english" ? "영어 자산화 트랙" : "한국어 수집 트랙"}
                     </span>
                   </div>
@@ -8041,7 +8115,7 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   </div>
                 )}
 
-                <div className="mini-card" style={{ borderColor: "#bfdbfe", background: "#f8fbff" }}>
+                <div className="mini-card" style={{ borderColor: "var(--brand-soft)", background: "var(--surface-brand)" }}>
                   <strong>다음 구현 단계</strong>
                   <div className="muted" style={{ marginTop: 8 }}>
                     현재는 AI 대화 입력, 응답, 표현 생성, 다이얼로그 변환까지 한 흐름으로 연결되어 있습니다.
@@ -8080,7 +8154,11 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                 `${practiceFocusLabel} · 선택 표현 ${selectedExpression ? 1 : 0}개 · 복습 대상 ${reviews.length}개`,
               )}
             </div>
-            {flowStepId === "complete" && <span className="badge" style={{ background: "#dbeafe" }}>자동 이동 완료</span>}
+            {flowStepId === "complete" && (
+              <span className="badge" style={{ background: "var(--brand-soft)", color: "var(--brand-strong)", borderColor: "var(--brand-soft)" }}>
+                자동 이동 완료
+              </span>
+            )}
           </div>
           {expandedSections.practice && (
           <div className="grid" style={{ marginTop: 14 }}>
@@ -8094,9 +8172,11 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                   </div>
                 </div>
                 <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                  <span className="badge" style={{ background: "#dbeafe", color: "#1d4ed8" }}>{practiceFocusLabel}</span>
+                  <span className="badge" style={{ background: "var(--brand-soft)", color: "var(--brand-strong)", borderColor: "var(--brand-soft)" }}>
+                    {practiceFocusLabel}
+                  </span>
                   {activeReviewItem && (
-                    <span className="badge" style={{ background: "#e0f2fe", color: "#0f172a" }}>
+                    <span className="badge" style={{ background: "var(--surface-muted)", color: "var(--text)", borderColor: "var(--border)" }}>
                       진행 {activeReviewIndex + 1}/{reviews.length}
                     </span>
                   )}
@@ -8615,8 +8695,10 @@ function speakReviewQuestion(text: string, onEnd?: () => void) {
                       </div>
                     </div>
                     <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                      <span className="badge" style={{ background: "#e0f2fe", color: "#0f172a" }}>점수 {item.score}</span>
-                      <span className="badge" style={{ background: "#f8fafc", color: "#334155" }}>
+                      <span className="badge" style={{ background: "var(--surface-brand)", color: "var(--text)", borderColor: "var(--brand-soft)" }}>
+                        점수 {item.score}
+                      </span>
+                      <span className="badge" style={{ background: "var(--surface-soft)", color: "var(--text-soft)", borderColor: "var(--border)" }}>
                         {item.mode === "voice" ? "음성" : "텍스트"} · {formatPracticeTypeLabel(item.testType)}
                       </span>
                     </div>

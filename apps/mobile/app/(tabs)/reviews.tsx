@@ -25,6 +25,9 @@ import {
   getLearningPreferences,
   type LearningPreferences,
 } from "../../src/lib/learning-preferences";
+import { mobileTheme } from "../../src/theme/colors";
+
+const theme = mobileTheme.colors;
 
 type ReviewStrategy = "system" | "low_score" | "stale" | "voice_gap" | "random";
 type PracticeTestType = "translation" | "situation" | "pattern" | "think";
@@ -698,7 +701,7 @@ export default function ReviewsScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator color="#2563eb" />
+        <ActivityIndicator color={theme.brand} />
         <Text style={styles.description}>복습 목록을 불러오는 중입니다.</Text>
       </View>
     );
@@ -706,7 +709,7 @@ export default function ReviewsScreen() {
 
   return (
     <ScrollView ref={scrollViewRef} contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Reviews</Text>
+      <Text style={styles.title}>복습</Text>
       <Text style={styles.description}>추천 복습 카드에서 문제를 만들고, 텍스트나 음성으로 바로 답해보는 모바일 연습 플레이어입니다.</Text>
 
       <View style={styles.card}>
@@ -729,7 +732,7 @@ export default function ReviewsScreen() {
           ))}
         </View>
         <Pressable style={[styles.secondaryButton, refreshing && styles.buttonDisabled]} onPress={() => void handleRefresh()} disabled={refreshing}>
-          {refreshing ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>목록 새로고침</Text>}
+          {refreshing ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>목록 새로고침</Text>}
         </Pressable>
       </View>
 
@@ -809,7 +812,7 @@ export default function ReviewsScreen() {
                 onPress={() => void handleGeneratePrompt(selectedTestType)}
                 disabled={!selectedReview || promptLoading}
               >
-                {promptLoading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>문제 생성(시작)</Text>}
+                {promptLoading ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>문제 생성(시작)</Text>}
               </Pressable>
               <Pressable
                 style={[styles.secondaryButton, !selectedExpression?.ttsUrl && styles.buttonDisabled]}
@@ -870,7 +873,7 @@ export default function ReviewsScreen() {
                   onPress={() => void handleScoreAnswer()}
                   disabled={!prompt || scoringMode !== null}
                 >
-                  {scoringMode === "text" ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>텍스트 채점하기</Text>}
+                  {scoringMode === "text" ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>텍스트 채점하기</Text>}
                 </Pressable>
               </>
             ) : (
@@ -886,14 +889,14 @@ export default function ReviewsScreen() {
                     onPress={() => void handleStartRecording()}
                     disabled={recordingBusy || isRecording || !prompt || scoringMode !== null}
                   >
-                    {recordingBusy && !isRecording ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>음성 녹음 시작</Text>}
+                    {recordingBusy && !isRecording ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>음성 녹음 시작</Text>}
                   </Pressable>
                   <Pressable
                     style={[styles.secondaryButton, (!isRecording || recordingBusy) && styles.buttonDisabled]}
                     onPress={() => void handleStopRecording()}
                     disabled={!isRecording || recordingBusy}
                   >
-                    {recordingBusy && isRecording ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>녹음 종료</Text>}
+                    {recordingBusy && isRecording ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>녹음 종료</Text>}
                   </Pressable>
                 </View>
                 <View style={styles.row}>
@@ -909,14 +912,14 @@ export default function ReviewsScreen() {
                     onPress={() => void handleScoreVoiceAnswer()}
                     disabled={!recordedClip || !prompt || scoringMode !== null || isRecording}
                   >
-                    {scoringMode === "voice" ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>음성 채점하기</Text>}
+                    {scoringMode === "voice" ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>음성 채점하기</Text>}
                   </Pressable>
                 </View>
                 {recordedClip ? (
                   <View style={styles.clipCard}>
                     <Text style={styles.partTitle}>저장된 음성</Text>
-                    <Text style={styles.partMeta}>file: {recordedClip.fileName}</Text>
-                    <Text style={styles.partMeta}>duration: {formatDurationMs(recordedClip.durationMs)}</Text>
+                    <Text style={styles.partMeta}>파일명: {recordedClip.fileName}</Text>
+                    <Text style={styles.partMeta}>길이: {formatDurationMs(recordedClip.durationMs)}</Text>
                   </View>
                 ) : (
                   <Text style={styles.metaText}>아직 저장된 음성 답변이 없습니다.</Text>
@@ -1017,7 +1020,7 @@ export default function ReviewsScreen() {
                         onPress={() => void handleSavePatternExpression()}
                         disabled={savingPatternExpression || !!savedPatternExpression}
                       >
-                        {savingPatternExpression ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>{savedPatternExpression ? "표현 자산 저장 완료" : "표현 자산으로 저장"}</Text>}
+                        {savingPatternExpression ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>{savedPatternExpression ? "표현 자산 저장 완료" : "표현 자산으로 저장"}</Text>}
                       </Pressable>
                       {savedPatternExpression ? (
                         <Pressable style={styles.primaryButton} onPress={() => router.push(`/expression/${savedPatternExpression.id}`)}>
@@ -1296,7 +1299,7 @@ function formatDurationMs(value?: number | null) {
 const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.background,
     padding: 24,
     gap: 16,
   },
@@ -1304,21 +1307,23 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.background,
     padding: 24,
     gap: 12,
   },
   title: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   description: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 22,
   },
   card: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 20,
     padding: 20,
     gap: 10,
@@ -1326,7 +1331,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#0f172a",
+    color: theme.text,
   },
   row: {
     flexDirection: "row",
@@ -1334,45 +1339,50 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chip: {
-    backgroundColor: "#eff6ff",
+    backgroundColor: theme.surfaceMuted,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 14,
   },
   chipSelected: {
-    backgroundColor: "#2563eb",
+    backgroundColor: theme.brand,
+    borderColor: theme.brand,
   },
   chipText: {
-    color: "#1d4ed8",
+    color: theme.textSoft,
     fontWeight: "700",
   },
   chipTextSelected: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
   },
   primaryButton: {
-    backgroundColor: "#2563eb",
+    backgroundColor: theme.brand,
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 18,
     alignItems: "center",
   },
   primaryButtonText: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontWeight: "800",
   },
   secondaryButton: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 18,
     alignItems: "center",
   },
   secondaryButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
   },
   uploadButton: {
-    backgroundColor: "#0f766e",
+    backgroundColor: theme.accent,
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 18,
@@ -1383,103 +1393,104 @@ const styles = StyleSheet.create({
   },
   reviewCard: {
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: theme.border,
+    backgroundColor: theme.surfaceSoft,
     borderRadius: 18,
     padding: 14,
     gap: 6,
   },
   reviewCardSelected: {
-    borderColor: "#2563eb",
-    backgroundColor: "#f8fbff",
+    borderColor: theme.brandSoft,
+    backgroundColor: theme.surfaceBrand,
   },
   reviewKorean: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
     lineHeight: 22,
   },
   reviewEnglish: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 21,
   },
   promptCard: {
     borderWidth: 1,
-    borderColor: "#dbeafe",
+    borderColor: theme.brandSoft,
     borderRadius: 18,
     padding: 14,
     gap: 6,
-    backgroundColor: "#f8fbff",
+    backgroundColor: theme.surfaceBrand,
   },
   promptTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
     lineHeight: 22,
   },
   patternInfoCard: {
     borderWidth: 1,
-    borderColor: "#bfdbfe",
+    borderColor: theme.accent,
     borderRadius: 14,
     padding: 12,
     gap: 4,
-    backgroundColor: "#eff6ff",
+    backgroundColor: theme.accentSoft,
   },
   patternInfoTitle: {
-    color: "#1d4ed8",
+    color: theme.accentStrong,
     fontSize: 12,
     fontWeight: "800",
   },
   answerInput: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
-    backgroundColor: "#ffffff",
+    borderColor: theme.borderStrong,
+    backgroundColor: theme.surface,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
     minHeight: 110,
     textAlignVertical: "top",
-    color: "#0f172a",
+    color: theme.text,
   },
   voiceCard: {
     borderWidth: 1,
-    borderColor: "#d1fae5",
+    borderColor: theme.success,
     borderRadius: 18,
     padding: 16,
     gap: 10,
-    backgroundColor: "#f0fdf4",
+    backgroundColor: theme.successSoft,
   },
   recordingValue: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   clipCard: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
+    borderColor: theme.border,
     borderRadius: 14,
     padding: 12,
     gap: 4,
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
   },
   completionCard: {
-    backgroundColor: "#ecfeff",
+    backgroundColor: theme.surfaceBrand,
     borderRadius: 20,
     padding: 20,
     gap: 10,
     borderWidth: 1,
-    borderColor: "#a5f3fc",
+    borderColor: theme.brandSoft,
   },
   completionTitle: {
     fontSize: 22,
     fontWeight: "800",
-    color: "#164e63",
+    color: theme.brandStrong,
   },
   completionText: {
-    color: "#155e75",
+    color: theme.textSoft,
     lineHeight: 21,
   },
   scoreCard: {
     borderWidth: 1,
-    borderColor: "#bfdbfe",
-    backgroundColor: "#f8fbff",
+    borderColor: theme.brandSoft,
+    backgroundColor: theme.surface,
     borderRadius: 18,
     padding: 16,
     gap: 8,
@@ -1487,7 +1498,7 @@ const styles = StyleSheet.create({
   scoreTitle: {
     fontSize: 20,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   scoreMetricRow: {
     flexDirection: "row",
@@ -1495,7 +1506,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   scoreMetricChip: {
-    backgroundColor: "#eff6ff",
+    backgroundColor: theme.surfaceBrand,
     borderRadius: 14,
     paddingVertical: 10,
     paddingHorizontal: 12,
@@ -1503,62 +1514,62 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   scoreMetricLabel: {
-    color: "#2563eb",
+    color: theme.brandStrong,
     fontSize: 12,
     fontWeight: "700",
   },
   scoreMetricValue: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
   },
   feedbackBlock: {
     gap: 4,
   },
   feedbackLabel: {
-    color: "#475569",
+    color: theme.textMuted,
     fontSize: 12,
     fontWeight: "800",
   },
   feedbackText: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 21,
   },
   answerBlock: {
     gap: 4,
     borderWidth: 1,
-    borderColor: "#bfdbfe",
-    backgroundColor: "#eff6ff",
+    borderColor: theme.brandSoft,
+    backgroundColor: theme.surfaceBrand,
     borderRadius: 16,
     padding: 12,
   },
   answerBlockAlt: {
     gap: 4,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
-    backgroundColor: "#f8fafc",
+    borderColor: theme.border,
+    backgroundColor: theme.surfaceSoft,
     borderRadius: 16,
     padding: 12,
   },
   patternSaveCard: {
     borderWidth: 1,
-    borderColor: "#c7d2fe",
-    backgroundColor: "#f8faff",
+    borderColor: theme.accent,
+    backgroundColor: theme.surfaceAccent,
     borderRadius: 16,
     padding: 12,
     gap: 8,
   },
   patternSaveTitle: {
-    color: "#312e81",
+    color: theme.accentStrong,
     fontWeight: "800",
   },
   answerText: {
-    color: "#0f172a",
+    color: theme.text,
     lineHeight: 22,
     fontWeight: "700",
   },
   historyCard: {
     borderTopWidth: 1,
-    borderTopColor: "#e2e8f0",
+    borderTopColor: theme.border,
     paddingTop: 14,
     gap: 8,
   },
@@ -1573,7 +1584,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   historyTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
     lineHeight: 21,
   },
@@ -1582,57 +1593,57 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    backgroundColor: "#eff6ff",
+    backgroundColor: theme.surfaceBrand,
     gap: 2,
     alignItems: "center",
   },
   historyScoreLabel: {
-    color: "#2563eb",
+    color: theme.brandStrong,
     fontSize: 12,
     fontWeight: "700",
   },
   historyScoreValue: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
   },
   historyHint: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 20,
   },
   metaText: {
-    color: "#64748b",
+    color: theme.textMuted,
     lineHeight: 20,
   },
   success: {
-    color: "#15803d",
+    color: theme.success,
     lineHeight: 20,
   },
   error: {
-    color: "#dc2626",
+    color: theme.danger,
     lineHeight: 20,
   },
   successBox: {
     borderWidth: 1,
-    borderColor: "#86efac",
-    backgroundColor: "#f0fdf4",
+    borderColor: theme.success,
+    backgroundColor: theme.successSoft,
     borderRadius: 14,
     padding: 12,
     gap: 4,
   },
   successBoxTitle: {
-    color: "#166534",
+    color: theme.success,
     fontWeight: "800",
   },
   successBoxText: {
-    color: "#166534",
+    color: theme.success,
     lineHeight: 20,
   },
   partTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
   },
   partMeta: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 20,
   },
 });

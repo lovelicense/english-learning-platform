@@ -3,6 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { router, useFocusEffect } from "expo-router";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { listExpressions, type ExpressionResponse } from "../../src/lib/api/expressions";
+import { mobileTheme } from "../../src/theme/colors";
+
+const theme = mobileTheme.colors;
 
 type ExpressionFilter = "all" | "tts_ready" | "needs_tts" | "needs_practice" | "recent";
 type PlaylistLanguage = "english" | "korean";
@@ -350,7 +353,7 @@ export default function ExpressionsScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator color="#2563eb" />
+        <ActivityIndicator color={theme.brand} />
         <Text style={styles.description}>표현 목록을 불러오는 중입니다.</Text>
       </View>
     );
@@ -358,11 +361,11 @@ export default function ExpressionsScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Expressions</Text>
+      <Text style={styles.title}>표현</Text>
       <Text style={styles.description}>저장한 영어 표현을 다시 찾아 듣고, 상세 화면에서 메모와 TTS를 관리합니다.</Text>
 
       <Pressable style={styles.quickSaveCard} onPress={() => router.push("/quick-sentence")}>
-        <Text style={styles.quickSaveLabel}>Quick Save</Text>
+        <Text style={styles.quickSaveLabel}>빠른 저장</Text>
         <Text style={styles.quickSaveTitle}>빠른 문장 저장</Text>
         <Text style={styles.quickSaveText}>녹음 없이 한국어 문장을 먼저 남기고, 바로 영어 표현으로 바꿉니다.</Text>
       </Pressable>
@@ -393,7 +396,7 @@ export default function ExpressionsScreen() {
           ))}
         </View>
         <Pressable style={[styles.secondaryButton, refreshing && styles.buttonDisabled]} onPress={() => void loadExpressions(true)} disabled={refreshing}>
-          {refreshing ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>목록 새로고침</Text>}
+          {refreshing ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>목록 새로고침</Text>}
         </Pressable>
         <Text style={styles.metaText}>총 {expressions.length}개 · 현재 {filteredExpressions.length}개 표시</Text>
       </View>
@@ -522,8 +525,8 @@ export default function ExpressionsScreen() {
             <View key={expression.id} style={styles.expressionCard}>
               <Text style={styles.expressionKorean}>{expression.koreanText}</Text>
               <Text style={styles.expressionBase}>{expression.englishBase}</Text>
-              <Text style={styles.expressionSub}>easy: {expression.englishEasy}</Text>
-              <Text style={styles.expressionSub}>natural: {expression.englishNatural}</Text>
+              <Text style={styles.expressionSub}>쉬운형: {expression.englishEasy}</Text>
+              <Text style={styles.expressionSub}>자연형: {expression.englishNatural}</Text>
               <Text style={styles.metaText}>
                 TTS: {expression.ttsUrl ? "있음" : "없음"} · 연습 {expression.practiceCount ?? 0}회 · 최근 점수 {expression.latestPracticeScore ?? "-"}
               </Text>
@@ -559,28 +562,30 @@ export default function ExpressionsScreen() {
 const styles = StyleSheet.create({
   container: {
     padding: 24,
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.background,
     gap: 16
   },
   centered: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.background,
     padding: 24,
     gap: 12
   },
   title: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#0f172a"
+    color: theme.text
   },
   description: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 22
   },
   card: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 20,
     padding: 20,
     gap: 10
@@ -588,7 +593,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#0f172a"
+    color: theme.text
   },
   row: {
     flexDirection: "row",
@@ -597,140 +602,145 @@ const styles = StyleSheet.create({
   },
   input: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
-    backgroundColor: "#ffffff",
+    borderColor: theme.borderStrong,
+    backgroundColor: theme.surface,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14
   },
   secondaryButton: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 16,
     alignItems: "center"
   },
   primaryButton: {
-    backgroundColor: "#2563eb",
+    backgroundColor: theme.brand,
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 16,
     alignItems: "center"
   },
   primaryButtonText: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontWeight: "800"
   },
   secondaryButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800"
   },
   buttonDisabled: {
     opacity: 0.6
   },
   filterChip: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 14
   },
   filterChipActive: {
-    backgroundColor: "#dbeafe"
+    backgroundColor: theme.brandSoft,
+    borderColor: theme.brandSoft
   },
   filterChipText: {
-    color: "#334155",
+    color: theme.textSoft,
     fontWeight: "700"
   },
   filterChipTextActive: {
-    color: "#1d4ed8"
+    color: theme.brandStrong
   },
   learningSettingsCard: {
     borderWidth: 1,
-    borderColor: "#dbeafe",
+    borderColor: theme.brandSoft,
     borderRadius: 18,
     padding: 14,
     gap: 10,
-    backgroundColor: "#f8fbff"
+    backgroundColor: theme.surfaceBrand
   },
   learningSettingsTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800"
   },
   settingsGroup: {
     gap: 8
   },
   settingsLabel: {
-    color: "#475569",
+    color: theme.textSoft,
     fontSize: 12,
     fontWeight: "800"
   },
   expressionCard: {
     borderWidth: 1,
-    borderColor: "#dbeafe",
+    borderColor: theme.border,
     borderRadius: 18,
     padding: 14,
     gap: 6,
-    backgroundColor: "#f8fbff"
+    backgroundColor: theme.surface
   },
   recommendedCard: {
-    borderColor: "#93c5fd",
-    backgroundColor: "#eff6ff"
+    borderColor: theme.brandSoft,
+    backgroundColor: theme.surfaceBrand
   },
   recommendLabel: {
-    color: "#2563eb",
+    color: theme.accentStrong,
     fontWeight: "800",
     fontSize: 12
   },
   expressionKorean: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 20
   },
   expressionBase: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
     fontSize: 16,
     lineHeight: 24
   },
   expressionSub: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 20
   },
   quickSaveCard: {
-    backgroundColor: "#0f172a",
+    backgroundColor: theme.brandStrong,
     borderRadius: 22,
     padding: 18,
     gap: 6
   },
   quickSaveLabel: {
-    color: "#93c5fd",
+    color: theme.accentSoft,
     fontSize: 12,
     fontWeight: "800",
     letterSpacing: 0.6
   },
   quickSaveTitle: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontSize: 20,
     fontWeight: "800"
   },
   quickSaveText: {
-    color: "#cbd5e1",
+    color: theme.brandSoft,
     lineHeight: 20
   },
   metaText: {
-    color: "#64748b",
+    color: theme.textMuted,
     lineHeight: 20
   },
   memoText: {
-    color: "#0f172a",
+    color: theme.text,
     lineHeight: 20
   },
   priorityText: {
-    color: "#1d4ed8",
+    color: theme.accentStrong,
     lineHeight: 20,
     fontWeight: "700"
   },
   playlistStatusText: {
-    color: "#2563eb",
+    color: theme.brandStrong,
     fontWeight: "700",
     lineHeight: 20
   },
@@ -741,33 +751,35 @@ const styles = StyleSheet.create({
     gap: 12
   },
   smallPrimaryButton: {
-    backgroundColor: "#2563eb",
+    backgroundColor: theme.brand,
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 14,
     alignItems: "center"
   },
   smallPrimaryButtonText: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontWeight: "800"
   },
   smallSecondaryButton: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 14,
     alignItems: "center"
   },
   smallSecondaryButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800"
   },
   error: {
-    color: "#dc2626",
+    color: theme.danger,
     lineHeight: 20
   },
   success: {
-    color: "#15803d",
+    color: theme.success,
     lineHeight: 20
   }
 });

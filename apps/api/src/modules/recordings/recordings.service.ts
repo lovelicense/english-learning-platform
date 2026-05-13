@@ -164,6 +164,23 @@ export class RecordingsService {
     };
   }
 
+  async updateDisplayName(userId: string, recordingId: string, displayName: string) {
+    const recording = await this.prisma.recording.findFirst({
+      where: { id: recordingId, userId },
+    });
+    if (!recording) throw new NotFoundException('녹음 파일을 찾을 수 없습니다.');
+
+    const normalizedDisplayName = displayName.trim();
+    await this.prisma.recording.update({
+      where: { id: recordingId },
+      data: {
+        displayName: normalizedDisplayName || null,
+      },
+    } as any);
+
+    return this.getOne(userId, recordingId);
+  }
+
   async analyzeConversation(userId: string, recordingId: string, input: RecordingAnalysisInput) {
     const recording = await this.prisma.recording.findFirst({
       where: { id: recordingId, userId },

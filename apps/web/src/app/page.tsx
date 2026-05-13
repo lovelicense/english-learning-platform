@@ -55,9 +55,9 @@ export default function HomePage() {
     <main className="container grid landing" style={{ gap: 24 }}>
       <section className="hero card">
         <div>
-          <h1 className="h1" style={{ marginTop: 14 }}>내 언어 데이터 플랫폼</h1>
+          <h1 className="h1" style={{ marginTop: 14 }}>내말영어</h1>
           <p className="muted" style={{ marginTop: 12 }}>
-            내가 실제로 말한 음성과 문장을 모아 정리하고, 영어 학습과 다양한 AI 활용으로 다시 연결할 수 있는 개인 언어 데이터 서비스입니다.
+            내 말로 배우는 영어 학습 플랫폼입니다. 내가 실제로 말한 음성과 문장을 모아 정리하고, 영어 학습과 다양한 AI 활용으로 다시 연결합니다.
           </p>
           <div className="grid feature-list" style={{ marginTop: 18 }}>
             <div className="mini-card"><strong>1. 수집</strong><div className="muted">녹음과 업로드로 내 언어 데이터를 모읍니다.</div></div>

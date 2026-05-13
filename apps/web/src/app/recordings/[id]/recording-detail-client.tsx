@@ -45,6 +45,7 @@ type PersonProfile = {
 type RecordingResponse = {
   id: string;
   fileName: string;
+  displayName?: string | null;
   status: string;
   diarization: boolean;
   createdAt: string;
@@ -141,6 +142,12 @@ function formatAudioTime(seconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const remain = totalSeconds % 60;
   return `${minutes}:${remain.toString().padStart(2, "0")}`;
+}
+
+function getRecordingDisplayName(recording: { displayName?: string | null; fileName: string } | null) {
+  if (!recording) return "이 녹음";
+  const trimmedDisplayName = recording.displayName?.trim();
+  return trimmedDisplayName || recording.fileName;
 }
 
 function contextsEqual(left: RecordingGenerationContext, right: RecordingGenerationContext) {
@@ -268,6 +275,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<MeResponse | null>(null);
   const [recording, setRecording] = useState<RecordingResponse | null>(null);
+  const [displayNameDraft, setDisplayNameDraft] = useState("");
   const [personProfiles, setPersonProfiles] = useState<PersonProfile[]>([]);
   const [allExpressions, setAllExpressions] = useState<Expression[]>([]);
   const [selectedExpressionId, setSelectedExpressionId] = useState("");
@@ -414,6 +422,10 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
     setRecordingContext(nextContext);
     setRecordingContextDraft(nextContext);
   }, [recording?.id]);
+
+  useEffect(() => {
+    setDisplayNameDraft(recording?.displayName?.trim() || "");
+  }, [recording?.displayName, recording?.id]);
 
   useEffect(() => {
     recordingContextRef.current = recordingContext;
@@ -1148,7 +1160,7 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
 
   async function handleDeleteRecording() {
     if (!recording) return;
-    const confirmed = window.confirm(`"${recording.fileName}" 녹음을 삭제할까요? 이미 생성한 영어 표현은 유지됩니다.`);
+    const confirmed = window.confirm(`"${getRecordingDisplayName(recording)}" 녹음을 삭제할까요? 이미 생성한 영어 표현은 유지됩니다.`);
     if (!confirmed) return;
 
     setLoading("delete-recording");
@@ -1161,6 +1173,33 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
       router.replace("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "녹음 삭제에 실패했습니다.");
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function handleSaveDisplayName() {
+    if (!recording) return;
+
+    const normalizedDraft = displayNameDraft.trim();
+    const normalizedCurrent = recording.displayName?.trim() || "";
+    if (normalizedDraft === normalizedCurrent) {
+      setMessage("변경된 녹음 이름이 없어 저장하지 않았습니다.");
+      return;
+    }
+
+    setLoading("recording-display-name");
+    setError("");
+    setMessage("");
+    try {
+      const updated = await apiFetch<RecordingResponse>(`/recordings/${recording.id}/display-name`, {
+        method: "PATCH",
+        body: JSON.stringify({ displayName: normalizedDraft }),
+      });
+      setRecording(updated);
+      setMessage(normalizedDraft ? "녹음 이름을 저장했습니다." : "녹음 이름을 비우고 파일명 표시로 되돌렸습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "녹음 이름 저장에 실패했습니다.");
     } finally {
       setLoading("");
     }
@@ -1271,8 +1310,26 @@ export function RecordingDetailClient({ recordingId }: { recordingId: string }) 
               <span className="badge">표현/TTS 재작업</span>
             </div>
             <h1 className="h1" style={{ marginBottom: 8 }}>녹음 상세</h1>
-            <p className="muted">{recording.fileName}</p>
+            <p className="muted">{getRecordingDisplayName(recording)}</p>
+            {recording.displayName?.trim() && recording.displayName.trim() !== recording.fileName.trim() ? (
+              <p className="muted" style={{ marginTop: 6 }}>원본 파일: {recording.fileName}</p>
+            ) : null}
             <p className="muted" style={{ marginTop: 6 }}>로그인 사용자: <strong>{user?.email ?? getStoredUser()?.email ?? "-"}</strong></p>
+            <div className="row" style={{ marginTop: 14, alignItems: "center" }}>
+              <input
+                className="input"
+                style={{ maxWidth: 320 }}
+                value={displayNameDraft}
+                onChange={(event) => setDisplayNameDraft(event.target.value)}
+                placeholder="예: 강남역 카페 대화"
+              />
+              <button className="button secondary" onClick={handleSaveDisplayName} disabled={!!loading}>
+                {loading === "recording-display-name" ? "저장 중..." : "이름 저장"}
+              </button>
+              <button className="button ghost" onClick={() => setDisplayNameDraft("")} disabled={!!loading}>
+                이름 비우기
+              </button>
+            </div>
           </div>
           <div className="row">
             <Link className="button ghost" href="/dashboard">대시보드</Link>

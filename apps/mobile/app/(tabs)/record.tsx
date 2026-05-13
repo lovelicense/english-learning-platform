@@ -26,6 +26,9 @@ import {
   getRecordingPreferences,
   type RecordingPreferences,
 } from "../../src/lib/recording-preferences";
+import { mobileTheme } from "../../src/theme/colors";
+
+const theme = mobileTheme.colors;
 
 type RecordedClip = {
   uri: string;
@@ -139,6 +142,7 @@ export default function RecordScreen() {
       if (recordingsFilter === "needs_review" && item.analysisStatus !== "NEEDS_REVIEW") return false;
       if (!query) return true;
       return (
+        getRecordingDisplayName(item).toLowerCase().includes(query) ||
         item.fileName.toLowerCase().includes(query) ||
         item.status.toLowerCase().includes(query) ||
         (item.analysisStatus ?? "").toLowerCase().includes(query)
@@ -602,7 +606,7 @@ export default function RecordScreen() {
   }
 
   function handleDeleteRecording(recording: RecordingSummaryResponse) {
-    const message = `"${recording.fileName}" 녹음을 삭제할까요? 이미 생성한 영어 표현은 유지됩니다.`;
+    const message = `"${getRecordingDisplayName(recording)}" 녹음을 삭제할까요? 이미 생성한 영어 표현은 유지됩니다.`;
 
     if (Platform.OS === "web") {
       if (typeof window !== "undefined" && window.confirm(message)) {
@@ -619,7 +623,7 @@ export default function RecordScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Recording MVP</Text>
+      <Text style={styles.title}>녹음</Text>
       <Text style={styles.description}>
         모바일에서는 직접 녹음한 파일이나 이미 있는 오디오 파일을 가져와 업로드 세션과 STT 파이프라인으로 연결할 수 있습니다.
       </Text>
@@ -664,21 +668,21 @@ export default function RecordScreen() {
             onPress={() => void handleStartRecording()}
             disabled={recordingBusy || isRecording}
           >
-            {recordingBusy && !isRecording ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>녹음 시작</Text>}
+            {recordingBusy && !isRecording ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>녹음 시작</Text>}
           </Pressable>
           <Pressable
             style={[styles.secondaryButton, (!isRecording || recordingBusy) && styles.buttonDisabled]}
             onPress={() => void handleStopRecording()}
             disabled={!isRecording || recordingBusy}
           >
-            {recordingBusy && isRecording ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>녹음 종료</Text>}
+            {recordingBusy && isRecording ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>녹음 종료</Text>}
           </Pressable>
           <Pressable
             style={[styles.secondaryButton, (recordingBusy || uploading || isRecording) && styles.buttonDisabled]}
             onPress={() => void handlePickAudioFile()}
             disabled={recordingBusy || uploading || isRecording}
           >
-            {recordingBusy && !isRecording ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>파일 가져오기</Text>}
+            {recordingBusy && !isRecording ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>파일 가져오기</Text>}
           </Pressable>
         </View>
         <Pressable
@@ -686,7 +690,7 @@ export default function RecordScreen() {
           onPress={() => void handleUploadRecordedClip()}
           disabled={!recordedClip || uploading || recordingBusy || isRecording}
         >
-          {uploading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>업로드하고 처리 시작</Text>}
+          {uploading ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>업로드하고 처리 시작</Text>}
         </Pressable>
         {uploading ? <Text style={styles.metaText}>업로드 진행률: {uploadPercent}%</Text> : null}
         {latestRecordingId ? (
@@ -699,9 +703,9 @@ export default function RecordScreen() {
         {recordedClip ? (
           <View style={styles.clipCard}>
             <Text style={styles.partTitle}>{recordedClip.source === "imported" ? "가져온 음성 파일" : "저장된 음성 파일"}</Text>
-            <Text style={styles.partMeta}>source: {recordedClip.source === "imported" ? "MANUAL_UPLOAD" : "MOBILE"}</Text>
-            <Text style={styles.partMeta}>file: {recordedClip.fileName}</Text>
-            <Text style={styles.partMeta}>duration: {recordedClip.durationMs > 0 ? clipDurationLabel : "가져온 파일 길이 미확인"}</Text>
+            <Text style={styles.partMeta}>수집 방식: {recordedClip.source === "imported" ? "파일 가져오기" : "직접 녹음"}</Text>
+            <Text style={styles.partMeta}>파일명: {recordedClip.fileName}</Text>
+            <Text style={styles.partMeta}>길이: {recordedClip.durationMs > 0 ? clipDurationLabel : "가져온 파일 길이 미확인"}</Text>
             <Text style={styles.clipUri}>{recordedClip.uri}</Text>
           </View>
         ) : (
@@ -734,28 +738,28 @@ export default function RecordScreen() {
             onPress={() => void handleCreateSession()}
             disabled={creating || isRecording}
           >
-            {creating ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>세션 먼저 만들기</Text>}
+            {creating ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>세션 먼저 만들기</Text>}
           </Pressable>
           <Pressable
             style={[styles.secondaryButton, (!sessionMeta?.sessionId || refreshing) && styles.buttonDisabled]}
             onPress={() => void handleRefresh()}
             disabled={!sessionMeta?.sessionId || refreshing}
           >
-            {refreshing ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>상태 새로고침</Text>}
+            {refreshing ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>상태 새로고침</Text>}
           </Pressable>
           <Pressable
             style={[styles.secondaryButton, (!canFinalize || finalizing) && styles.buttonDisabled]}
             onPress={() => void handleFinalize()}
             disabled={!canFinalize || finalizing}
           >
-            {finalizing ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>업로드 마감</Text>}
+            {finalizing ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>업로드 마감</Text>}
           </Pressable>
           <Pressable
             style={[styles.secondaryButton, (!canProcess || processing) && styles.buttonDisabled]}
             onPress={() => void handleProcess()}
             disabled={!canProcess || processing}
           >
-            {processing ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>처리 요청</Text>}
+            {processing ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>처리 요청</Text>}
           </Pressable>
         </View>
         {!canFinalize ? <Text style={styles.metaText}>업로드된 파트가 있어야 `업로드 마감`을 호출할 수 있습니다.</Text> : null}
@@ -779,7 +783,7 @@ export default function RecordScreen() {
                   onPress={() => void handleRetryFailedPart(failedPart.partNumber)}
                   disabled={!canRetryFailedPart}
                 >
-                  {uploading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>실패 파트 다시 업로드</Text>}
+                  {uploading ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>실패 파트 다시 업로드</Text>}
                 </Pressable>
               ) : null}
               {canRetryFailedProcessing ? (
@@ -788,7 +792,7 @@ export default function RecordScreen() {
                   onPress={() => void handleRetryProcessing()}
                   disabled={processing}
                 >
-                  {processing ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>처리 다시 요청</Text>}
+                  {processing ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>처리 다시 요청</Text>}
                 </Pressable>
               ) : null}
             </View>
@@ -824,8 +828,8 @@ export default function RecordScreen() {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>현재 세션 상태</Text>
         <Text style={styles.cardText}>sessionId: {sessionMeta?.sessionId ?? "-"}</Text>
-        <Text style={styles.cardText}>status: {formatSessionStatusLabel(currentSessionStatus)}</Text>
-        <Text style={styles.cardText}>source: {session?.source ?? "-"}</Text>
+        <Text style={styles.cardText}>상태: {formatSessionStatusLabel(currentSessionStatus)}</Text>
+        <Text style={styles.cardText}>수집 방식: {formatRecordingSourceLabel(session?.source)}</Text>
         <Text style={styles.cardText}>uploadedPartCount: {session?.uploadedPartCount ?? 0}</Text>
         <Text style={styles.cardText}>expectedPartCount: {session?.expectedPartCount ?? "-"}</Text>
         <Text style={styles.cardText}>totalDurationMs: {session?.totalDurationMs ?? "-"}</Text>
@@ -842,7 +846,7 @@ export default function RecordScreen() {
               <Text style={styles.partMeta}>{part.status}</Text>
               <Text style={styles.partMeta}>{part.fileName}</Text>
               <Text style={styles.partMeta}>size: {formatFileSize(part.sizeBytes)}</Text>
-              <Text style={styles.partMeta}>duration: {formatDurationMs(part.durationMs)}</Text>
+              <Text style={styles.partMeta}>길이: {formatDurationMs(part.durationMs)}</Text>
               <Text style={styles.partMeta}>updated: {formatDateTime(part.updatedAt)}</Text>
               {part.errorMessage ? <Text style={styles.error}>error: {part.errorMessage}</Text> : null}
               {part.status === "FAILED" ? (
@@ -852,7 +856,7 @@ export default function RecordScreen() {
                     onPress={() => void handleRetryFailedPart(part.partNumber)}
                     disabled={!recordedClip || uploading || processing || finalizing || isRecording}
                   >
-                    {uploading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>이 파트 다시 업로드</Text>}
+                    {uploading ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>이 파트 다시 업로드</Text>}
                   </Pressable>
                 </View>
               ) : null}
@@ -874,12 +878,12 @@ export default function RecordScreen() {
             onPress={() => void refreshRecordings()}
             disabled={recordingsLoading}
           >
-            {recordingsLoading ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>새로고침</Text>}
+            {recordingsLoading ? <ActivityIndicator color={theme.text} /> : <Text style={styles.secondaryButtonText}>새로고침</Text>}
           </Pressable>
         </View>
         <TextInput
           style={styles.input}
-          placeholder="파일명이나 상태로 검색"
+          placeholder="이름, 파일명, 상태로 검색"
           value={recordingsQuery}
           onChangeText={setRecordingsQuery}
         />
@@ -903,9 +907,14 @@ export default function RecordScreen() {
           filteredRecordings.map((item, index) => (
             <View key={item.id} style={styles.recordingItemCard}>
               <View style={styles.recordingItemHead}>
-                <Text style={styles.recordingItemTitle}>
-                  {index + 1}. {item.fileName}
-                </Text>
+                <View style={styles.recordingItemTitleWrap}>
+                  <Text style={styles.recordingItemTitle}>
+                    {index + 1}. {getRecordingDisplayName(item)}
+                  </Text>
+                  {item.displayName?.trim() && item.displayName.trim() !== item.fileName.trim() ? (
+                    <Text style={styles.recordingItemFileName}>{item.fileName}</Text>
+                  ) : null}
+                </View>
                 <View
                   style={[
                     styles.recordingStatusBadge,
@@ -947,7 +956,7 @@ export default function RecordScreen() {
                     disabled={recordingActionLoadingId.length > 0}
                   >
                     {recordingActionLoadingId === `reprocess-${item.id}` ? (
-                      <ActivityIndicator color="#0f172a" />
+                      <ActivityIndicator color={theme.text} />
                     ) : (
                       <Text style={styles.secondaryButtonText}>다시 처리</Text>
                     )}
@@ -959,7 +968,7 @@ export default function RecordScreen() {
                   disabled={recordingActionLoadingId.length > 0}
                 >
                   {recordingActionLoadingId === `delete-${item.id}` ? (
-                    <ActivityIndicator color="#ffffff" />
+                    <ActivityIndicator color={theme.textOnBrand} />
                   ) : (
                     <Text style={styles.primaryButtonText}>삭제</Text>
                   )}
@@ -1145,6 +1154,12 @@ function getRecordingSessionSource(recordedClip?: RecordedClip | null): Recordin
   return recordedClip?.source === "imported" ? "MANUAL_UPLOAD" : "MOBILE";
 }
 
+function formatRecordingSourceLabel(source?: string | null) {
+  if (source === "MANUAL_UPLOAD") return "파일 가져오기";
+  if (source === "MOBILE") return "직접 녹음";
+  return source ?? "-";
+}
+
 function validateManualUploadAsset(asset: DocumentPicker.DocumentPickerAsset) {
   const normalizedName = (asset.name || asset.uri).toLowerCase();
   const matchedExtension = MANUAL_UPLOAD_ALLOWED_EXTENSIONS.find((ext) => normalizedName.endsWith(ext));
@@ -1170,6 +1185,11 @@ function guessAudioContentType(fileName: string) {
   if (lower.endsWith(".mp3")) return "audio/mpeg";
   if (lower.endsWith(".webm")) return "audio/webm";
   return "audio/mp4";
+}
+
+function getRecordingDisplayName(recording: { displayName?: string | null; fileName: string }) {
+  const trimmedDisplayName = recording.displayName?.trim();
+  return trimmedDisplayName || recording.fileName;
 }
 
 function resolveSessionTotalDurationMs(session: RecordingSessionStatusResponse | null, targetClip: RecordedClip) {
@@ -1268,21 +1288,23 @@ function formatFileSize(value?: number | null) {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.background,
     padding: 24,
     gap: 16
   },
   title: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#0f172a"
+    color: theme.text
   },
   description: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 22
   },
   card: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 24,
     padding: 20,
     gap: 10
@@ -1290,78 +1312,80 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 18,
     fontWeight: "800",
-    color: "#0f172a"
+    color: theme.text
   },
   cardText: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 20
   },
   recoveryCard: {
     borderWidth: 1,
-    borderColor: "#fed7aa",
-    backgroundColor: "#fff7ed",
+    borderColor: theme.accent,
+    backgroundColor: theme.accentSoft,
     borderRadius: 18,
     padding: 14,
     gap: 8
   },
   recoveryTitle: {
-    color: "#9a3412",
+    color: theme.accentStrong,
     fontWeight: "800"
   },
   statusSummaryCard: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
     borderRadius: 24,
     padding: 20,
     gap: 6,
     borderWidth: 1,
-    borderColor: "#dbeafe"
+    borderColor: theme.brandSoft
   },
   statusSummarySuccess: {
-    borderColor: "#bbf7d0",
-    backgroundColor: "#f0fdf4"
+    borderColor: theme.success,
+    backgroundColor: theme.successSoft
   },
   statusSummaryWarning: {
-    borderColor: "#fed7aa",
-    backgroundColor: "#fff7ed"
+    borderColor: theme.accent,
+    backgroundColor: theme.accentSoft
   },
   statusSummaryLabel: {
-    color: "#475569",
+    color: theme.textSoft,
     fontWeight: "700"
   },
   statusSummaryValue: {
-    color: "#0f172a",
+    color: theme.text,
     fontSize: 24,
     fontWeight: "800"
   },
   statusSummaryHint: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 20
   },
   timerCard: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 24,
     padding: 24,
     alignItems: "center",
     gap: 8
   },
   timerLabel: {
-    color: "#64748b",
+    color: theme.textMuted,
     fontWeight: "600"
   },
   timerValue: {
     fontSize: 40,
     fontWeight: "800",
-    color: "#0f172a"
+    color: theme.text
   },
   timerHint: {
-    color: "#475569",
+    color: theme.textSoft,
     textAlign: "center",
     lineHeight: 20
   },
   input: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
-    backgroundColor: "#ffffff",
+    borderColor: theme.borderStrong,
+    backgroundColor: theme.surface,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14
@@ -1372,83 +1396,88 @@ const styles = StyleSheet.create({
     gap: 10
   },
   filterChip: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 14,
     alignSelf: "flex-start"
   },
   filterChipActive: {
-    backgroundColor: "#dbeafe"
+    backgroundColor: theme.brandSoft,
+    borderColor: theme.brandSoft
   },
   filterChipText: {
-    color: "#334155",
+    color: theme.textSoft,
     fontWeight: "700"
   },
   filterChipTextActive: {
-    color: "#1d4ed8"
+    color: theme.brandStrong
   },
   primaryButton: {
-    backgroundColor: "#dc2626",
+    backgroundColor: theme.brand,
     borderRadius: 999,
     paddingVertical: 16,
     paddingHorizontal: 18,
     alignItems: "center"
   },
   primaryButtonText: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontWeight: "800"
   },
   secondaryButton: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 999,
     paddingVertical: 16,
     paddingHorizontal: 18,
     alignItems: "center"
   },
   dangerButton: {
-    backgroundColor: "#dc2626",
+    backgroundColor: theme.danger,
     borderRadius: 999,
     paddingVertical: 16,
     paddingHorizontal: 18,
     alignItems: "center"
   },
   uploadButton: {
-    backgroundColor: "#2563eb",
+    backgroundColor: theme.accent,
     borderRadius: 999,
     paddingVertical: 16,
     paddingHorizontal: 18,
     alignItems: "center"
   },
   secondaryButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800"
   },
   buttonDisabled: {
     opacity: 0.6
   },
   metaText: {
-    color: "#64748b",
+    color: theme.textMuted,
     lineHeight: 20
   },
   success: {
-    color: "#15803d",
+    color: theme.success,
     lineHeight: 20
   },
   error: {
-    color: "#dc2626",
+    color: theme.danger,
     lineHeight: 20
   },
   clipCard: {
     borderWidth: 1,
-    borderColor: "#bfdbfe",
+    borderColor: theme.brandSoft,
     borderRadius: 16,
     padding: 14,
     gap: 4,
-    backgroundColor: "#eff6ff"
+    backgroundColor: theme.surfaceBrand
   },
   clipUri: {
-    color: "#475569",
+    color: theme.textSoft,
     fontSize: 12,
     lineHeight: 18
   },
@@ -1464,7 +1493,8 @@ const styles = StyleSheet.create({
   },
   recordingItemCard: {
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: theme.border,
+    backgroundColor: theme.surfaceSoft,
     borderRadius: 16,
     padding: 14,
     gap: 8
@@ -1476,9 +1506,17 @@ const styles = StyleSheet.create({
     gap: 10
   },
   recordingItemTitle: {
-    flex: 1,
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700"
+  },
+  recordingItemTitleWrap: {
+    flex: 1,
+    gap: 4,
+  },
+  recordingItemFileName: {
+    color: theme.textMuted,
+    fontSize: 12,
+    lineHeight: 18,
   },
   recordingStatusBadge: {
     borderRadius: 999,
@@ -1486,37 +1524,38 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10
   },
   recordingStatusProcessed: {
-    backgroundColor: "#dbeafe"
+    backgroundColor: theme.brandSoft
   },
   recordingStatusPending: {
-    backgroundColor: "#e2e8f0"
+    backgroundColor: theme.surfaceMuted
   },
   recordingStatusBadgeText: {
     fontSize: 12,
     fontWeight: "800"
   },
   recordingStatusProcessedText: {
-    color: "#1d4ed8"
+    color: theme.brandStrong
   },
   recordingStatusPendingText: {
-    color: "#475569"
+    color: theme.textSoft
   },
   partRow: {
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
     borderRadius: 16,
     padding: 14,
     gap: 4
   },
   partRowFailed: {
-    borderColor: "#fdba74",
-    backgroundColor: "#fff7ed"
+    borderColor: theme.accent,
+    backgroundColor: theme.accentSoft
   },
   partTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700"
   },
   partMeta: {
-    color: "#475569"
+    color: theme.textSoft
   }
 });

@@ -98,7 +98,7 @@ export default function QuickSentenceScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Quick Save</Text>
+      <Text style={styles.title}>빠른 저장</Text>
       <Text style={styles.description}>
         녹음 없이 한국어 문장을 먼저 남기고, 필요하면 맥락을 더해 바로 영어 표현으로 바꿉니다.
       </Text>

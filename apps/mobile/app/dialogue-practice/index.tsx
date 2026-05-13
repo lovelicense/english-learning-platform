@@ -7,8 +7,10 @@ import {
   updateDialoguePracticeSetTitle,
   type DialoguePracticeSetResponse,
 } from "../../src/lib/api/ai-conversations";
+import { mobileTheme } from "../../src/theme/colors";
 
 type DialogueSort = "recent" | "turns";
+const theme = mobileTheme.colors;
 
 function formatRelativeDate(dateString: string) {
   const timestamp = new Date(dateString).getTime();
@@ -96,9 +98,9 @@ export default function DialoguePracticeLibraryScreen() {
   return (
     <ScrollView
       contentContainerStyle={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadSets(true)} tintColor="#2563eb" />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadSets(true)} tintColor={theme.brand} />}
     >
-      <Text style={styles.eyebrow}>Dialogue Practice</Text>
+      <Text style={styles.eyebrow}>다이얼로그 연습</Text>
       <Text style={styles.title}>전역 연습 세트 라이브러리</Text>
       <Text style={styles.description}>
         영어 AI 대화에서 저장한 모든 다이얼로그 세트를 한곳에서 다시 찾고, 제목을 정리하고, 바로 연습으로 이어갈 수 있습니다.
@@ -132,7 +134,7 @@ export default function DialoguePracticeLibraryScreen() {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>다이얼로그 연습 세트</Text>
         {loading ? (
-          <ActivityIndicator color="#2563eb" />
+          <ActivityIndicator color={theme.brand} />
         ) : filteredSets.length > 0 ? (
           filteredSets.map((set) => {
             const draft = titleDrafts[set.id] ?? "";
@@ -283,11 +285,11 @@ export default function DialoguePracticeLibraryScreen() {
 const styles = StyleSheet.create({
   container: {
     padding: 24,
-    backgroundColor: "#f8fafc",
-    gap: 16,
+    backgroundColor: theme.background,
+    gap: 18,
   },
   eyebrow: {
-    color: "#7c3aed",
+    color: theme.brand,
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 1,
@@ -295,50 +297,54 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   description: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 22,
   },
   summaryCard: {
-    backgroundColor: "#f5f3ff",
+    backgroundColor: theme.surfaceBrand,
     borderRadius: 20,
     padding: 20,
     gap: 6,
+    borderWidth: 1,
+    borderColor: theme.brandSoft,
   },
   summaryTitle: {
-    color: "#5b21b6",
+    color: theme.brandStrong,
     fontSize: 18,
     fontWeight: "800",
   },
   summaryText: {
-    color: "#5b21b6",
+    color: theme.brandStrong,
     lineHeight: 20,
   },
   card: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
     borderRadius: 20,
     padding: 20,
     gap: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   cardTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontSize: 18,
     fontWeight: "800",
   },
   cardText: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 20,
   },
   input: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
+    borderColor: theme.border,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    backgroundColor: "#f8fafc",
-    color: "#0f172a",
+    backgroundColor: theme.surfaceSoft,
+    color: theme.text,
   },
   inlineRow: {
     flexDirection: "row",
@@ -348,27 +354,29 @@ const styles = StyleSheet.create({
   filterChip: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "#cbd5e1",
+    borderColor: theme.border,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
   },
   filterChipActive: {
-    backgroundColor: "#7c3aed",
-    borderColor: "#7c3aed",
+    backgroundColor: theme.brand,
+    borderColor: theme.brand,
   },
   filterChipText: {
-    color: "#334155",
+    color: theme.textSoft,
     fontWeight: "600",
   },
   filterChipTextActive: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
   },
   setCard: {
     borderRadius: 16,
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.surfaceSoft,
     padding: 16,
     gap: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   setHeader: {
     flexDirection: "row",
@@ -377,39 +385,41 @@ const styles = StyleSheet.create({
   },
   setTitle: {
     flex: 1,
-    color: "#0f172a",
+    color: theme.text,
     fontSize: 16,
     fontWeight: "800",
   },
   setMeta: {
-    color: "#64748b",
+    color: theme.textMuted,
     lineHeight: 18,
   },
   promptPreview: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 21,
     fontSize: 15,
   },
   editCard: {
     borderRadius: 14,
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
     padding: 12,
     gap: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   editTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
   },
   primaryButton: {
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#7c3aed",
+    backgroundColor: theme.brand,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   primaryButtonText: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontWeight: "800",
   },
   secondaryButton: {
@@ -417,40 +427,40 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#cbd5e1",
-    backgroundColor: "#ffffff",
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   secondaryButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
   },
   ghostButton: {
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 14,
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   ghostButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
   },
   buttonDisabled: {
     opacity: 0.5,
   },
   helperText: {
-    color: "#64748b",
+    color: theme.textMuted,
     lineHeight: 20,
   },
   success: {
-    color: "#7c3aed",
+    color: theme.success,
     lineHeight: 20,
   },
   error: {
-    color: "#b91c1c",
+    color: theme.danger,
     lineHeight: 20,
   },
 });

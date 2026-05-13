@@ -233,7 +233,7 @@ export default function ExpressionDetailScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Expression Detail</Text>
+      <Text style={styles.title}>표현 상세</Text>
       <Text style={styles.description}>영어 표현, TTS, 메모를 한 화면에서 다시 확인합니다.</Text>
 
       <View style={styles.buttonRow}>
@@ -275,9 +275,9 @@ export default function ExpressionDetailScreen() {
         <Text style={styles.cardTitle}>기본 표현</Text>
         <Text style={styles.korean}>{expression?.koreanText ?? "-"}</Text>
         <Text style={styles.base}>{expression?.englishBase ?? "-"}</Text>
-        <Text style={styles.sub}>easy: {expression?.englishEasy ?? "-"}</Text>
-        <Text style={styles.sub}>natural: {expression?.englishNatural ?? "-"}</Text>
-        {expression?.thinkInEnglish ? <Text style={styles.sub}>think in English: {expression.thinkInEnglish}</Text> : null}
+        <Text style={styles.sub}>쉬운형: {expression?.englishEasy ?? "-"}</Text>
+        <Text style={styles.sub}>자연형: {expression?.englishNatural ?? "-"}</Text>
+        {expression?.thinkInEnglish ? <Text style={styles.sub}>Think in English: {expression.thinkInEnglish}</Text> : null}
         {expression?.note ? <Text style={styles.sub}>note: {expression.note}</Text> : null}
         <Text style={styles.metaText}>연습 {expression?.practiceCount ?? 0}회 · 최근 점수 {expression?.latestPracticeScore ?? "-"}</Text>
         <View style={styles.buttonRow}>

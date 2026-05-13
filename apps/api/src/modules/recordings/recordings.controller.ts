@@ -5,6 +5,7 @@ import { AnalyzeRecordingDto } from './dto/analyze-recording.dto';
 import { CreatePresignDto } from './dto/create-presign.dto';
 import { ProcessRecordingDto } from './dto/process-recording.dto';
 import { UpdateRecordingParticipantsDto } from './dto/update-recording-participants.dto';
+import { UpdateRecordingDisplayNameDto } from './dto/update-recording-display-name.dto';
 import { RemoveUtteranceDto } from './dto/remove-utterance.dto';
 import { UpdateRecordingAnalysisStatusDto } from './dto/update-recording-analysis-status.dto';
 import { UpdateRecordingSpeakerProfileDto } from './dto/update-recording-speaker-profile.dto';
@@ -41,6 +42,15 @@ export class RecordingsController {
   @Get(':id')
   getOne(@CurrentUser('userId') userId: string, @Param('id') id: string) {
     return this.recordingsService.getOne(userId, id);
+  }
+
+  @Patch(':id/display-name')
+  updateDisplayName(
+    @CurrentUser('userId') userId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateRecordingDisplayNameDto,
+  ) {
+    return this.recordingsService.updateDisplayName(userId, id, dto.displayName);
   }
 
   @Patch('utterances/:utteranceId')

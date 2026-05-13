@@ -31,6 +31,10 @@ function formatModeSummary(session: AiConversationSessionResponse) {
   return `AI ${session.aiOutputMode === "voice" ? "음성" : "텍스트"} · 내 답변 ${session.userInputMode === "voice" ? "음성(STT)" : "텍스트"}`;
 }
 
+function formatIoModeLabel(mode?: AiConversationSessionResponse["aiOutputMode"] | null) {
+  return mode === "voice" ? "음성" : "텍스트";
+}
+
 type RecordedClip = {
   uri: string;
   durationMs: number;
@@ -184,9 +188,9 @@ export default function AiConversationDetailScreen() {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>세션 요약</Text>
         <Text style={styles.cardText}>상태: {session.status}</Text>
-        <Text style={styles.cardText}>Turns: {session.turns.length}</Text>
-        <Text style={styles.cardText}>AI 응답: {session.aiOutputMode ?? "text"}</Text>
-        <Text style={styles.cardText}>내 답변: {session.userInputMode ?? "text"}</Text>
+        <Text style={styles.cardText}>턴 수: {session.turns.length}</Text>
+        <Text style={styles.cardText}>AI 응답: {formatIoModeLabel(session.aiOutputMode)}</Text>
+        <Text style={styles.cardText}>내 답변: {formatIoModeLabel(session.userInputMode)}</Text>
         {session.userRole ? <Text style={styles.cardText}>나의 역할: {session.userRole}</Text> : null}
         {session.aiRole ? <Text style={styles.cardText}>AI 역할: {session.aiRole}</Text> : null}
         {session.conversationTopic ? <Text style={styles.cardText}>주제: {session.conversationTopic}</Text> : null}
@@ -195,7 +199,7 @@ export default function AiConversationDetailScreen() {
       </View>
 
       <View style={styles.pipelineCard}>
-        <Text style={styles.pipelineEyebrow}>{session.mode === "ENGLISH_AI" ? "Practice Bridge" : "Collection Bridge"}</Text>
+        <Text style={styles.pipelineEyebrow}>{session.mode === "ENGLISH_AI" ? "연습 연결" : "수집 연결"}</Text>
         <Text style={styles.pipelineTitle}>
           {session.mode === "ENGLISH_AI" ? "현재 세션에서 다음에 할 일" : "이 세션을 학습 흐름으로 잇는 방법"}
         </Text>
@@ -251,7 +255,7 @@ export default function AiConversationDetailScreen() {
           session.turns.map((turn, index) => (
             <View key={turn.id} style={[styles.turnCard, turn.speaker === "USER" ? styles.userTurnCard : styles.aiTurnCard]}>
               <Text style={styles.turnMeta}>
-                {index + 1}. {turn.speaker === "AI" ? "AI" : "ME"} · {turn.language} ·{" "}
+                {index + 1}. {turn.speaker === "AI" ? "AI" : "나"} · {turn.language} ·{" "}
                 {turn.speaker === "AI" ? (turn.outputMode === "voice" ? "AI 음성" : "AI 텍스트") : turn.inputMode === "voice" ? "음성(STT)" : "텍스트"}
               </Text>
               {turn.speaker === "AI" && turn.outputMode === "voice" && session.mode === "ENGLISH_AI" && !showEnglishAiReplyText ? (

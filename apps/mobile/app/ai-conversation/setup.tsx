@@ -65,7 +65,7 @@ export default function AiConversationSetupScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.eyebrow}>{track === "english" ? "English Track" : "Korean Track"}</Text>
+      <Text style={styles.eyebrow}>{track === "english" ? "영어 트랙" : "한국어 트랙"}</Text>
       <Text style={styles.title}>{trackCopy.title}</Text>
       <Text style={styles.description}>{trackCopy.description}</Text>
 

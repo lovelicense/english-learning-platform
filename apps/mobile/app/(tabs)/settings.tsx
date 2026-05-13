@@ -21,6 +21,9 @@ import {
   getLearningPreferences,
   type LearningPreferences,
 } from "../../src/lib/learning-preferences";
+import { mobileTheme } from "../../src/theme/colors";
+
+const theme = mobileTheme.colors;
 
 export default function SettingsScreen() {
   const isDevToolsVisible = typeof __DEV__ !== "undefined" ? __DEV__ : false;
@@ -179,19 +182,19 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Settings</Text>
+      <Text style={styles.title}>설정</Text>
       <Text style={styles.description}>
         계정 상태를 확인하고, 모바일에서 반복해서 쓰게 될 녹음 기본 옵션을 여기서 관리할 수 있습니다.
       </Text>
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Account</Text>
+        <Text style={styles.cardTitle}>계정</Text>
         {sessionLoading ? (
-          <ActivityIndicator color="#2563eb" />
+          <ActivityIndicator color={theme.brand} />
         ) : (
           <>
-            <Text style={styles.cardValue}>stored: {storedEmail || "-"}</Text>
-            <Text style={styles.cardValue}>server: {user?.email ?? "not signed in"}</Text>
+            <Text style={styles.cardValue}>저장된 계정: {storedEmail || "-"}</Text>
+            <Text style={styles.cardValue}>서버 계정: {user?.email ?? "로그인되지 않음"}</Text>
             {sessionError ? <Text style={styles.error}>{sessionError}</Text> : null}
           </>
         )}
@@ -211,9 +214,9 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Recording Defaults</Text>
+        <Text style={styles.cardTitle}>녹음 기본값</Text>
         {prefsLoading ? (
-          <ActivityIndicator color="#2563eb" />
+          <ActivityIndicator color={theme.brand} />
         ) : (
           <>
             <Text style={styles.fieldLabel}>기본 세션 제목</Text>
@@ -224,7 +227,7 @@ export default function SettingsScreen() {
               onChangeText={(value) => setRecordingPrefsState((current) => ({ ...current, defaultSessionTitle: value }))}
             />
             <Text style={styles.helperText}>
-              비워두면 `Record` 화면에서 제목을 직접 입력하고, 값을 넣어두면 새 녹음의 기본 제목으로 사용합니다.
+              비워두면 `녹음` 화면에서 제목을 직접 입력하고, 값을 넣어두면 새 녹음의 기본 제목으로 사용합니다.
             </Text>
 
             <View style={styles.switchRow}>
@@ -256,16 +259,16 @@ export default function SettingsScreen() {
               onPress={() => void handleSaveRecordingPreferences()}
               disabled={prefsSaving}
             >
-              {prefsSaving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>녹음 옵션 저장</Text>}
+              {prefsSaving ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>녹음 옵션 저장</Text>}
             </Pressable>
           </>
         )}
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Learning Settings</Text>
+        <Text style={styles.cardTitle}>학습 설정</Text>
         {learningLoading ? (
-          <ActivityIndicator color="#2563eb" />
+          <ActivityIndicator color={theme.brand} />
         ) : (
           <>
             <Text style={styles.fieldLabel}>기본 답변 모드</Text>
@@ -313,14 +316,14 @@ export default function SettingsScreen() {
               onPress={() => void handleSaveLearningPreferences()}
               disabled={learningSaving}
             >
-              {learningSaving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>학습 옵션 저장</Text>}
+              {learningSaving ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>학습 옵션 저장</Text>}
             </Pressable>
           </>
         )}
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>People Dictionary</Text>
+        <Text style={styles.cardTitle}>인물 사전</Text>
         <Text style={styles.helperText}>
           녹음 상세에서 관련 인물 선택과 화자 연결에 쓰는 개인 인물 사전을 여기서 관리합니다.
         </Text>
@@ -333,14 +336,14 @@ export default function SettingsScreen() {
 
       {isDevToolsVisible ? (
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Developer API Base URL</Text>
-          {apiLoading ? (
-            <ActivityIndicator color="#2563eb" />
+        <Text style={styles.cardTitle}>개발용 API 주소</Text>
+        {apiLoading ? (
+            <ActivityIndicator color={theme.brand} />
           ) : (
             <>
               <Text style={styles.cardValue}>{apiInfo?.value ?? DEFAULT_API_BASE_URL}</Text>
-              <Text style={styles.helperText}>source: {apiInfo?.source ?? "unknown"}</Text>
-              <Text style={styles.helperText}>default: {apiInfo?.defaultValue ?? DEFAULT_API_BASE_URL}</Text>
+              <Text style={styles.helperText}>적용 출처: {apiInfo?.source ?? "알 수 없음"}</Text>
+              <Text style={styles.helperText}>기본값: {apiInfo?.defaultValue ?? DEFAULT_API_BASE_URL}</Text>
             </>
           )}
           <TextInput
@@ -363,14 +366,14 @@ export default function SettingsScreen() {
               onPress={() => void handleSaveApiUrl()}
               disabled={apiSaving || apiLoading}
             >
-              {apiSaving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>Save API URL</Text>}
+              {apiSaving ? <ActivityIndicator color={theme.textOnBrand} /> : <Text style={styles.primaryButtonText}>API 주소 저장</Text>}
             </Pressable>
             <Pressable
               style={[styles.secondaryButton, (apiSaving || apiLoading) && styles.buttonDisabled]}
               onPress={() => void handleResetApiUrl()}
               disabled={apiSaving || apiLoading}
             >
-              <Text style={styles.secondaryButtonText}>Reset to Default</Text>
+              <Text style={styles.secondaryButtonText}>기본값으로 재설정</Text>
             </Pressable>
           </View>
         </View>
@@ -382,49 +385,56 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: {
     padding: 24,
-    backgroundColor: "#f8fafc",
-    gap: 16,
+    backgroundColor: theme.background,
+    gap: 18,
   },
   title: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   description: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 22,
   },
   card: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
     borderRadius: 20,
     padding: 20,
     gap: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
+    shadowColor: theme.shadow,
+    shadowOpacity: 1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
   },
   cardTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#0f172a",
+    color: theme.text,
   },
   cardValue: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 20,
   },
   fieldLabel: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
   },
   helperText: {
-    color: "#64748b",
+    color: theme.textMuted,
     lineHeight: 20,
   },
   input: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
-    backgroundColor: "#ffffff",
+    borderColor: theme.border,
+    backgroundColor: theme.surfaceSoft,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    color: "#0f172a",
+    color: theme.text,
   },
   buttonRow: {
     flexDirection: "row",
@@ -432,52 +442,62 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   primaryButton: {
-    backgroundColor: "#2563eb",
+    backgroundColor: theme.brand,
     borderRadius: 14,
     paddingVertical: 14,
     paddingHorizontal: 16,
     alignItems: "center",
+    shadowColor: theme.shadowStrong,
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
   },
   primaryButtonText: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontWeight: "700",
   },
   secondaryButton: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 14,
     paddingVertical: 14,
     paddingHorizontal: 16,
     alignItems: "center",
   },
   secondaryButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
   },
   selectChip: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
+    borderWidth: 1,
+    borderColor: theme.border,
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
   selectChipSelected: {
-    backgroundColor: "#dbeafe",
+    backgroundColor: theme.brandSoft,
+    borderColor: theme.brand,
   },
   selectChipText: {
-    color: "#334155",
+    color: theme.textSoft,
     fontWeight: "700",
   },
   selectChipTextSelected: {
-    color: "#1d4ed8",
+    color: theme.brandStrong,
   },
   dangerButton: {
-    backgroundColor: "#dc2626",
+    backgroundColor: theme.danger,
     borderRadius: 14,
     paddingVertical: 14,
     paddingHorizontal: 16,
     alignItems: "center",
   },
   dangerButtonText: {
-    color: "#ffffff",
+    color: theme.textOnDark,
     fontWeight: "700",
   },
   buttonDisabled: {
@@ -495,15 +515,15 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   switchTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
   },
   error: {
-    color: "#dc2626",
+    color: theme.danger,
     lineHeight: 20,
   },
   success: {
-    color: "#0f766e",
+    color: theme.success,
     lineHeight: 20,
   },
 });

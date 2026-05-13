@@ -3,6 +3,7 @@ import { apiFetch } from "./client";
 export type RecordingSummaryResponse = {
   id: string;
   fileName: string;
+  displayName?: string | null;
   status: string;
   diarization: boolean;
   createdAt: string;
@@ -38,6 +39,7 @@ export type RecordingUtteranceResponse = {
 export type RecordingResponse = {
   id: string;
   fileName: string;
+  displayName?: string | null;
   status: string;
   diarization: boolean;
   createdAt: string;
@@ -75,6 +77,15 @@ export async function listRecordings() {
 
 export async function fetchRecording(recordingId: string) {
   return apiFetch<RecordingResponse>(`/recordings/${recordingId}`);
+}
+
+export async function updateRecordingDisplayName(recordingId: string, displayName: string) {
+  return apiFetch<RecordingResponse>(`/recordings/${recordingId}/display-name`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      displayName,
+    }),
+  });
 }
 
 export async function reprocessRecording(recordingId: string, diarization = true) {

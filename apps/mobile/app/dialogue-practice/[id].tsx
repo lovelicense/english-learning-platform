@@ -123,7 +123,7 @@ export default function DialoguePracticeScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.eyebrow}>Dialogue Practice</Text>
+      <Text style={styles.eyebrow}>다이얼로그 연습</Text>
       <Text style={styles.title}>{practiceSet.title}</Text>
       <Text style={styles.description}>영어 AI 대화에서 저장한 세트를 turn 순서대로 다시 말해보는 모바일 연습 화면입니다.</Text>
 

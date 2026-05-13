@@ -18,6 +18,7 @@ import {
   deleteRecordingUtterance,
   fetchRecording,
   updateRecordingAnalysisStatus,
+  updateRecordingDisplayName,
   updateRecordingMineSpeaker,
   updateRecordingParticipants,
   updateRecordingSpeakerLabel,
@@ -61,6 +62,12 @@ function formatClipDuration(value: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function getRecordingDisplayName(recording: { displayName?: string | null; fileName: string } | null) {
+  if (!recording) return "-";
+  const trimmedDisplayName = recording.displayName?.trim();
+  return trimmedDisplayName || recording.fileName;
 }
 
 function buildRecordingContextFromAnalysis(recording: RecordingResponse | null): RecordingGenerationContext {
@@ -158,6 +165,7 @@ export default function RecordingDetailScreen() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [recording, setRecording] = useState<RecordingResponse | null>(null);
+  const [displayNameDraft, setDisplayNameDraft] = useState("");
   const [personProfiles, setPersonProfiles] = useState<PersonProfileResponse[]>([]);
   const [utteranceDrafts, setUtteranceDrafts] = useState<Record<string, string>>({});
   const [utteranceSpeakerDrafts, setUtteranceSpeakerDrafts] = useState<Record<string, string>>({});
@@ -177,6 +185,7 @@ export default function RecordingDetailScreen() {
   const [savingContext, setSavingContext] = useState(false);
   const [analyzingConversation, setAnalyzingConversation] = useState(false);
   const [analysisStatusLoading, setAnalysisStatusLoading] = useState(false);
+  const [displayNameSaving, setDisplayNameSaving] = useState(false);
   const [speakerProfileLoading, setSpeakerProfileLoading] = useState("");
   const [speakerLabelLoading, setSpeakerLabelLoading] = useState("");
   const [recordingAnalysisMode, setRecordingAnalysisModeState] =
@@ -254,6 +263,7 @@ export default function RecordingDetailScreen() {
     const nextContext = hasRecordingContextValue(storedContext) ? storedContext : analysisContext;
 
     setRecording(nextRecording);
+    setDisplayNameDraft(nextRecording.displayName?.trim() || "");
     setUtteranceDrafts(Object.fromEntries(nextRecording.utterances.map((item) => [item.id, item.koreanText])));
     setUtteranceSpeakerDrafts(Object.fromEntries(nextRecording.utterances.map((item) => [item.id, item.speakerLabel])));
     setUtteranceContextDrafts(Object.fromEntries(nextRecording.utterances.map((item) => [item.id, item.contextNote ?? ""])));
@@ -418,6 +428,30 @@ export default function RecordingDetailScreen() {
     const refreshed = await fetchRecording(recording.id);
     await initializeFromRecording(refreshed);
     setMessage(successMessage);
+  }
+
+  async function handleSaveDisplayName() {
+    if (!recording) return;
+
+    const normalizedDraft = displayNameDraft.trim();
+    const normalizedCurrent = recording.displayName?.trim() || "";
+    if (normalizedDraft === normalizedCurrent) {
+      setMessage("변경된 녹음 이름이 없어 저장하지 않았습니다.");
+      return;
+    }
+
+    setDisplayNameSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const updated = await updateRecordingDisplayName(recording.id, normalizedDraft);
+      await initializeFromRecording(updated);
+      setMessage(normalizedDraft ? "녹음 이름을 저장했습니다." : "녹음 이름을 비우고 파일명 표시로 되돌렸습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "녹음 이름 저장에 실패했습니다.");
+    } finally {
+      setDisplayNameSaving(false);
+    }
   }
 
   async function maybeRunAutoRecordingAnalysis(successMessage: string) {
@@ -882,7 +916,7 @@ export default function RecordingDetailScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Recording Detail</Text>
+      <Text style={styles.title}>녹음 상세</Text>
       <Text style={styles.description}>
         웹의 음성데이터 수집 / 텍스트 정리 흐름을 모바일에서도 이어서 쓸 수 있게, 문장 수정과 함께 맥락 힌트,
         분석, 인물 연결까지 한 화면에서 다룹니다.
@@ -917,10 +951,11 @@ export default function RecordingDetailScreen() {
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>기본 정보</Text>
-        <Text style={styles.cardText}>recordingId: {recording?.id ?? "-"}</Text>
-        <Text style={styles.cardText}>status: {recording?.status ?? "-"}</Text>
-        <Text style={styles.cardText}>fileName: {recording?.fileName ?? "-"}</Text>
-        <Text style={styles.cardText}>diarization: {recording?.diarization ? "on" : "off"}</Text>
+        <Text style={styles.cardText}>표시 이름: {getRecordingDisplayName(recording)}</Text>
+        <Text style={styles.cardText}>녹음 ID: {recording?.id ?? "-"}</Text>
+        <Text style={styles.cardText}>상태: {recording?.status ?? "-"}</Text>
+        <Text style={styles.cardText}>파일명: {recording?.fileName ?? "-"}</Text>
+        <Text style={styles.cardText}>화자 분리: {recording?.diarization ? "사용" : "사용 안 함"}</Text>
         <Text style={styles.cardText}>문장 수: {utteranceCount}</Text>
         <Text style={styles.cardText}>화자 수: {speakers.length}</Text>
         <Text style={styles.cardText}>생성된 표현 수: {recordingExpressions.length}</Text>
@@ -955,6 +990,33 @@ export default function RecordingDetailScreen() {
             </View>
           </View>
         ) : null}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>녹음 이름</Text>
+        <Text style={styles.metaText}>알아보기 쉬운 이름을 저장해 두면 목록과 상세 화면에서 파일명 대신 우선 표시됩니다.</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="예: 강남역 카페 대화"
+          value={displayNameDraft}
+          onChangeText={setDisplayNameDraft}
+        />
+        <View style={styles.actionRow}>
+          <Pressable
+            style={[styles.primaryButton, displayNameSaving && styles.buttonDisabled]}
+            onPress={() => void handleSaveDisplayName()}
+            disabled={displayNameSaving}
+          >
+            <Text style={styles.primaryButtonText}>{displayNameSaving ? "저장 중..." : "이름 저장"}</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.secondaryButton, displayNameSaving && styles.buttonDisabled]}
+            onPress={() => setDisplayNameDraft("")}
+            disabled={displayNameSaving}
+          >
+            <Text style={styles.secondaryButtonText}>이름 비우기</Text>
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.card}>
@@ -1466,8 +1528,8 @@ export default function RecordingDetailScreen() {
             <View key={expression.id} style={styles.expressionCard}>
               <Text style={styles.expressionKorean}>{expression.koreanText}</Text>
               <Text style={styles.expressionBase}>{expression.englishBase}</Text>
-              <Text style={styles.expressionSub}>easy: {expression.englishEasy}</Text>
-              <Text style={styles.expressionSub}>natural: {expression.englishNatural}</Text>
+              <Text style={styles.expressionSub}>쉬운형: {expression.englishEasy}</Text>
+              <Text style={styles.expressionSub}>자연형: {expression.englishNatural}</Text>
               {expression.note ? <Text style={styles.metaText}>note: {expression.note}</Text> : null}
               <View style={styles.actionRow}>
                 <Pressable

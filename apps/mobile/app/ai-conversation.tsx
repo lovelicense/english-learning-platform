@@ -6,6 +6,9 @@ import {
   type AiConversationSessionResponse,
   type AiConversationTrackMode,
 } from "../src/lib/api/ai-conversations";
+import { mobileTheme } from "../src/theme/colors";
+
+const theme = mobileTheme.colors;
 
 type TrackKey = "english" | "korean";
 type SessionSort = "recent" | "turns";
@@ -122,11 +125,11 @@ export default function AiConversationHomeScreen() {
   }
 
   return (
-    <ScrollView
+      <ScrollView
       contentContainerStyle={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadSessions(true)} tintColor="#2563eb" />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadSessions(true)} tintColor={theme.brand} />}
     >
-      <Text style={styles.eyebrow}>AI Conversation</Text>
+      <Text style={styles.eyebrow}>AI 대화</Text>
       <Text style={styles.title}>연습 채널 + 수집 채널</Text>
       <Text style={styles.description}>
         웹의 AI 대시보드를 그대로 줄이지 않고, 모바일에서는 `영어 연습`과 `한국어 수집` 두 트랙으로 나눠 빠르게 들어가고 최근 세션을 바로 이어보는 구조로 정리합니다.
@@ -222,7 +225,7 @@ export default function AiConversationHomeScreen() {
 
             <Text style={styles.sectionTitle}>최근 세션</Text>
             {loading ? (
-              <ActivityIndicator color="#2563eb" />
+              <ActivityIndicator color={theme.brand} />
             ) : sessions.length > 0 ? (
               sessions.slice(0, 5).map((session) => (
                 <Pressable key={session.id} style={styles.sessionCard} onPress={() => openSession(session.id)}>
@@ -231,7 +234,7 @@ export default function AiConversationHomeScreen() {
                     <Text style={styles.sessionMeta}>{formatRelativeDate(session.updatedAt)}</Text>
                   </View>
                   <Text style={styles.sessionMeta}>
-                    {session.turns.length} turns · AI {session.aiOutputMode ?? "text"} · Me {session.userInputMode ?? "text"}
+                    턴 {session.turns.length}개 · AI {session.aiOutputMode === "voice" ? "음성" : "텍스트"} · 내 답변 {session.userInputMode === "voice" ? "음성" : "텍스트"}
                   </Text>
                   <Text style={styles.sessionSnippet}>{summarizeSession(session)}</Text>
                 </Pressable>
@@ -260,11 +263,11 @@ export default function AiConversationHomeScreen() {
 const styles = StyleSheet.create({
   container: {
     padding: 24,
-    backgroundColor: "#f8fafc",
-    gap: 16,
+    backgroundColor: theme.background,
+    gap: 18,
   },
   eyebrow: {
-    color: "#0f766e",
+    color: theme.brand,
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 1,
@@ -272,47 +275,58 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 30,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   description: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 22,
   },
   heroCard: {
-    backgroundColor: "#0f172a",
+    backgroundColor: theme.brandStrong,
     borderRadius: 24,
     padding: 22,
     gap: 8,
+    borderWidth: 1,
+    borderColor: "#1f8f85",
   },
   heroTitle: {
-    color: "#f8fafc",
+    color: theme.textOnDark,
     fontSize: 20,
     fontWeight: "800",
   },
   heroText: {
-    color: "#cbd5e1",
+    color: "#dcece7",
     lineHeight: 20,
   },
   summaryCard: {
-    backgroundColor: "#ecfeff",
+    backgroundColor: theme.surfaceBrand,
     borderRadius: 20,
     padding: 20,
     gap: 6,
+    borderWidth: 1,
+    borderColor: theme.brandSoft,
   },
   summaryTitle: {
-    color: "#134e4a",
+    color: theme.brandStrong,
     fontSize: 18,
     fontWeight: "800",
   },
   summaryText: {
-    color: "#134e4a",
+    color: theme.brandStrong,
     lineHeight: 20,
   },
   card: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
     borderRadius: 20,
     padding: 20,
     gap: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
+    shadowColor: theme.shadow,
+    shadowOpacity: 1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
   },
   trackHeader: {
     gap: 12,
@@ -323,21 +337,23 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 20,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   trackSubtitle: {
-    color: "#0f766e",
+    color: theme.accentStrong,
     lineHeight: 20,
     fontWeight: "600",
   },
   flowCard: {
     borderRadius: 16,
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.surfaceSoft,
     padding: 16,
     gap: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   flowTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontSize: 16,
     fontWeight: "800",
   },
@@ -352,41 +368,43 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#ccfbf1",
+    backgroundColor: theme.accentSoft,
   },
   flowStepBadgeText: {
-    color: "#115e59",
+    color: theme.accentStrong,
     fontSize: 12,
     fontWeight: "800",
   },
   flowStepText: {
     flex: 1,
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 20,
   },
   statusCard: {
     borderRadius: 16,
-    backgroundColor: "#ecfeff",
+    backgroundColor: theme.surfaceBrand,
     padding: 16,
     gap: 10,
+    borderWidth: 1,
+    borderColor: theme.brandSoft,
   },
   statusTitle: {
-    color: "#134e4a",
+    color: theme.brandStrong,
     fontSize: 16,
     fontWeight: "800",
   },
   cardText: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 20,
   },
   input: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
+    borderColor: theme.border,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    backgroundColor: "#f8fafc",
-    color: "#0f172a",
+    backgroundColor: theme.surfaceSoft,
+    color: theme.text,
   },
   filterRow: {
     flexDirection: "row",
@@ -397,13 +415,15 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: 16,
     fontWeight: "700",
-    color: "#0f172a",
+    color: theme.text,
   },
   sessionCard: {
     borderRadius: 16,
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.surfaceSoft,
     padding: 16,
     gap: 6,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   sessionHeader: {
     flexDirection: "row",
@@ -412,50 +432,50 @@ const styles = StyleSheet.create({
   },
   sessionTitle: {
     flex: 1,
-    color: "#0f172a",
+    color: theme.text,
     fontSize: 16,
     fontWeight: "700",
   },
   sessionMeta: {
-    color: "#64748b",
+    color: theme.textMuted,
     lineHeight: 18,
   },
   sessionSnippet: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 20,
   },
   filterChip: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "#cbd5e1",
+    borderColor: theme.border,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
   },
   filterChipActive: {
-    backgroundColor: "#0f766e",
-    borderColor: "#0f766e",
+    backgroundColor: theme.brand,
+    borderColor: theme.brand,
   },
   filterChipText: {
-    color: "#334155",
+    color: theme.textSoft,
     fontWeight: "600",
   },
   filterChipTextActive: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
   },
   helperText: {
-    color: "#64748b",
+    color: theme.textMuted,
     lineHeight: 20,
   },
   primaryButton: {
     alignSelf: "flex-start",
-    backgroundColor: "#0f766e",
+    backgroundColor: theme.brand,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   primaryButtonText: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontWeight: "700",
   },
   actionRow: {
@@ -467,27 +487,29 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#99f6e4",
-    backgroundColor: "#ffffff",
+    borderColor: theme.borderStrong,
+    backgroundColor: theme.surface,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   secondaryButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
   },
   errorCard: {
-    backgroundColor: "#fef2f2",
+    backgroundColor: theme.dangerSoft,
     borderRadius: 16,
     padding: 16,
     gap: 4,
+    borderWidth: 1,
+    borderColor: "#e5b8ae",
   },
   errorTitle: {
-    color: "#991b1b",
+    color: theme.danger,
     fontWeight: "800",
   },
   errorText: {
-    color: "#b91c1c",
+    color: theme.danger,
     lineHeight: 20,
   },
 });

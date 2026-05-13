@@ -2,6 +2,9 @@ import { Link, useFocusEffect } from "expo-router";
 import { useCallback } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSessionBootstrap } from "../../src/hooks/use-session-bootstrap";
+import { mobileTheme } from "../../src/theme/colors";
+
+const theme = mobileTheme.colors;
 
 export default function HomeScreen() {
   const { user, storedEmail, loading, error, reload } = useSessionBootstrap();
@@ -19,10 +22,10 @@ export default function HomeScreen() {
         내 말로 배우는 영어학습
       </Text>
       {loading ? (
-        <ActivityIndicator color="#2563eb" />
+        <ActivityIndicator color={theme.brand} />
       ) : (
         <View style={styles.statusPill}>
-          <Text style={styles.statusPillText}>로그인 상태: {user?.email ?? storedEmail ?? "not signed in"}</Text>
+          <Text style={styles.statusPillText}>로그인 상태: {user?.email ?? storedEmail ?? "로그인되지 않음"}</Text>
         </View>
       )}
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -37,43 +40,43 @@ export default function HomeScreen() {
       <View style={styles.grid}>
         <Link href="/quick-sentence" asChild>
           <Pressable style={styles.primaryCard}>
-            <Text style={styles.primaryCardTitle}>Quick Save</Text>
+            <Text style={styles.primaryCardTitle}>빠른 저장</Text>
             <Text style={styles.primaryCardText}>녹음 없이 한국어 문장을 바로 저장하고 표현으로 만들기</Text>
           </Pressable>
         </Link>
         <Link href="/ai-conversation" asChild>
           <Pressable style={styles.accentCard}>
-            <Text style={styles.accentCardTitle}>AI Conversation</Text>
+            <Text style={styles.accentCardTitle}>AI 대화</Text>
             <Text style={styles.accentCardText}>영어 연습 트랙과 한국어 수집 트랙으로 AI 대화 시작</Text>
           </Pressable>
         </Link>
         <Link href="/(tabs)/record" asChild>
           <Pressable style={styles.secondaryCard}>
-            <Text style={styles.secondaryCardTitle}>Record</Text>
+            <Text style={styles.secondaryCardTitle}>녹음</Text>
             <Text style={styles.secondaryCardText}>실제 녹음, 업로드, STT 처리까지 시작</Text>
           </Pressable>
         </Link>
         <Link href="/(tabs)/reviews" asChild>
           <Pressable style={styles.secondaryCard}>
-            <Text style={styles.secondaryCardTitle}>Reviews</Text>
+            <Text style={styles.secondaryCardTitle}>복습</Text>
             <Text style={styles.secondaryCardText}>오늘 복습 카드에서 텍스트/음성 답변</Text>
           </Pressable>
         </Link>
         <Link href="/(tabs)/expressions" asChild>
           <Pressable style={styles.secondaryCard}>
-            <Text style={styles.secondaryCardTitle}>Expressions</Text>
+            <Text style={styles.secondaryCardTitle}>표현</Text>
             <Text style={styles.secondaryCardText}>저장한 표현과 TTS를 다시 확인</Text>
           </Pressable>
         </Link>
         <Link href="/learning-assets" asChild>
           <Pressable style={styles.secondaryCard}>
-            <Text style={styles.secondaryCardTitle}>Learning Assets</Text>
+            <Text style={styles.secondaryCardTitle}>학습 자산</Text>
             <Text style={styles.secondaryCardText}>패턴/단어 진도와 약한 유형, 연결된 표현 확인</Text>
           </Pressable>
         </Link>
         <Link href="/(tabs)/settings" asChild>
           <Pressable style={styles.secondaryCard}>
-            <Text style={styles.secondaryCardTitle}>Settings</Text>
+            <Text style={styles.secondaryCardTitle}>설정</Text>
             <Text style={styles.secondaryCardText}>계정, 녹음 기본값, 학습 옵션 관리</Text>
           </Pressable>
         </Link>
@@ -93,115 +96,136 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     padding: 24,
-    backgroundColor: "#f8fafc",
-    gap: 16,
-  },
-  eyebrow: {
-    color: "#2563eb",
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 1,
+    backgroundColor: theme.background,
+    gap: 18,
   },
   title: {
     fontSize: 30,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   description: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 22,
   },
   statusPill: {
     alignSelf: "flex-start",
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
     borderRadius: 999,
     paddingVertical: 8,
     paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   statusPillText: {
-    color: "#334155",
+    color: theme.textSoft,
     fontWeight: "700",
   },
   heroCard: {
-    backgroundColor: "#0f172a",
+    backgroundColor: theme.brandStrong,
     borderRadius: 24,
     padding: 22,
     gap: 8,
+    borderWidth: 1,
+    borderColor: "#1f8f85",
+    shadowColor: theme.shadowStrong,
+    shadowOpacity: 1,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 6,
   },
   heroTitle: {
-    color: "#f8fafc",
+    color: theme.textOnDark,
     fontSize: 20,
     fontWeight: "800",
   },
   heroText: {
-    color: "#cbd5e1",
+    color: "#dcece7",
     lineHeight: 20,
   },
   card: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
     borderRadius: 20,
     padding: 20,
     gap: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
+    shadowColor: theme.shadow,
+    shadowOpacity: 1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
   },
   cardTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#0f172a",
+    color: theme.text,
   },
   cardText: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 20,
   },
   grid: {
     gap: 12,
   },
   primaryCard: {
-    backgroundColor: "#2563eb",
+    backgroundColor: theme.brand,
     borderRadius: 20,
     padding: 20,
     gap: 6,
+    borderWidth: 1,
+    borderColor: theme.brandStrong,
+    shadowColor: theme.shadowStrong,
+    shadowOpacity: 1,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
   },
   primaryCardTitle: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontSize: 20,
     fontWeight: "800",
   },
   primaryCardText: {
-    color: "#dbeafe",
+    color: "#d5ebe4",
     lineHeight: 20,
   },
   accentCard: {
-    backgroundColor: "#14532d",
+    backgroundColor: theme.accent,
     borderRadius: 20,
     padding: 20,
     gap: 6,
+    borderWidth: 1,
+    borderColor: theme.accentStrong,
   },
   accentCardTitle: {
-    color: "#ffffff",
+    color: theme.textOnDark,
     fontSize: 20,
     fontWeight: "800",
   },
   accentCardText: {
-    color: "#dcfce7",
+    color: "#fff1df",
     lineHeight: 20,
   },
   secondaryCard: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
     borderRadius: 20,
     padding: 18,
     gap: 6,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   secondaryCardTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontSize: 18,
     fontWeight: "700",
   },
   secondaryCardText: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 20,
   },
   error: {
-    color: "#dc2626",
+    color: theme.danger,
     lineHeight: 20,
   },
 });

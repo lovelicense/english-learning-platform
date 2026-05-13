@@ -11,6 +11,7 @@ import {
   type LearningAssetExpressionRef,
   type LearningProgressStatus,
 } from "../src/lib/api/learning-assets";
+import { mobileTheme } from "../src/theme/colors";
 
 type AssetTab = "pattern" | "vocabulary";
 type AssetFilter = "priority" | "all" | "missing" | "collected" | "automated";
@@ -25,6 +26,7 @@ type VocabularyAssetItem = LearningAssetsCatalog["vocabularyCategories"][number]
 };
 
 const EXPORT_DIRECTORY_NAME = "exports";
+const theme = mobileTheme.colors;
 
 export default function LearningAssetsScreen() {
   const [loading, setLoading] = useState(true);
@@ -171,7 +173,7 @@ export default function LearningAssetsScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator color="#2563eb" />
+        <ActivityIndicator color={theme.brand} />
         <Text style={styles.description}>학습 자산을 불러오는 중입니다.</Text>
       </View>
     );
@@ -179,7 +181,7 @@ export default function LearningAssetsScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.eyebrow}>Learning Assets</Text>
+      <Text style={styles.eyebrow}>학습 자산</Text>
       <Text style={styles.title}>패턴 / 단어 진도</Text>
       <Text style={styles.description}>
         저장한 표현이 어떤 패턴과 단어에 연결됐는지, 그리고 지금 무엇을 먼저 보강하면 좋은지 모바일에서 바로 확인합니다.
@@ -534,21 +536,21 @@ function formatProgressStatus(
 }
 
 function getStatusBadgeStyle(status: string) {
-  if (status === "자동화") return { backgroundColor: "#dcfce7" };
-  if (status === "말하기 가능") return { backgroundColor: "#dbeafe" };
-  if (status === "연습 중") return { backgroundColor: "#fef3c7" };
-  if (status === "인식됨") return { backgroundColor: "#ede9fe" };
-  if (status === "수집됨") return { backgroundColor: "#e2e8f0" };
-  return { backgroundColor: "#fee2e2" };
+  if (status === "자동화") return { backgroundColor: theme.successSoft };
+  if (status === "말하기 가능") return { backgroundColor: theme.brandSoft };
+  if (status === "연습 중") return { backgroundColor: theme.accentSoft };
+  if (status === "인식됨") return { backgroundColor: theme.surfaceMuted };
+  if (status === "수집됨") return { backgroundColor: theme.surfaceMuted };
+  return { backgroundColor: theme.dangerSoft };
 }
 
 function getStatusBadgeTextStyle(status: string) {
-  if (status === "자동화") return { color: "#166534" };
-  if (status === "말하기 가능") return { color: "#1d4ed8" };
-  if (status === "연습 중") return { color: "#92400e" };
-  if (status === "인식됨") return { color: "#6d28d9" };
-  if (status === "수집됨") return { color: "#334155" };
-  return { color: "#b91c1c" };
+  if (status === "자동화") return { color: theme.success };
+  if (status === "말하기 가능") return { color: theme.brandStrong };
+  if (status === "연습 중") return { color: theme.accentStrong };
+  if (status === "인식됨") return { color: theme.textSoft };
+  if (status === "수집됨") return { color: theme.textSoft };
+  return { color: theme.danger };
 }
 
 async function persistExportFile(fileName: string, body: string, contentType: string) {
@@ -630,19 +632,19 @@ function guessMimeType(extension: string) {
 const styles = StyleSheet.create({
   container: {
     padding: 24,
-    backgroundColor: "#f8fafc",
-    gap: 16,
+    backgroundColor: theme.background,
+    gap: 18,
   },
   centered: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.background,
     padding: 24,
     gap: 12,
   },
   eyebrow: {
-    color: "#2563eb",
+    color: theme.brand,
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 1,
@@ -650,78 +652,89 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 30,
     fontWeight: "800",
-    color: "#0f172a",
+    color: theme.text,
   },
   description: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 22,
   },
   heroCard: {
-    backgroundColor: "#0f172a",
+    backgroundColor: theme.brandStrong,
     borderRadius: 24,
     padding: 22,
     gap: 8,
+    borderWidth: 1,
+    borderColor: "#1f8f85",
   },
   heroTitle: {
-    color: "#f8fafc",
+    color: theme.textOnDark,
     fontSize: 20,
     fontWeight: "800",
   },
   heroText: {
-    color: "#cbd5e1",
+    color: "#dcece7",
     lineHeight: 20,
   },
   card: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
     borderRadius: 20,
     padding: 20,
     gap: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
+    shadowColor: theme.shadow,
+    shadowOpacity: 1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
   },
   cardTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#0f172a",
+    color: theme.text,
   },
   exportBlock: {
     gap: 10,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: theme.border,
     borderRadius: 16,
     padding: 14,
-    backgroundColor: "#f8fbff",
+    backgroundColor: theme.surfaceSoft,
   },
   metricsGrid: {
     gap: 12,
   },
   metricCard: {
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
     borderRadius: 18,
     padding: 18,
     gap: 6,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   metricLabel: {
-    color: "#475569",
+    color: theme.textSoft,
     fontWeight: "700",
   },
   metricValue: {
-    color: "#0f172a",
+    color: theme.text,
     fontSize: 28,
     fontWeight: "800",
   },
   levelCard: {
     borderWidth: 1,
-    borderColor: "#dbeafe",
+    borderColor: theme.brandSoft,
     borderRadius: 16,
     padding: 14,
     gap: 6,
-    backgroundColor: "#f8fbff",
+    backgroundColor: theme.surfaceBrand,
   },
   levelTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
   },
   levelBadge: {
-    color: "#2563eb",
+    color: theme.brandStrong,
     fontWeight: "800",
   },
   row: {
@@ -736,111 +749,119 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   primaryButton: {
-    backgroundColor: "#2563eb",
+    backgroundColor: theme.brand,
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 16,
     alignItems: "center",
   },
   primaryButtonText: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontWeight: "800",
   },
   secondaryButton: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
     borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 16,
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   secondaryButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
   },
   smallPrimaryButton: {
-    backgroundColor: "#2563eb",
+    backgroundColor: theme.brand,
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 14,
     alignItems: "center",
   },
   smallPrimaryButtonText: {
-    color: "#ffffff",
+    color: theme.textOnBrand,
     fontWeight: "800",
   },
   smallSecondaryButton: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 14,
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   smallSecondaryButtonText: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
   },
   buttonDisabled: {
     opacity: 0.6,
   },
   filterChip: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   filterChipActive: {
-    backgroundColor: "#dbeafe",
+    backgroundColor: theme.brandSoft,
+    borderColor: theme.brand,
   },
   filterChipText: {
-    color: "#334155",
+    color: theme.textSoft,
     fontWeight: "700",
   },
   filterChipTextActive: {
-    color: "#1d4ed8",
+    color: theme.brandStrong,
   },
   input: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
-    backgroundColor: "#ffffff",
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
+    color: theme.text,
   },
   assetCard: {
     borderWidth: 1,
-    borderColor: "#dbeafe",
+    borderColor: theme.brandSoft,
     borderRadius: 18,
     padding: 14,
     gap: 6,
-    backgroundColor: "#f8fbff",
+    backgroundColor: theme.surfaceBrand,
   },
   assetTitle: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "800",
     flex: 1,
   },
   assetBody: {
-    color: "#334155",
+    color: theme.textSoft,
     lineHeight: 21,
   },
   detailBlock: {
     gap: 4,
   },
   detailLabel: {
-    color: "#475569",
+    color: theme.textMuted,
     fontSize: 12,
     fontWeight: "800",
   },
   exampleCard: {
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: theme.border,
     borderRadius: 14,
     padding: 12,
     gap: 4,
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
   },
   assetTag: {
-    color: "#1d4ed8",
+    color: theme.brandStrong,
     fontWeight: "800",
   },
   statusBadge: {
@@ -853,11 +874,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   infoPill: {
-    backgroundColor: "#e2e8f0",
+    backgroundColor: theme.surfaceMuted,
     borderRadius: 999,
     paddingVertical: 6,
     paddingHorizontal: 10,
-    color: "#334155",
+    color: theme.textSoft,
     fontWeight: "700",
     overflow: "hidden",
   },
@@ -866,31 +887,31 @@ const styles = StyleSheet.create({
   },
   relatedExpressionCard: {
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: theme.border,
     borderRadius: 14,
     padding: 12,
     gap: 6,
-    backgroundColor: "#ffffff",
+    backgroundColor: theme.surface,
   },
   relatedExpressionKo: {
-    color: "#475569",
+    color: theme.textSoft,
     lineHeight: 20,
   },
   relatedExpressionEn: {
-    color: "#0f172a",
+    color: theme.text,
     fontWeight: "700",
     lineHeight: 21,
   },
   metaText: {
-    color: "#64748b",
+    color: theme.textMuted,
     lineHeight: 20,
   },
   error: {
-    color: "#dc2626",
+    color: theme.danger,
     lineHeight: 20,
   },
   success: {
-    color: "#166534",
+    color: theme.success,
     lineHeight: 20,
   },
 });
