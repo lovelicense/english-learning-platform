@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { router } from "expo-router";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { login } from "../../src/lib/api/auth";
 import { setSession } from "../../src/lib/auth";
+import { getApiBaseUrlInfo, resetApiBaseUrl, type ApiBaseUrlInfo } from "../../src/lib/config";
 import { mobileTheme } from "../../src/theme/colors";
 
 const theme = mobileTheme.colors;
@@ -12,6 +13,25 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [apiInfo, setApiInfo] = useState<ApiBaseUrlInfo | null>(null);
+  const [apiLoading, setApiLoading] = useState(true);
+  const [apiMessage, setApiMessage] = useState("");
+
+  useEffect(() => {
+    void loadApiInfo();
+  }, []);
+
+  async function loadApiInfo() {
+    setApiLoading(true);
+    try {
+      const next = await getApiBaseUrlInfo();
+      setApiInfo(next);
+    } catch (err) {
+      setApiMessage(err instanceof Error ? err.message : "API 주소를 불러오지 못했습니다.");
+    } finally {
+      setApiLoading(false);
+    }
+  }
 
   async function handleLogin() {
     if (!email.trim() || !password.trim()) {
@@ -32,12 +52,37 @@ export default function LoginScreen() {
     }
   }
 
+  async function handleResetApiUrl() {
+    setApiLoading(true);
+    setApiMessage("");
+
+    try {
+      await resetApiBaseUrl();
+      const next = await getApiBaseUrlInfo();
+      setApiInfo(next);
+      setApiMessage("API 주소를 기본값으로 초기화했습니다.");
+    } catch (err) {
+      setApiMessage(err instanceof Error ? err.message : "API 주소 초기화에 실패했습니다.");
+    } finally {
+      setApiLoading(false);
+    }
+  }
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>로그인</Text>
       <Text style={styles.description}>
         기존 `/auth/login`과 `/auth/me` API를 사용합니다. 로그인 성공 시 토큰은 Secure Store에 저장됩니다.
       </Text>
+      <View style={styles.apiCard}>
+        <Text style={styles.apiTitle}>현재 API 주소</Text>
+        {apiLoading ? <ActivityIndicator color={theme.brand} /> : <Text style={styles.apiValue}>{apiInfo?.value ?? "-"}</Text>}
+        {apiInfo ? <Text style={styles.apiMeta}>source: {apiInfo.source}</Text> : null}
+        {apiMessage ? <Text style={styles.apiMessage}>{apiMessage}</Text> : null}
+        <Pressable style={styles.secondaryButton} onPress={() => void handleResetApiUrl()} disabled={apiLoading}>
+          <Text style={styles.secondaryButtonText}>기본값으로 초기화</Text>
+        </Pressable>
+      </View>
       <TextInput
         style={styles.input}
         placeholder="이메일"
@@ -78,6 +123,29 @@ const styles = StyleSheet.create({
     color: theme.textSoft,
     lineHeight: 22,
   },
+  apiCard: {
+    borderWidth: 1,
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
+    borderRadius: 14,
+    padding: 14,
+    gap: 8,
+  },
+  apiTitle: {
+    color: theme.text,
+    fontWeight: "700",
+  },
+  apiValue: {
+    color: theme.text,
+  },
+  apiMeta: {
+    color: theme.textSoft,
+    fontSize: 12,
+  },
+  apiMessage: {
+    color: theme.textSoft,
+    fontSize: 12,
+  },
   input: {
     borderWidth: 1,
     borderColor: theme.border,
@@ -100,6 +168,17 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.7,
+  },
+  secondaryButton: {
+    alignSelf: "flex-start",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: theme.surfaceMuted,
+  },
+  secondaryButtonText: {
+    color: theme.text,
+    fontWeight: "600",
   },
   buttonText: {
     color: theme.textOnBrand,

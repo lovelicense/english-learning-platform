@@ -21,12 +21,14 @@ function resolveDefaultApiBaseUrl() {
     return envUrl;
   }
 
-  if (Platform.OS === "android") {
-    return "http://10.0.2.2:4000";
-  }
+  if (__DEV__) {
+    if (Platform.OS === "android") {
+      return "http://10.0.2.2:4000";
+    }
 
-  if (Platform.OS === "ios" || Platform.OS === "web") {
-    return "http://localhost:4000";
+    if (Platform.OS === "ios" || Platform.OS === "web") {
+      return "http://localhost:4000";
+    }
   }
 
   return "https://api.chunsay.com";
@@ -35,11 +37,13 @@ function resolveDefaultApiBaseUrl() {
 function resolveDefaultApiBaseUrlSource(): ApiBaseUrlSource {
   return process.env.EXPO_PUBLIC_API_BASE_URL?.trim()
     ? "env"
-    : Platform.OS === "android"
-      ? "android-emulator-default"
-      : Platform.OS === "ios" || Platform.OS === "web"
-        ? "localhost-default"
-        : "production-fallback";
+    : __DEV__
+      ? Platform.OS === "android"
+        ? "android-emulator-default"
+        : Platform.OS === "ios" || Platform.OS === "web"
+          ? "localhost-default"
+          : "production-fallback"
+      : "production-fallback";
 }
 
 function normalizeApiBaseUrl(value: string) {

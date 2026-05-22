@@ -6,7 +6,7 @@ export type RecordingGenerationContext = {
   tone: string;
 };
 
-const STORAGE_PREFIX = "elp_mobile_recording_context:";
+const STORAGE_PREFIX = "elp_mobile_recording_context_";
 const RECENT_CONTEXT_KEY = "elp_mobile_recent_generation_context";
 
 export const RELATIONSHIP_TEMPLATES = [
